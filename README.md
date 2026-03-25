@@ -38,6 +38,33 @@ cp bashrc.d/startup-files/.env.example bashrc.d/startup-files/.env
 - `bashrc.d/functions/rebash.sh` - Reload ~/.bashrc
 - `bashrc.d/functions/wwd.sh` - Print and copy Windows path of cwd
 - `assumeIdentity/` - Assume SQL identities against FNBA servers
+- `app/` - FNBA Utils desktop app (Tauri + Vue command palette)
+
+## Desktop App
+
+`app/` is a Tauri v2 + Vue 3 command palette that opens via `Win+Shift+F`. It provides a Raycast/Spotlight-style launcher for FNBA utilities.
+
+### Dev (UI only — no Rust required)
+
+```bash
+cd app
+docker compose up
+```
+
+Open http://localhost:5173 in a browser. The Tauri API is mocked with realistic sample data so the full UI is interactive. Source edits trigger instant HMR.
+
+### Dev (native — requires Windows Rust toolchain)
+
+```bash
+cd app
+bash scripts/dev.sh
+```
+
+Requires Rust + MSVC Build Tools + Tauri CLI installed on Windows. See `scripts/dev.sh` for details.
+
+### Current commands
+
+- **Assume Identity** — Switch SQL identity on a target server. Two-step picker (user → connection) with search filtering.
 
 ## Optional tools
 
