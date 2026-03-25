@@ -1,4 +1,4 @@
-# Secrets (not tracked by git)
+# PATH, JAVA_HOME, Node CA certs
 BASHRC_D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$BASHRC_D/.env" ] && source "$BASHRC_D/.env"
 unset BASHRC_D

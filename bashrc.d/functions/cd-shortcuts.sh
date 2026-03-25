@@ -1,3 +1,4 @@
+# cdd, cdf, cdk with tab completion
 cdd() { cd "$HOME/dev/$1"; }
 cdf() { cd "$HOME/dev/FNBA-Software/$1"; }
 cdk() { cd "$HOME/dev/kbiesbrock-fnba/$1"; }

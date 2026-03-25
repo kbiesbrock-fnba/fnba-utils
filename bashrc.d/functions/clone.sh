@@ -1,3 +1,4 @@
+# Clone or update FNBA-Software repos
 clone() {
   local repo_name="${1:?Usage: gitc REPO}"
   local base_dir="$HOME/dev/FNBA-Software"
