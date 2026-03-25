@@ -38,3 +38,45 @@ cp bashrc.d/startup-files/.env.example bashrc.d/startup-files/.env
 - `bashrc.d/functions/rebash.sh` - Reload ~/.bashrc
 - `bashrc.d/functions/wwd.sh` - Print and copy Windows path of cwd
 - `assumeIdentity/` - Assume SQL identities against FNBA servers
+
+## Optional tools
+
+These are not included in fnba-utils but are useful for FNBA development. Commented-out loader blocks are in `.bashrc` — uncomment them after installing.
+
+### NVM (Node Version Manager)
+
+Manage multiple Node.js versions per project.
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+```
+
+Then uncomment the NVM block in `.bashrc` and reload. Usage: `nvm install 20`, `nvm use 20`.
+
+See: https://github.com/nvm-sh/nvm
+
+### fzf (fuzzy finder)
+
+Interactive filtering for files, command history (`Ctrl+R`), and more.
+
+```bash
+sudo apt install fzf
+```
+
+Then uncomment the fzf block in `.bashrc` and reload.
+
+See: `dpkg -L fzf` for installed files, `/usr/share/doc/fzf/` for docs.
+
+### SDKMAN (Software Development Kit Manager)
+
+Manage parallel versions of Java, Gradle, Maven, and other JVM tools.
+
+```bash
+curl -s "https://get.sdkman.io" | bash
+```
+
+Then uncomment the SDKMAN block in `.bashrc` and reload. Usage: `sdk install java 21.0.2-tem`, `sdk use gradle 8.5`.
+
+**Note:** SDKMAN's init must run last in `.bashrc` — keep it at the bottom.
+
+See: https://sdkman.io
