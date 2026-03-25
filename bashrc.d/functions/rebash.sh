@@ -1,0 +1,1 @@
+rebash() { source ~/.bashrc; }

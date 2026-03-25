@@ -1,2 +1,3 @@
 .claude/
 .assumeIdentity.json
+bashrc.d/startup-files/.env
