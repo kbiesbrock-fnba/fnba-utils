@@ -23,6 +23,7 @@ pub struct IdentityState {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssumeIdentityResult {
     pub server: String,
     pub login: String,

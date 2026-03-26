@@ -22,8 +22,8 @@ export interface AssumeIdentityResult {
   login: string;
   before: IdentityState | null;
   after: IdentityState | null;
-  password_changed: boolean;
-  already_assuming: boolean;
+  passwordChanged: boolean;
+  alreadyAssuming: boolean;
   message: string | null;
 }
 
@@ -95,8 +95,8 @@ async function mockInvoke<T>(
           changed_at: new Date().toLocaleTimeString("en-US", { hour12: false }) + " 03-25-2026",
           on_host: connection.split(".")[0].toUpperCase(),
         },
-        password_changed: true,
-        already_assuming: false,
+        passwordChanged: true,
+        alreadyAssuming: false,
         message: "Identity switched successfully.",
       } as T;
     }

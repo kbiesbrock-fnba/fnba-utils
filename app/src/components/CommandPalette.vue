@@ -55,6 +55,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
       <CommandList
         :commands="filteredCommands"
         :selected-index="selectedIndex"
+        @select="(i) => { selectedIndex = i; confirmSelection(); }"
       />
       <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Close" />
     </template>

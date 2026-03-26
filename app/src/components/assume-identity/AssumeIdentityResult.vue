@@ -19,7 +19,7 @@ const props = defineProps<{
     </div>
 
     <!-- Already assuming -->
-    <template v-if="result.already_assuming && result.after">
+    <template v-if="result.alreadyAssuming && result.after">
       <div class="result-badge warning">Already acting as this identity</div>
       <div class="state-section">
         <div class="state-header current">Current</div>
@@ -59,7 +59,7 @@ const props = defineProps<{
       </div>
 
       <div v-if="result.after" class="state-section">
-        <div class="state-header" :class="result.password_changed ? 'after-success' : 'after-warning'">
+        <div class="state-header" :class="result.passwordChanged ? 'after-success' : 'after-warning'">
           After
         </div>
         <div class="state-row">
@@ -80,7 +80,7 @@ const props = defineProps<{
       <div
         v-if="result.message"
         class="result-badge"
-        :class="result.password_changed ? 'success' : 'warning'"
+        :class="result.passwordChanged ? 'success' : 'warning'"
       >
         {{ result.message }}
       </div>

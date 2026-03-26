@@ -8,12 +8,17 @@ param(
     [Parameter(Position=1, Mandatory)] [string]$Connection
 )
 
+# Save params before dot-sourcing — the main script's param() block
+# runs in this scope and would overwrite $User/$Connection with empty defaults.
+$_user = $User
+$_conn = $Connection
+
 # Dot-source the main script to get all helper functions
 . "$PSScriptRoot\assumeIdentity.ps1" -LoadOnly
 
 $data     = Get-StoredData
-$toAssume = Resolve-User $data $User
-$server   = Resolve-Conn $data $Connection
+$toAssume = Resolve-User $data $_user
+$server   = Resolve-Conn $data $_conn
 
 if (-not $toAssume) {
     @{ server = $Connection; login = "FNBA\$IMPOSTER"; before = $null; after = $null; passwordChanged = $false; alreadyAssuming = $false; message = "Unknown user: '$User'" } | ConvertTo-Json -Depth 3

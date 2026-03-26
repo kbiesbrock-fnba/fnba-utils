@@ -8,7 +8,16 @@
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
-    "shell:allow-execute",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "run-pwsh",
+          "cmd": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "args": true
+        }
+      ]
+    },
     "shell:allow-stdin-write"
   ]
 }

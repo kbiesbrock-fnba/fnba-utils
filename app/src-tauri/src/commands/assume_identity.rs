@@ -1,4 +1,4 @@
-use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityState, IdentityUser};
+use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityUser};
 use std::collections::BTreeMap;
 use std::process::Command;
 

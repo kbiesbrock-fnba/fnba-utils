@@ -8,6 +8,10 @@ const props = defineProps<{
   selectedIndex: number;
 }>();
 
+const emit = defineEmits<{
+  select: [index: number];
+}>();
+
 const listRef = ref<HTMLElement | null>(null);
 
 watch(
@@ -33,6 +37,7 @@ watch(
       :name="cmd.name"
       :description="cmd.description"
       :selected="i === selectedIndex"
+      @click="emit('select', i)"
     />
   </div>
 </template>

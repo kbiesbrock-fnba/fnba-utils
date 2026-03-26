@@ -4,9 +4,9 @@ mod models;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    AppHandle, Manager,
 };
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -38,7 +38,7 @@ pub fn run() {
             // --- Global Shortcut: Win+Shift+F ---
             app.global_shortcut().on_shortcut(
                 "Super+Shift+F",
-                move |app, _shortcut, event| {
+                move |app: &AppHandle, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
                         if let Some(w) = app.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {

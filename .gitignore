@@ -1,4 +1,5 @@
 .claude/
+.idea/
 .assumeIdentity.json
 bashrc.d/startup-files/.env
 
