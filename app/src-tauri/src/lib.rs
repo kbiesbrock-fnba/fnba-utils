@@ -4,13 +4,13 @@ mod models;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager,
+    AppHandle, Manager, RunEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
@@ -70,6 +70,24 @@ pub fn run() {
             commands::assume_identity::get_identity_data,
             commands::assume_identity::execute_assume_identity,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Graceful Ctrl+C: destroy the webview before exiting so WebView2
+    // can unregister its window classes without error.
+    let handle = app.handle().clone();
+    ctrlc::set_handler(move || {
+        eprintln!("Ctrl+C received — shutting down FNBA Utils…");
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.destroy();
+        }
+        handle.exit(0);
+    })
+    .expect("failed to set Ctrl+C handler");
+
+    app.run(|_app, event| {
+        if let RunEvent::Exit = event {
+            eprintln!("FNBA Utils exited.");
+        }
+    });
 }
