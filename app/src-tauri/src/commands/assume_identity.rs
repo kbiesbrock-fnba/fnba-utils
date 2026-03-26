@@ -1,7 +1,7 @@
 use crate::db;
 use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityState, IdentityUser};
 
-const DEFAULT_DATA: &str = include_str!("../../../../assumeIdentity/identity-defaults.json");
+const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json");
 
 #[derive(serde::Deserialize)]
 struct DefaultsFile {
@@ -77,55 +77,55 @@ pub async fn execute_assume_identity(
     let defaults: DefaultsFile =
         serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
     let imposter = &defaults.imposter;
+    let login = format!("FNBA\\{imposter}");
 
     let mut client = db::connect(&connection).await?;
 
-    // Pre-flight: check if already assuming this identity
-    if let Some(current) = db::check_current_identity(&mut client, imposter, &user).await? {
-        if current.already_assuming {
-            let (acting_as_login, acting_as_name) = match &current.acting_as_login {
-                Some(login) if !login.trim().is_empty() => (
-                    login.clone(),
-                    current.acting_as_name.unwrap_or_else(|| "unknown".into()),
-                ),
-                _ => (format!("FNBA\\{imposter}"), "self".into()),
-            };
+    match db::assume_identity(&mut client, imposter, &user).await? {
+        db::SwitchOutcome::ImposterNotFound => {
+            Err(format!("Login {login} not found on {connection}"))
+        }
 
-            return Ok(AssumeIdentityResult {
-                server: connection.clone(),
-                login: format!("FNBA\\{imposter}"),
-                before: None,
-                after: Some(IdentityState {
-                    acting_as_login,
-                    acting_as_name,
-                    password: current.password,
-                    changed_at: current.changed_at,
-                    on_host: connection,
+        db::SwitchOutcome::AlreadyAssuming {
+            acting_as_login,
+            acting_as_name,
+            password,
+            changed_at,
+            on_host,
+        } => Ok(AssumeIdentityResult {
+            server: connection,
+            login,
+            before: None,
+            after: Some(IdentityState {
+                acting_as_login,
+                acting_as_name,
+                password,
+                changed_at,
+                on_host,
+            }),
+            password_changed: false,
+            already_assuming: true,
+            message: Some("Already acting as this identity - no change needed.".into()),
+        }),
+
+        db::SwitchOutcome::Switched { before, after } => {
+            let password_changed = before.password != after.password;
+            Ok(AssumeIdentityResult {
+                server: connection,
+                login,
+                before: Some(before),
+                after: Some(after),
+                password_changed,
+                already_assuming: false,
+                message: Some(if password_changed {
+                    "Identity switched successfully.".into()
+                } else {
+                    "WARNING: Password did not change - the identity switch may have failed."
+                        .into()
                 }),
-                password_changed: false,
-                already_assuming: true,
-                message: Some("Already acting as this identity - no change needed.".into()),
-            });
+            })
         }
     }
-
-    // Execute the identity switch
-    let (before, after) = db::run_identity_switch(&mut client, imposter, &user).await?;
-    let password_changed = before.password != after.password;
-
-    Ok(AssumeIdentityResult {
-        server: connection,
-        login: format!("FNBA\\{imposter}"),
-        before: Some(before),
-        after: Some(after),
-        password_changed,
-        already_assuming: false,
-        message: Some(if password_changed {
-            "Identity switched successfully.".into()
-        } else {
-            "WARNING: Password did not change - the identity switch may have failed.".into()
-        }),
-    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]

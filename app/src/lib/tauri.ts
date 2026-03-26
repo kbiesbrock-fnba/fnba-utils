@@ -45,7 +45,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 // --- Mock layer for browser development ---
 
-import identityDefaults from "../../../assumeIdentity/identity-defaults.json";
+import identityDefaults from "../../../data/identity-defaults.json";
 
 function buildUserList(
   users: Array<{ label: string; username: string }>,

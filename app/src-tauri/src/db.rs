@@ -33,150 +33,183 @@ pub async fn connect(server: &str) -> Result<SqlClient, String> {
     Ok(client)
 }
 
-pub struct PreflightRow {
-    pub already_assuming: bool,
-    pub password: String,
-    pub changed_at: String,
-    pub acting_as_login: Option<String>,
-    pub acting_as_name: Option<String>,
+pub enum SwitchOutcome {
+    AlreadyAssuming {
+        acting_as_login: String,
+        acting_as_name: String,
+        password: String,
+        changed_at: String,
+        on_host: String,
+    },
+    Switched {
+        before: IdentityState,
+        after: IdentityState,
+    },
+    ImposterNotFound,
 }
 
-/// Pre-flight check: is the imposter already assuming the target identity?
-pub async fn check_current_identity(
+pub async fn assume_identity(
     client: &mut SqlClient,
     imposter: &str,
     to_assume: &str,
-) -> Result<Option<PreflightRow>, String> {
+) -> Result<SwitchOutcome, String> {
     let sql = "\
+DECLARE @Imposter      VARCHAR(35) = @P1;
+DECLARE @ToAssume      VARCHAR(35) = @P2;
 DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + @P1;
 DECLARE @ToAssumeLogin VARCHAR(35) = 'FNBA\\' + @P2;
+
 DECLARE @CurrentAssocId INT;
 DECLARE @TargetAssocId  INT;
 SELECT @CurrentAssocId = assoc_id FROM logincheck.fnba_reporting.associate_login WHERE domain_username = @ImposterLogin;
 SELECT @TargetAssocId  = assoc_id FROM logincheck.fnba_reporting.associate_login WHERE domain_username = @ToAssumeLogin;
+
+DECLARE @BeforeActingAsLogin VARCHAR(35);
+DECLARE @BeforeActingAsName  VARCHAR(71);
+DECLARE @BeforePassword      VARCHAR(MAX);
+DECLARE @BeforeChangedAt     DATETIME;
+DECLARE @OnHost              VARCHAR(35) = @@SERVERNAME;
+
 SELECT
-    CASE WHEN @CurrentAssocId = @TargetAssocId THEN 1 ELSE 0 END AS already_assuming,
-    al.password,
-    al.date_modified AS changed_at,
-    (SELECT MIN(domain_username) FROM logincheck.fnba_reporting.associate_login WHERE assoc_id = al.assoc_id AND domain_username <> @ImposterLogin) AS acting_as_login,
-    per.first_name + ' ' + per.last_name AS acting_as_name
+    @BeforeActingAsLogin = (
+        SELECT ISNULL(MIN(domain_username), @ImposterLogin)
+          FROM logincheck.fnba_reporting.associate_login
+         WHERE assoc_id = al.assoc_id
+           AND domain_username <> @ImposterLogin
+    ),
+    @BeforeActingAsName = per.first_name + ' ' + per.last_name,
+    @BeforePassword     = al.password,
+    @BeforeChangedAt    = al.date_modified
 FROM logincheck.fnba_reporting.associate_login al
 JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
-WHERE al.domain_username = @ImposterLogin;";
+WHERE al.domain_username = @ImposterLogin;
+
+IF @CurrentAssocId IS NULL
+BEGIN
+    SELECT 'not_found' AS phase;
+END
+ELSE IF @CurrentAssocId = @TargetAssocId
+BEGIN
+    SELECT
+        'current'            AS phase,
+        @ImposterLogin       AS imposter_login,
+        @BeforeActingAsLogin AS acting_as_login,
+        @BeforeActingAsName  AS acting_as_name,
+        @BeforePassword      AS password,
+        @BeforeChangedAt     AS changed_at,
+        @OnHost              AS on_host;
+END
+ELSE
+BEGIN
+    SELECT
+        'before'             AS phase,
+        @ImposterLogin       AS imposter_login,
+        @BeforeActingAsLogin AS acting_as_login,
+        @BeforeActingAsName  AS acting_as_name,
+        @BeforePassword      AS password,
+        @BeforeChangedAt     AS changed_at,
+        @OnHost              AS on_host;
+
+    EXEC logincheck.fnba.assumeIdentity
+        @windowsLoginOfImpostor = @Imposter,
+        @windowsLoginToAssume   = @ToAssume;
+
+    SELECT
+        'after'          AS phase,
+        @ImposterLogin   AS imposter_login,
+        @ToAssumeLogin   AS acting_as_login,
+        per.first_name + ' ' + per.last_name AS acting_as_name,
+        al.password,
+        al.date_modified AS changed_at,
+        @OnHost          AS on_host
+    FROM logincheck.fnba_reporting.associate_login al
+    JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
+    WHERE al.domain_username = @ImposterLogin;
+END";
 
     let results = client
         .query(sql, &[&imposter, &to_assume])
         .await
-        .map_err(|e| format!("Pre-flight query failed: {e}"))?
+        .map_err(|e| format!("Identity query failed: {e}"))?
         .into_results()
         .await
-        .map_err(|e| format!("Pre-flight result read failed: {e}"))?;
+        .map_err(|e| format!("Identity result read failed: {e}"))?;
 
-    // Find the last non-empty result set (the SELECT output)
-    let rows = results.into_iter().rev().find(|rs| !rs.is_empty());
-    let Some(rows) = rows else {
-        return Ok(None);
-    };
-    let row = &rows[0];
+    let sets: Vec<Vec<Row>> = results.into_iter().filter(|rs| !rs.is_empty()).collect();
 
-    Ok(Some(PreflightRow {
-        already_assuming: row.try_get::<i32, _>("already_assuming")
-            .map_err(|e| format!("Column read error: {e}"))?
-            .unwrap_or(0)
-            == 1,
-        password: row.try_get::<&str, _>("password")
-            .map_err(|e| format!("Column read error: {e}"))?
-            .unwrap_or("")
-            .to_string(),
-        changed_at: format_datetime(
-            row.try_get::<NaiveDateTime, _>("changed_at")
-                .map_err(|e| format!("Column read error: {e}"))?,
-        ),
-        acting_as_login: row.try_get::<&str, _>("acting_as_login")
-            .map_err(|e| format!("Column read error: {e}"))?
-            .map(|s| s.to_string()),
-        acting_as_name: row.try_get::<&str, _>("acting_as_name")
-            .map_err(|e| format!("Column read error: {e}"))?
-            .map(|s| s.to_string()),
-    }))
-}
-
-/// Execute the identity switch and return (before, after) states.
-pub async fn run_identity_switch(
-    client: &mut SqlClient,
-    imposter: &str,
-    to_assume: &str,
-) -> Result<(IdentityState, IdentityState), String> {
-    let sql = "\
-CREATE TABLE #states (
-    phase          VARCHAR(7)   NOT NULL,
-    imposter_login VARCHAR(35)  NOT NULL,
-    acting_as_name VARCHAR(71)  NOT NULL,
-    acting_as_login VARCHAR(35) NULL,
-    password       VARCHAR(MAX) NOT NULL,
-    changed_at     DATETIME     NOT NULL,
-    on_host        VARCHAR(35)  NOT NULL
-);
-DECLARE @Imposter VARCHAR(35) = @P1;
-DECLARE @ToAssume VARCHAR(35) = @P2;
-DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + @P1;
-DECLARE @ToAssumeLogin VARCHAR(35) = 'FNBA\\' + @P2;
-DECLARE @CurrentAssocId INT;
-DECLARE @TargetAssocId  INT;
-SELECT @CurrentAssocId = assoc_id FROM logincheck.fnba_reporting.associate_login WHERE domain_username = @ImposterLogin;
-SELECT @TargetAssocId  = assoc_id FROM logincheck.fnba_reporting.associate_login WHERE domain_username = @ToAssumeLogin;
-INSERT INTO #states
-SELECT 'before',
-    al.domain_username,
-    per.first_name + ' ' + per.last_name,
-    (SELECT ISNULL(MIN(domain_username), @ImposterLogin) FROM logincheck.fnba_reporting.associate_login WHERE assoc_id = al.assoc_id AND domain_username <> @ImposterLogin),
-    al.password,
-    al.date_modified,
-    @@SERVERNAME
-FROM logincheck.fnba_reporting.associate_login al
-JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
-WHERE al.domain_username = @ImposterLogin;
-EXEC logincheck.fnba.assumeIdentity
-    @windowsLoginOfImpostor = @Imposter,
-    @windowsLoginToAssume   = @ToAssume;
-INSERT INTO #states
-SELECT 'after',
-    al.domain_username,
-    per.first_name + ' ' + per.last_name,
-    @ToAssumeLogin,
-    al.password,
-    al.date_modified,
-    @@SERVERNAME
-FROM logincheck.fnba_reporting.associate_login al
-JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
-WHERE al.domain_username = @ImposterLogin;
-SELECT * FROM #states;
-DROP TABLE #states;";
-
-    let results = client
-        .query(sql, &[&imposter, &to_assume])
-        .await
-        .map_err(|e| format!("Identity switch query failed: {e}"))?
-        .into_results()
-        .await
-        .map_err(|e| format!("Identity switch result read failed: {e}"))?;
-
-    // Find the result set with our #states rows (last non-empty set)
-    let rows: Vec<Row> = results
-        .into_iter()
-        .rev()
-        .find(|rs| !rs.is_empty())
-        .ok_or("Unexpected result - no rows returned from identity switch")?;
-
-    if rows.len() < 2 {
-        return Err("Unexpected result - expected before and after rows".into());
+    if sets.is_empty() {
+        return Ok(SwitchOutcome::ImposterNotFound);
     }
 
-    let imposter_login = format!("FNBA\\{imposter}");
-    let before = parse_state_row(&rows[0], &imposter_login)?;
-    let after = parse_state_row(&rows[1], &imposter_login)?;
+    // Use the phase column to find rows (immune to extra result sets from the stored proc)
+    let mut current_row: Option<&Row> = None;
+    let mut before_row: Option<&Row> = None;
+    let mut after_row: Option<&Row> = None;
+    let mut not_found = false;
 
-    Ok((before, after))
+    for set in &sets {
+        if let Some(row) = set.first() {
+            match row.try_get::<&str, _>("phase") {
+                Ok(Some("not_found")) => not_found = true,
+                Ok(Some("current")) => current_row = Some(row),
+                Ok(Some("before")) => before_row = Some(row),
+                Ok(Some("after")) => after_row = Some(row),
+                _ => {} // skip result sets from the stored proc
+            }
+        }
+    }
+
+    if not_found {
+        return Ok(SwitchOutcome::ImposterNotFound);
+    }
+
+    if let Some(row) = current_row {
+        return Ok(SwitchOutcome::AlreadyAssuming {
+            acting_as_login: parse_login(row, imposter),
+            acting_as_name: row
+                .try_get::<&str, _>("acting_as_name")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("unknown")
+                .to_string(),
+            password: row
+                .try_get::<&str, _>("password")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("")
+                .to_string(),
+            changed_at: format_datetime(
+                row.try_get::<NaiveDateTime, _>("changed_at")
+                    .map_err(|e| format!("Column read error: {e}"))?,
+            ),
+            on_host: row
+                .try_get::<&str, _>("on_host")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("")
+                .to_string(),
+        });
+    }
+
+    let before_row = before_row.ok_or("Missing 'before' row in identity switch result")?;
+    let after_row = after_row.ok_or("Missing 'after' row - stored proc may have failed")?;
+
+    let imposter_login = format!("FNBA\\{imposter}");
+    let before = parse_state_row(before_row, &imposter_login)?;
+    let after = parse_state_row(after_row, &imposter_login)?;
+
+    Ok(SwitchOutcome::Switched { before, after })
+}
+
+fn parse_login(row: &Row, imposter: &str) -> String {
+    let login = row
+        .try_get::<&str, _>("acting_as_login")
+        .ok()
+        .flatten()
+        .unwrap_or("")
+        .trim();
+    if login.is_empty() {
+        format!("FNBA\\{imposter}")
+    } else {
+        login.to_string()
+    }
 }
 
 fn parse_state_row(row: &Row, imposter_login: &str) -> Result<IdentityState, String> {
@@ -186,10 +219,7 @@ fn parse_state_row(row: &Row, imposter_login: &str) -> Result<IdentityState, Str
 
     let (acting_as_login, acting_as_name) =
         if acting_as_login_raw.is_none() || acting_as_login_raw.unwrap_or("").trim().is_empty() {
-            (
-                imposter_login.to_string(),
-                "self".to_string(),
-            )
+            (imposter_login.to_string(), "self".to_string())
         } else {
             (
                 acting_as_login_raw.unwrap().to_string(),

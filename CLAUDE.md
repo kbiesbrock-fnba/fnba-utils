@@ -45,10 +45,10 @@ Each command (e.g., Assume Identity) follows this pattern:
 - **Command entry**: `src/commands/<name>.ts` + registered in `src/commands/index.ts`
 
 ### Assume Identity flow
-The primary command. Steps: user picker -> connection picker -> confirm -> executing -> result/error. The composable (`useAssumeIdentity.ts`) manages step transitions and state. The Rust backend connects to SQL Server via `tiberius` with Windows SSPI auth, runs a pre-flight identity check, then executes the switch via `logincheck.fnba.assumeIdentity` stored proc.
+The primary command. Steps: user picker -> connection picker -> confirm -> executing -> result/error. The composable (`useAssumeIdentity.ts`) manages step transitions and state. The Rust backend connects to SQL Server via `tiberius` with Windows SSPI auth and executes a single consolidated SQL batch that checks current state, conditionally runs the `logincheck.fnba.assumeIdentity` stored proc, and returns before/after snapshots.
 
 ### Data sources
-- `assumeIdentity/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`
+- `data/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`
 - `~/.assumeIdentity.json` -- user-added custom entries, merged at runtime
 - `localStorage` -- recent user tracking (frontend only)
 
