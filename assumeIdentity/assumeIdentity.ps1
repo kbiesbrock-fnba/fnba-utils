@@ -36,53 +36,17 @@ param(
     [switch]$LoadOnly
 )
 
-$IMPOSTER  = "kbiesbrock"
+$DEFAULTS_FILE = Join-Path $PSScriptRoot "identity-defaults.json"
+$defaults      = Get-Content $DEFAULTS_FILE -Raw | ConvertFrom-Json
+
+$IMPOSTER  = $defaults.imposter
 $DATA_FILE = Join-Path $HOME ".assumeIdentity.json"
 
-$DEFAULT_CONNECTIONS = @(
-    "dsqlkbiesbrock.fnba-dev.network"
-    "dsqlaleroy.fnba-dev.network"
-    "meleagris.fnba.com"
-)
+$DEFAULT_CONNECTIONS = @($defaults.defaultConnections)
 
-$DEFAULT_USERS = @(
-    [pscustomobject]@{ Label = "Near-god / Reporting FNBA Web"; Username = "FNBA\ccollins" }
-    [pscustomobject]@{ Label = "Reporting";                     Username = "rnukala"        }
-    [pscustomobject]@{ Label = "Reporting";                     Username = "wdevaney"       }
-    [pscustomobject]@{ Label = "Accounting";                    Username = "yferguson"      }
-    [pscustomobject]@{ Label = "Accounting";                    Username = "jbouck"         }
-    [pscustomobject]@{ Label = "Acquisitions Manager";          Username = "tmuth"          }
-    [pscustomobject]@{ Label = "Acquisitions Manager";          Username = "lguzman"        }
-    [pscustomobject]@{ Label = "Acquisitions Manager";          Username = "swightman"      }
-    [pscustomobject]@{ Label = "Processor";                     Username = "kpiazza"        }
-    [pscustomobject]@{ Label = "Operations Manager";            Username = "adavis"         }
-    [pscustomobject]@{ Label = "Underwriter";                   Username = "ajenks"         }
-    [pscustomobject]@{ Label = "Application Rights";            Username = "makeeler"       }
-    [pscustomobject]@{ Label = "Application Rights";            Username = "cpatterson"     }
-    [pscustomobject]@{ Label = "Application Rights";            Username = "btitus"         }
-    [pscustomobject]@{ Label = "Application Rights";            Username = "tdaniels"       }
-    [pscustomobject]@{ Label = "Batch";                         Username = "clacroix"       }
-    [pscustomobject]@{ Label = "Batch";                         Username = "mkeller"        }
-    [pscustomobject]@{ Label = "Batch";                         Username = "aguggemmos"     }
-    [pscustomobject]@{ Label = "Batch";                         Username = "pbenson"        }
-    [pscustomobject]@{ Label = "Batch";                         Username = "ahanson"        }
-    [pscustomobject]@{ Label = "Bankruptcy";                    Username = "sodom"          }
-    [pscustomobject]@{ Label = "BSA";                           Username = "mbeyers"        }
-    [pscustomobject]@{ Label = "BSA";                           Username = "khundt"         }
-    [pscustomobject]@{ Label = "Collections";                   Username = "jsweet"         }
-    [pscustomobject]@{ Label = "Collections";                   Username = "merodriguez"    }
-    [pscustomobject]@{ Label = "Credit Underwriting";           Username = "sfortino"       }
-    [pscustomobject]@{ Label = "Customer Service";              Username = "lupright"       }
-    [pscustomobject]@{ Label = "Customer Service";              Username = "mbeyers"        }
-    [pscustomobject]@{ Label = "Encompass";                     Username = "mcain"          }
-    [pscustomobject]@{ Label = "Encompass";                     Username = "mvickers"       }
-    [pscustomobject]@{ Label = "Escrow Manager";                Username = "ahanson"        }
-    [pscustomobject]@{ Label = "Payment Processing / Package";  Username = "mmichaels"      }
-    [pscustomobject]@{ Label = "Payment Processing / Package";  Username = "tiott"          }
-    [pscustomobject]@{ Label = "Payment Processing / Package";  Username = "aholland"       }
-    [pscustomobject]@{ Label = "Rosebud";                       Username = "cpatterson"     }
-    [pscustomobject]@{ Label = "Underwriting";                  Username = "wwessels"       }
-)
+$DEFAULT_USERS = @($defaults.defaultUsers | ForEach-Object {
+    [pscustomobject]@{ Label = $_.label; Username = $_.username }
+})
 
 # -- Persistence ---------------------------------------------------------------
 

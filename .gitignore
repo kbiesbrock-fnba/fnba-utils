@@ -1,3 +1,9 @@
 .claude/
+.idea/
 .assumeIdentity.json
 bashrc.d/startup-files/.env
+
+# App build artifacts
+app/node_modules/
+app/dist/
+app/src-tauri/target/
