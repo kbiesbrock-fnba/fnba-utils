@@ -1,6 +1,6 @@
 export interface IdentityUser {
   username: string;
-  labels: string;
+  label: string;
 }
 
 export interface IdentityData {
@@ -42,19 +42,10 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 import identityDefaults from "../../../assumeIdentity/identity-defaults.json";
 
-function buildUserMap(
+function buildUserList(
   users: Array<{ label: string; username: string }>,
 ): IdentityUser[] {
-  const map = new Map<string, string[]>();
-  for (const u of users) {
-    const labels = map.get(u.username) ?? [];
-    if (u.label && !labels.includes(u.label)) labels.push(u.label);
-    map.set(u.username, labels);
-  }
-  return Array.from(map.entries()).map(([username, labels]) => ({
-    username,
-    labels: labels.join(" | "),
-  }));
+  return users.map((u) => ({ username: u.username, label: u.label }));
 }
 
 async function mockInvoke<T>(
@@ -69,7 +60,7 @@ async function mockInvoke<T>(
       await delay(100);
       return {
         imposter: identityDefaults.imposter,
-        users: buildUserMap(identityDefaults.defaultUsers),
+        users: buildUserList(identityDefaults.defaultUsers),
         connections: identityDefaults.defaultConnections,
       } as T;
     }

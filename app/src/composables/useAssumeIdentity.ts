@@ -14,6 +14,59 @@ export type AssumeIdentityStep =
   | "result"
   | "error";
 
+// --- Recent-user tracking via localStorage ---
+
+const RECENT_KEY = "fnba-utils:recent-users";
+const MAX_RECENT = 5;
+
+interface RecentEntry {
+  username: string;
+  timestamp: number;
+}
+
+function loadRecentUsernames(): string[] {
+  try {
+    const entries: RecentEntry[] = JSON.parse(
+      localStorage.getItem(RECENT_KEY) || "[]",
+    );
+    return entries
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .map((e) => e.username);
+  } catch {
+    return [];
+  }
+}
+
+function recordRecentUser(username: string) {
+  try {
+    let entries: RecentEntry[] = JSON.parse(
+      localStorage.getItem(RECENT_KEY) || "[]",
+    );
+    entries = entries.filter((e) => e.username !== username);
+    entries.unshift({ username, timestamp: Date.now() });
+    localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify(entries.slice(0, MAX_RECENT)),
+    );
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function deleteRecentUser(username: string) {
+  try {
+    let entries: RecentEntry[] = JSON.parse(
+      localStorage.getItem(RECENT_KEY) || "[]",
+    );
+    entries = entries.filter((e) => e.username !== username);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(entries));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+// --- Shared state ---
+
 const step = ref<AssumeIdentityStep>("user");
 const users = ref<IdentityUser[]>([]);
 const connections = ref<string[]>([]);
@@ -23,6 +76,7 @@ const result = ref<AssumeIdentityResult | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
 const dataLoaded = ref(false);
+const recentUsernames = ref<string[]>(loadRecentUsernames());
 
 export function useAssumeIdentity() {
   async function loadData() {
@@ -45,6 +99,7 @@ export function useAssumeIdentity() {
     result.value = null;
     error.value = null;
     loading.value = false;
+    recentUsernames.value = loadRecentUsernames();
   }
 
   function selectUser(user: IdentityUser) {
@@ -66,6 +121,8 @@ export function useAssumeIdentity() {
         selectedUser.value.username,
         selectedConnection.value,
       );
+      recordRecentUser(selectedUser.value.username);
+      recentUsernames.value = loadRecentUsernames();
       step.value = "result";
     } catch (e) {
       error.value = String(e);
@@ -73,6 +130,11 @@ export function useAssumeIdentity() {
     } finally {
       loading.value = false;
     }
+  }
+
+  function removeRecentUser(username: string) {
+    deleteRecentUser(username);
+    recentUsernames.value = loadRecentUsernames();
   }
 
   function goBack(): boolean {
@@ -99,11 +161,13 @@ export function useAssumeIdentity() {
     result,
     error,
     loading,
+    recentUsernames,
     loadData,
     reset,
     selectUser,
     selectConnection,
     execute,
+    removeRecentUser,
     goBack,
   };
 }

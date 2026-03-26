@@ -29,12 +29,13 @@ const {
   selectedConnection,
   result,
   error,
-  loading,
+  recentUsernames,
   loadData,
   reset,
   selectUser,
   selectConnection,
   execute,
+  removeRecentUser,
   goBack,
 } = useAssumeIdentity();
 
@@ -73,7 +74,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 
 <template>
   <template v-if="step === 'user'">
-    <UserPicker :users="users" @select="selectUser" />
+    <UserPicker :users="users" :recent-usernames="recentUsernames" @select="selectUser" @remove-recent="removeRecentUser" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 
@@ -88,7 +89,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
       <div class="confirm-row">
         <span class="confirm-label">User</span>
         <span class="confirm-value">{{ selectedUser?.username }}</span>
-        <span class="confirm-meta">{{ selectedUser?.labels }}</span>
+        <span class="confirm-meta">{{ selectedUser?.label }}</span>
       </div>
       <div class="confirm-row">
         <span class="confirm-label">Server</span>

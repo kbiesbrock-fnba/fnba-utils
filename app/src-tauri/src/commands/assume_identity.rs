@@ -1,5 +1,4 @@
 use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityUser};
-use std::collections::BTreeMap;
 use std::process::Command;
 
 const DEFAULT_DATA: &str = include_str!("../../../../assumeIdentity/identity-defaults.json");
@@ -27,19 +26,13 @@ struct CustomData {
     custom_connections: Vec<String>,
 }
 
-/// Deduplicate users: one entry per username, all labels joined with " | "
-fn build_user_map(users: &[RawUser]) -> Vec<IdentityUser> {
-    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for u in users {
-        let labels = map.entry(u.username.clone()).or_default();
-        if !u.label.is_empty() && !labels.contains(&u.label) {
-            labels.push(u.label.clone());
-        }
-    }
-    map.into_iter()
-        .map(|(username, labels)| IdentityUser {
-            username,
-            labels: labels.join(" | "),
+/// Return one entry per label+username pair (no deduplication).
+fn build_user_list(users: &[RawUser]) -> Vec<IdentityUser> {
+    users
+        .iter()
+        .map(|u| IdentityUser {
+            username: u.username.clone(),
+            label: u.label.clone(),
         })
         .collect()
 }
@@ -71,7 +64,7 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
 
     Ok(IdentityData {
         imposter: defaults.imposter,
-        users: build_user_map(&all_users),
+        users: build_user_list(&all_users),
         connections: all_connections,
     })
 }

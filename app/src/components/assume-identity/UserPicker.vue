@@ -5,31 +5,98 @@ import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{
   users: IdentityUser[];
+  recentUsernames: string[];
 }>();
 
 const emit = defineEmits<{
   select: [user: IdentityUser];
+  removeRecent: [username: string];
 }>();
 
 const query = ref("");
 const selectedIndex = ref(0);
 const listRef = ref<HTMLElement | null>(null);
 
-const filtered = computed(() => {
-  if (!query.value) return props.users;
+type DisplayRow =
+  | { kind: "header"; title: string }
+  | { kind: "user"; user: IdentityUser; displayLabel: string; flatIndex: number; isRecent: boolean };
+
+const displayData = computed(() => {
   const q = query.value.toLowerCase();
-  return props.users.filter(
-    (u) =>
-      u.username.toLowerCase().includes(q) ||
-      u.labels.toLowerCase().includes(q),
+  const matching = q
+    ? props.users.filter(
+        (u) =>
+          u.username.toLowerCase().includes(q) ||
+          u.label.toLowerCase().includes(q),
+      )
+    : props.users;
+
+  const rows: DisplayRow[] = [];
+  let flatIndex = 0;
+
+  // Recently used section
+  if (props.recentUsernames.length > 0) {
+    const recentItems: { user: IdentityUser; allLabels: string }[] = [];
+    for (const username of props.recentUsernames) {
+      const entries = matching.filter((u) => u.username === username);
+      if (entries.length > 0) {
+        const allLabels = [...new Set(entries.map((e) => e.label))]
+          .sort()
+          .join(" / ");
+        recentItems.push({ user: entries[0], allLabels });
+      }
+    }
+    if (recentItems.length > 0) {
+      rows.push({ kind: "header", title: "Recently Used" });
+      for (const item of recentItems) {
+        rows.push({
+          kind: "user",
+          user: item.user,
+          displayLabel: item.allLabels,
+          flatIndex: flatIndex++,
+          isRecent: true,
+        });
+      }
+    }
+  }
+
+  // Group by label, alphabetically
+  const groups = new Map<string, IdentityUser[]>();
+  for (const u of matching) {
+    const arr = groups.get(u.label) ?? [];
+    arr.push(u);
+    groups.set(u.label, arr);
+  }
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => a.username.localeCompare(b.username));
+  }
+  const sortedLabels = [...groups.keys()].sort((a, b) =>
+    a.localeCompare(b),
   );
+
+  for (const label of sortedLabels) {
+    rows.push({ kind: "header", title: label });
+    for (const user of groups.get(label)!) {
+      rows.push({
+        kind: "user",
+        user,
+        displayLabel: "",
+        flatIndex: flatIndex++,
+        isRecent: false,
+      });
+    }
+  }
+
+  return { rows, totalItems: flatIndex };
 });
 
 function scrollToSelected() {
   nextTick(() => {
     const list = listRef.value;
     if (!list) return;
-    const item = list.children[selectedIndex.value] as HTMLElement | undefined;
+    const item = list.querySelector(
+      `[data-index="${selectedIndex.value}"]`,
+    ) as HTMLElement | undefined;
     item?.scrollIntoView({ block: "nearest" });
   });
 }
@@ -41,24 +108,36 @@ function onUpdate(value: string) {
   selectedIndex.value = 0;
 }
 
+function getRowAtIndex(index: number) {
+  for (const row of displayData.value.rows) {
+    if (row.kind === "user" && row.flatIndex === index) return row;
+  }
+  return undefined;
+}
+
 function onKeydown(e: KeyboardEvent) {
+  const total = displayData.value.totalItems;
   if (e.key === "ArrowDown") {
     e.preventDefault();
-    if (filtered.value.length > 0) {
-      selectedIndex.value =
-        (selectedIndex.value + 1) % filtered.value.length;
+    if (total > 0) {
+      selectedIndex.value = (selectedIndex.value + 1) % total;
     }
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
-    if (filtered.value.length > 0) {
-      selectedIndex.value =
-        (selectedIndex.value - 1 + filtered.value.length) %
-        filtered.value.length;
+    if (total > 0) {
+      selectedIndex.value = (selectedIndex.value - 1 + total) % total;
     }
-  } else if (e.key === "Enter" && filtered.value.length > 0) {
+  } else if (e.key === "Enter" && total > 0) {
     e.preventDefault();
     e.stopPropagation();
-    emit("select", filtered.value[selectedIndex.value]);
+    const row = getRowAtIndex(selectedIndex.value);
+    if (row) emit("select", row.user);
+  } else if (e.key === "Delete" && total > 0) {
+    const row = getRowAtIndex(selectedIndex.value);
+    if (row?.isRecent) {
+      e.preventDefault();
+      emit("removeRecent", row.user.username);
+    }
   }
 }
 
@@ -70,18 +149,33 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   <CommandInput :value="query" placeholder="Select user..." @update="onUpdate" />
   <div class="picker-divider" />
   <div ref="listRef" class="picker-list">
-    <div v-if="filtered.length === 0" class="empty">No matching users</div>
-    <div
-      v-for="(user, i) in filtered"
-      :key="user.username"
-      class="picker-item"
-      :class="{ selected: i === selectedIndex }"
-      @click="emit('select', user)"
-      @mouseenter="selectedIndex = i"
-    >
-      <span class="picker-name">{{ user.username }}</span>
-      <span class="picker-labels">{{ user.labels }}</span>
-    </div>
+    <div v-if="displayData.totalItems === 0" class="empty">No matching users</div>
+    <template v-for="(row, i) in displayData.rows" :key="i">
+      <div v-if="row.kind === 'header'" class="section-header">
+        {{ row.title }}
+      </div>
+      <div
+        v-else
+        class="picker-item"
+        :class="{ selected: row.flatIndex === selectedIndex }"
+        :data-index="row.flatIndex"
+        @click="emit('select', row.user)"
+        @mouseenter="selectedIndex = row.flatIndex"
+      >
+        <span class="picker-name">{{ row.user.username }}</span>
+        <span v-if="row.displayLabel" class="picker-labels">{{ row.displayLabel }}</span>
+        <button
+          v-if="row.isRecent"
+          class="remove-btn"
+          title="Remove from recent (Del)"
+          @click.stop="emit('removeRecent', row.user.username)"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+          </svg>
+        </button>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -103,6 +197,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   text-align: center;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.section-header {
+  padding: 10px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
 }
 
 .picker-item {
@@ -134,5 +238,32 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   margin-left: auto;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.remove-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
+  flex-shrink: 0;
+}
+
+.picker-item:hover .remove-btn,
+.picker-item.selected .remove-btn {
+  opacity: 1;
+}
+
+.remove-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent-red);
 }
 </style>
