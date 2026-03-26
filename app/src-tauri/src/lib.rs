@@ -1,4 +1,5 @@
 mod commands;
+mod db;
 mod models;
 
 use tauri::{
@@ -12,7 +13,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;

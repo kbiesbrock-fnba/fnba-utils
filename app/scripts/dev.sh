@@ -18,11 +18,6 @@ if [[ ! -f "$CARGO_WIN" ]]; then
   exit 1
 fi
 
-# Set the script dir so the Rust backend can find assumeIdentity-json.ps1
-REPO_DIR="$(dirname "$APP_DIR")"
-REPO_WIN="$(wslpath -w "$REPO_DIR")"
-export FNBA_UTILS_SCRIPT_DIR="$REPO_WIN"
-
 # Start Vite dev server in background
 cd "$APP_DIR"
 npm run dev &

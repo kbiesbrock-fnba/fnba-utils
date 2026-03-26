@@ -1,5 +1,5 @@
-use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityUser};
-use std::process::Command;
+use crate::db;
+use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityState, IdentityUser};
 
 const DEFAULT_DATA: &str = include_str!("../../../../assumeIdentity/identity-defaults.json");
 
@@ -74,39 +74,58 @@ pub async fn execute_assume_identity(
     user: String,
     connection: String,
 ) -> Result<AssumeIdentityResult, String> {
-    // Find the json wrapper script relative to the exe or via env
-    let script_path = find_script_path()?;
+    let defaults: DefaultsFile =
+        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
+    let imposter = &defaults.imposter;
 
-    let output = Command::new("C:\\Program Files\\PowerShell\\7\\pwsh.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-File",
-            &script_path,
-            &user,
-            &connection,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to launch pwsh.exe: {e}"))?;
+    let mut client = db::connect(&connection).await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
-            "pwsh.exe exited with {}: {}{}",
-            output.status,
-            stderr.trim(),
-            if stdout.trim().is_empty() {
-                String::new()
-            } else {
-                format!("\n{}", stdout.trim())
-            }
-        ));
+    // Pre-flight: check if already assuming this identity
+    if let Some(current) = db::check_current_identity(&mut client, imposter, &user).await? {
+        if current.already_assuming {
+            let (acting_as_login, acting_as_name) = match &current.acting_as_login {
+                Some(login) if !login.trim().is_empty() => (
+                    login.clone(),
+                    current.acting_as_name.unwrap_or_else(|| "unknown".into()),
+                ),
+                _ => (format!("FNBA\\{imposter}"), "self".into()),
+            };
+
+            return Ok(AssumeIdentityResult {
+                server: connection.clone(),
+                login: format!("FNBA\\{imposter}"),
+                before: None,
+                after: Some(IdentityState {
+                    acting_as_login,
+                    acting_as_name,
+                    password: current.password,
+                    changed_at: current.changed_at,
+                    on_host: connection,
+                }),
+                password_changed: false,
+                already_assuming: true,
+                message: Some("Already acting as this identity - no change needed.".into()),
+            });
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<AssumeIdentityResult>(stdout.trim())
-        .map_err(|e| format!("Failed to parse script output: {e}\nRaw: {stdout}"))
+    // Execute the identity switch
+    let (before, after) = db::run_identity_switch(&mut client, imposter, &user).await?;
+    let password_changed = before.password != after.password;
+
+    Ok(AssumeIdentityResult {
+        server: connection,
+        login: format!("FNBA\\{imposter}"),
+        before: Some(before),
+        after: Some(after),
+        password_changed,
+        already_assuming: false,
+        message: Some(if password_changed {
+            "Identity switched successfully.".into()
+        } else {
+            "WARNING: Password did not change - the identity switch may have failed.".into()
+        }),
+    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -192,26 +211,3 @@ pub async fn save_custom_entry(
     })
 }
 
-fn find_script_path() -> Result<String, String> {
-    // Check environment variable first (for dev)
-    if let Ok(path) = std::env::var("FNBA_UTILS_SCRIPT_DIR") {
-        let p = std::path::PathBuf::from(&path)
-            .join("assumeIdentity")
-            .join("assumeIdentity-json.ps1");
-        if p.exists() {
-            return Ok(p.to_string_lossy().to_string());
-        }
-    }
-
-    // Check relative to executable (for production bundle)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("scripts").join("assumeIdentity-json.ps1");
-            if p.exists() {
-                return Ok(p.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Err("Could not find assumeIdentity-json.ps1. Set FNBA_UTILS_SCRIPT_DIR to the repo root.".to_string())
-}
