@@ -42,21 +42,16 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  background: transparent;
+}
+
 body {
   font-family: var(--font-sans);
-  background: transparent;
   color: var(--text-primary);
   user-select: none;
   overflow: hidden;
-}
-
-/* Dark backdrop for browser dev; Tauri window is transparent so this just fills it */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background: #0d0d1a;
-  z-index: -1;
 }
 
 #app {
