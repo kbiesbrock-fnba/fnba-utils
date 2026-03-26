@@ -54,7 +54,11 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     e.preventDefault();
     e.stopPropagation();
-    if (step.value === "result" || step.value === "error") {
+    if (step.value === "result") {
+      step.value = "connection";
+      selectedConnection.value = null;
+      result.value = null;
+    } else if (step.value === "error") {
       emit("dismiss");
     } else if (!goBack()) {
       emit("back");
@@ -115,7 +119,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
     <div class="close-row">
       <button class="confirm-btn" @click="emit('dismiss')">Close</button>
     </div>
-    <StatusBar hint="⏎ Close  ⎋ Close" />
+    <StatusBar hint="⏎ Close  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'error'">

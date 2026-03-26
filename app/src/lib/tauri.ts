@@ -93,7 +93,7 @@ async function mockInvoke<T>(
         },
         passwordChanged: true,
         alreadyAssuming: false,
-        message: "Identity switched successfully.",
+        message: null,
       } as T;
     }
 

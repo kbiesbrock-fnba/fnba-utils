@@ -1,9 +1,18 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import type { AssumeIdentityResult } from "../../lib/tauri";
 
 const props = defineProps<{
   result: AssumeIdentityResult;
 }>();
+
+const copiedPassword = ref(false);
+function copyPassword(password: string) {
+  navigator.clipboard.writeText(password).then(() => {
+    copiedPassword.value = true;
+    setTimeout(() => (copiedPassword.value = false), 2000);
+  });
+}
 </script>
 
 <template>
@@ -31,6 +40,9 @@ const props = defineProps<{
         <div class="state-row">
           <span class="state-label">Password</span>
           <span class="state-value mono">{{ result.after.password }}</span>
+          <button class="copy-btn" @click="copyPassword(result.after.password)">
+            {{ copiedPassword ? 'Copied' : 'Copy' }}
+          </button>
         </div>
         <div class="state-row">
           <span class="state-label">Since</span>
@@ -39,28 +51,11 @@ const props = defineProps<{
       </div>
     </template>
 
-    <!-- Normal before/after -->
+    <!-- Normal switch -->
     <template v-else>
-      <div v-if="result.before" class="state-section">
-        <div class="state-header before">Before</div>
-        <div class="state-row">
-          <span class="state-label">Acting as</span>
-          <span class="state-value">{{ result.before.acting_as_login }}</span>
-          <span class="state-meta">({{ result.before.acting_as_name }})</span>
-        </div>
-        <div class="state-row">
-          <span class="state-label">Password</span>
-          <span class="state-value mono">{{ result.before.password }}</span>
-        </div>
-        <div class="state-row">
-          <span class="state-label">Since</span>
-          <span class="state-value mono">{{ result.before.changed_at }}</span>
-        </div>
-      </div>
-
-      <div v-if="result.after" class="state-section">
-        <div class="state-header" :class="result.passwordChanged ? 'after-success' : 'after-warning'">
-          After
+      <div v-if="result.after" class="state-section primary">
+        <div class="state-header" :class="result.passwordChanged ? 'now-success' : 'now-warning'">
+          Success
         </div>
         <div class="state-row">
           <span class="state-label">Acting as</span>
@@ -70,6 +65,9 @@ const props = defineProps<{
         <div class="state-row">
           <span class="state-label">Password</span>
           <span class="state-value mono">{{ result.after.password }}</span>
+          <button class="copy-btn" @click="copyPassword(result.after.password)">
+            {{ copiedPassword ? 'Copied' : 'Copy' }}
+          </button>
         </div>
         <div class="state-row">
           <span class="state-label">Since</span>
@@ -83,6 +81,23 @@ const props = defineProps<{
         :class="result.passwordChanged ? 'success' : 'warning'"
       >
         {{ result.message }}
+      </div>
+
+      <div v-if="result.before" class="state-section secondary">
+        <div class="state-header previously">Previously</div>
+        <div class="state-row">
+          <span class="state-label">Was</span>
+          <span class="state-value">{{ result.before.acting_as_login }}</span>
+          <span class="state-meta">({{ result.before.acting_as_name }})</span>
+        </div>
+        <div class="state-row">
+          <span class="state-label">Password</span>
+          <span class="state-value mono">{{ result.before.password }}</span>
+        </div>
+        <div class="state-row">
+          <span class="state-label">Since</span>
+          <span class="state-value mono">{{ result.before.changed_at }}</span>
+        </div>
       </div>
     </template>
   </div>
@@ -137,20 +152,30 @@ const props = defineProps<{
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.state-header.before {
-  color: var(--accent-yellow);
-}
-
-.state-header.after-success {
+.state-header.now-success {
   color: var(--accent-green);
 }
 
-.state-header.after-warning {
+.state-header.now-warning {
   color: var(--accent-red);
 }
 
 .state-header.current {
   color: var(--accent-green);
+}
+
+.state-header.previously {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.state-section.secondary {
+  opacity: 0.55;
+  margin-top: 4px;
+}
+
+.state-section.secondary .state-value {
+  font-size: 13px;
 }
 
 .state-row {
@@ -179,6 +204,23 @@ const props = defineProps<{
 .state-meta {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.copy-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.copy-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
 }
 
 .result-badge {

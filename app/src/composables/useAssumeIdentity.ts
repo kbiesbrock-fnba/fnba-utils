@@ -85,7 +85,7 @@ export function useAssumeIdentity() {
     try {
       const data = await getIdentityData();
       users.value = data.users;
-      connections.value = data.connections;
+      connections.value = data.connections.sort((a, b) => a.localeCompare(b));
       dataLoaded.value = true;
     } catch (e) {
       error.value = String(e);

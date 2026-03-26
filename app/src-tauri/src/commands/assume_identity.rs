@@ -117,12 +117,11 @@ pub async fn execute_assume_identity(
                 after: Some(after),
                 password_changed,
                 already_assuming: false,
-                message: Some(if password_changed {
-                    "Identity switched successfully.".into()
+                message: if password_changed {
+                    None
                 } else {
-                    "WARNING: Password did not change - the identity switch may have failed."
-                        .into()
-                }),
+                    Some("Password did not change — the switch may have failed.".into())
+                },
             })
         }
     }
