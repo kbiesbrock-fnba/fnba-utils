@@ -47,10 +47,9 @@ pub async fn check_current_identity(
     imposter: &str,
     to_assume: &str,
 ) -> Result<Option<PreflightRow>, String> {
-    let sql = format!(
-        "\
-DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\{imposter}';
-DECLARE @ToAssumeLogin VARCHAR(35) = 'FNBA\\{to_assume}';
+    let sql = "\
+DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + @P1;
+DECLARE @ToAssumeLogin VARCHAR(35) = 'FNBA\\' + @P2;
 DECLARE @CurrentAssocId INT;
 DECLARE @TargetAssocId  INT;
 SELECT @CurrentAssocId = assoc_id FROM logincheck.fnba_reporting.associate_login WHERE domain_username = @ImposterLogin;
@@ -63,11 +62,10 @@ SELECT
     per.first_name + ' ' + per.last_name AS acting_as_name
 FROM logincheck.fnba_reporting.associate_login al
 JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
-WHERE al.domain_username = @ImposterLogin;"
-    );
+WHERE al.domain_username = @ImposterLogin;";
 
     let results = client
-        .simple_query(&sql)
+        .query(sql, &[&imposter, &to_assume])
         .await
         .map_err(|e| format!("Pre-flight query failed: {e}"))?
         .into_results()
@@ -109,8 +107,7 @@ pub async fn run_identity_switch(
     imposter: &str,
     to_assume: &str,
 ) -> Result<(IdentityState, IdentityState), String> {
-    let sql = format!(
-        "\
+    let sql = "\
 CREATE TABLE #states (
     phase          VARCHAR(7)   NOT NULL,
     imposter_login VARCHAR(35)  NOT NULL,
@@ -120,10 +117,10 @@ CREATE TABLE #states (
     changed_at     DATETIME     NOT NULL,
     on_host        VARCHAR(35)  NOT NULL
 );
-DECLARE @Imposter VARCHAR(35) = '{imposter}';
-DECLARE @ToAssume VARCHAR(35) = '{to_assume}';
-DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + '{imposter}';
-DECLARE @ToAssumeLogin VARCHAR(35) = 'FNBA\\' + '{to_assume}';
+DECLARE @Imposter VARCHAR(35) = @P1;
+DECLARE @ToAssume VARCHAR(35) = @P2;
+DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + @P1;
+DECLARE @ToAssumeLogin VARCHAR(35) = 'FNBA\\' + @P2;
 DECLARE @CurrentAssocId INT;
 DECLARE @TargetAssocId  INT;
 SELECT @CurrentAssocId = assoc_id FROM logincheck.fnba_reporting.associate_login WHERE domain_username = @ImposterLogin;
@@ -154,11 +151,10 @@ FROM logincheck.fnba_reporting.associate_login al
 JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
 WHERE al.domain_username = @ImposterLogin;
 SELECT * FROM #states;
-DROP TABLE #states;"
-    );
+DROP TABLE #states;";
 
     let results = client
-        .simple_query(&sql)
+        .query(sql, &[&imposter, &to_assume])
         .await
         .map_err(|e| format!("Identity switch query failed: {e}"))?
         .into_results()
