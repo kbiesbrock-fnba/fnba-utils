@@ -1,7 +1,8 @@
 import type { PaletteCommand } from "./types";
 import { assumeIdentityCommand } from "./assume-identity";
+import { rightLookupCommand } from "./right-lookup";
 
-export const commands: PaletteCommand[] = [assumeIdentityCommand];
+export const commands: PaletteCommand[] = [assumeIdentityCommand, rightLookupCommand];
 
 export function filterCommands(query: string): PaletteCommand[] {
   if (!query) return commands;

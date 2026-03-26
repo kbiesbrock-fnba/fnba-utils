@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { useAssumeIdentity } from "../../composables/useAssumeIdentity";
+import { useAssumeIdentity, prefillUsername } from "../../composables/useAssumeIdentity";
 
 const copied = ref(false);
 function copyError() {
@@ -45,9 +45,17 @@ const selectedUserLabels = computed(() => {
   return [...new Set(users.value.filter((u) => u.username === name).map((u) => u.label))];
 });
 
-onMounted(() => {
+onMounted(async () => {
   reset();
-  loadData();
+  await loadData();
+  if (prefillUsername.value) {
+    const username = prefillUsername.value;
+    prefillUsername.value = null;
+    const existing = users.value.find(
+      (u) => u.username.toLowerCase() === username.toLowerCase(),
+    );
+    selectUser(existing ?? { username, label: "Custom" });
+  }
 });
 
 function onKeydown(e: KeyboardEvent) {

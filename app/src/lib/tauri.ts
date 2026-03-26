@@ -32,6 +32,18 @@ export interface SaveCustomEntryResult {
   addedConnection: boolean;
 }
 
+export interface RightInfo {
+  rightId: number;
+  rightName: string;
+}
+
+export interface RightAssociate {
+  assocId: number;
+  nickname: string | null;
+  firstName: string | null;
+  lastName: string | null;
+}
+
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -108,6 +120,33 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "get_all_rights": {
+      await delay(800);
+      return [
+        { rightId: 100, rightName: "Account Log Edit" },
+        { rightId: 101, rightName: "Account Log View" },
+        { rightId: 200, rightName: "Admin Panel" },
+        { rightId: 300, rightName: "Billing Adjustments" },
+        { rightId: 301, rightName: "Billing View" },
+        { rightId: 400, rightName: "Customer Edit" },
+        { rightId: 401, rightName: "Customer View" },
+        { rightId: 500, rightName: "Dashboard Admin" },
+        { rightId: 600, rightName: "Reports Export" },
+        { rightId: 700, rightName: "User Management" },
+      ] as T;
+    }
+
+    case "get_right_associates": {
+      await delay(1500);
+      return [
+        { assocId: 1001, nickname: "jsmith", firstName: "John", lastName: "Smith" },
+        { assocId: 1002, nickname: "jdoe", firstName: "Jane", lastName: "Doe" },
+        { assocId: 1003, nickname: "mbrown", firstName: "Mike", lastName: "Brown" },
+        { assocId: 1004, nickname: "agarcia", firstName: "Ana", lastName: "Garcia" },
+        { assocId: 1005, nickname: null, firstName: null, lastName: null },
+      ] as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -141,4 +180,18 @@ export function saveCustomEntry(
 
 export function hideWindow(): Promise<void> {
   return invoke<void>("hide_window");
+}
+
+export function getAllRights(): Promise<RightInfo[]> {
+  return invoke<RightInfo[]>("get_all_rights");
+}
+
+export function getRightAssociates(
+  rightName: string | null,
+  rightId: number | null,
+): Promise<RightAssociate[]> {
+  return invoke<RightAssociate[]>("get_right_associates", {
+    rightName,
+    rightId,
+  });
 }

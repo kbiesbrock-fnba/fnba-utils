@@ -11,10 +11,14 @@ pub type SqlClient = Client<Compat<TcpStream>>;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn connect(server: &str) -> Result<SqlClient, String> {
+    connect_to(server, "logincheck").await
+}
+
+pub async fn connect_to(server: &str, database: &str) -> Result<SqlClient, String> {
     let mut config = Config::new();
     config.host(server);
     config.port(1433);
-    config.database("logincheck");
+    config.database(database);
     config.authentication(AuthMethod::Integrated);
     config.trust_cert();
 

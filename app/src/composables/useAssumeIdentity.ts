@@ -66,6 +66,10 @@ function deleteRecentUser(username: string) {
   }
 }
 
+// --- Cross-command bridge ---
+
+export const prefillUsername = ref<string | null>(null);
+
 // --- Shared state ---
 
 const step = ref<AssumeIdentityStep>("user");
