@@ -212,7 +212,7 @@ function Get-CurrentIdentity([string]$server, [string]$toAssume) {
         "    CASE WHEN @CurrentAssocId = @TargetAssocId THEN 1 ELSE 0 END AS already_assuming,"
         "    al.password,"
         "    al.date_modified AS changed_at,"
-        "    (SELECT domain_username FROM logincheck.fnba_reporting.associate_login WHERE assoc_id = al.assoc_id AND domain_username <> @ImposterLogin) AS acting_as_login,"
+        "    (SELECT MIN(domain_username) FROM logincheck.fnba_reporting.associate_login WHERE assoc_id = al.assoc_id AND domain_username <> @ImposterLogin) AS acting_as_login,"
         "    per.first_name + ' ' + per.last_name AS acting_as_name"
         "FROM logincheck.fnba_reporting.associate_login al"
         "JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id"
@@ -231,7 +231,7 @@ function Get-CurrentIdentity([string]$server, [string]$toAssume) {
         [void]$adapter.Fill($table)
         if ($table.Rows.Count -gt 0) { return $table.Rows[0] }
     } catch {
-        Write-Host "  ERROR during pre-flight check: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Error "  ERROR during pre-flight check: $($_.Exception.Message)"
     } finally {
         $conn.Close()
     }
