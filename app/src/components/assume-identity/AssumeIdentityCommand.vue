@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useAssumeIdentity } from "../../composables/useAssumeIdentity";
 
 const copied = ref(false);
@@ -38,6 +38,12 @@ const {
   removeRecentUser,
   goBack,
 } = useAssumeIdentity();
+
+const selectedUserLabels = computed(() => {
+  if (!selectedUser.value) return [];
+  const name = selectedUser.value.username;
+  return [...new Set(users.value.filter((u) => u.username === name).map((u) => u.label))];
+});
 
 onMounted(() => {
   reset();
@@ -85,16 +91,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 
   <template v-else-if="step === 'confirm'">
     <div class="confirm-view">
-      <div class="confirm-header">Assume Identity</div>
-      <div class="confirm-row">
-        <span class="confirm-label">User</span>
-        <span class="confirm-value">{{ selectedUser?.username }}</span>
-        <span class="confirm-meta">{{ selectedUser?.label }}</span>
+      <div class="confirm-header">Becoming</div>
+      <div class="confirm-identity">{{ selectedUser?.username }}</div>
+      <div v-if="selectedUserLabels.length" class="confirm-labels">{{ selectedUserLabels.join(' · ') }}</div>
+      <div class="confirm-detail">
+        <span class="confirm-on">on</span>
+        <span class="confirm-connection">{{ selectedConnection }}</span>
       </div>
-      <div class="confirm-row">
-        <span class="confirm-label">Server</span>
-        <span class="confirm-value">{{ selectedConnection }}</span>
-      </div>
+      <button class="confirm-btn" @click="execute">Go</button>
     </div>
     <StatusBar hint="⏎ Confirm  ⎋ Back" />
   </template>
@@ -102,7 +106,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   <template v-else-if="step === 'executing'">
     <div class="loading-view">
       <div class="spinner" />
-      <span>Connecting to {{ selectedConnection }}...</span>
+      <span>Becoming {{ selectedUser?.username }} on {{ selectedConnection }}...</span>
     </div>
   </template>
 
@@ -134,42 +138,68 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 
 <style scoped>
 .confirm-view {
-  padding: 20px;
+  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .confirm-header {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+}
+
+.confirm-identity {
+  font-size: 20px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.confirm-labels {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.confirm-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 12px;
   margin-bottom: 16px;
 }
 
-.confirm-row {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 8px 0;
-}
-
-.confirm-label {
-  font-size: 12px;
+.confirm-on {
   color: var(--text-secondary);
-  width: 60px;
-  flex-shrink: 0;
 }
 
-.confirm-value {
-  font-size: 15px;
+.confirm-connection {
   font-family: var(--font-mono);
   color: var(--text-primary);
 }
 
-.confirm-meta {
-  font-size: 12px;
+.confirm-btn {
+  padding: 3px 14px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
   color: var(--text-secondary);
-  margin-left: auto;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.confirm-btn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .loading-view {
