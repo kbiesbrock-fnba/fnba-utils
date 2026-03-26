@@ -21,12 +21,12 @@ $toAssume = Resolve-User $data $_user
 $server   = Resolve-Conn $data $_conn
 
 if (-not $toAssume) {
-    @{ server = $Connection; login = "FNBA\$IMPOSTER"; before = $null; after = $null; passwordChanged = $false; alreadyAssuming = $false; message = "Unknown user: '$User'" } | ConvertTo-Json -Depth 3
+    @{ server = $_conn; login = "FNBA\$IMPOSTER"; before = $null; after = $null; passwordChanged = $false; alreadyAssuming = $false; message = "Unknown user: '$_user'" } | ConvertTo-Json -Depth 3
     exit 1
 }
 
 if (-not $server) {
-    @{ server = $Connection; login = "FNBA\$IMPOSTER"; before = $null; after = $null; passwordChanged = $false; alreadyAssuming = $false; message = "Unknown connection: '$Connection'" } | ConvertTo-Json -Depth 3
+    @{ server = $_conn; login = "FNBA\$IMPOSTER"; before = $null; after = $null; passwordChanged = $false; alreadyAssuming = $false; message = "Unknown connection: '$_conn'" } | ConvertTo-Json -Depth 3
     exit 1
 }
 

@@ -40,7 +40,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 // --- Mock layer for browser development ---
 
-import identityDefaults from "../../src-tauri/data/identity-defaults.json";
+import identityDefaults from "../../../assumeIdentity/identity-defaults.json";
 
 function buildUserMap(
   users: Array<{ label: string; username: string }>,

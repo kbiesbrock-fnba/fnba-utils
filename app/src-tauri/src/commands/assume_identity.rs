@@ -2,7 +2,7 @@ use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityUser};
 use std::collections::BTreeMap;
 use std::process::Command;
 
-const DEFAULT_DATA: &str = include_str!("../../data/identity-defaults.json");
+const DEFAULT_DATA: &str = include_str!("../../../../assumeIdentity/identity-defaults.json");
 
 #[derive(serde::Deserialize)]
 struct DefaultsFile {
