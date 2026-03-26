@@ -44,7 +44,17 @@ pub fn run() {
                             if w.is_visible().unwrap_or(false) {
                                 let _ = w.hide();
                             } else {
-                                let _ = w.center();
+                                // Cover the full monitor so the backdrop overlay dims the screen
+                                if let Ok(Some(monitor)) = w.current_monitor() {
+                                    let size = monitor.size();
+                                    let pos = monitor.position();
+                                    let _ = w.set_size(tauri::Size::Physical(
+                                        tauri::PhysicalSize::new(size.width, size.height),
+                                    ));
+                                    let _ = w.set_position(tauri::Position::Physical(
+                                        tauri::PhysicalPosition::new(pos.x, pos.y),
+                                    ));
+                                }
                                 let _ = w.show();
                                 let _ = w.set_focus();
                             }
