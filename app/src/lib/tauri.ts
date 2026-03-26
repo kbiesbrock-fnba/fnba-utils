@@ -27,6 +27,11 @@ export interface AssumeIdentityResult {
   message: string | null;
 }
 
+export interface SaveCustomEntryResult {
+  addedUser: boolean;
+  addedConnection: boolean;
+}
+
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -92,6 +97,12 @@ async function mockInvoke<T>(
       } as T;
     }
 
+    case "save_custom_entry": {
+      await delay(50);
+      console.log("[mock] save_custom_entry", args);
+      return { addedUser: !!args?.user, addedConnection: !!args?.connection } as T;
+    }
+
     case "hide_window": {
       console.log("[mock] hide_window — no-op in browser");
       return undefined as T;
@@ -115,6 +126,16 @@ export function executeAssumeIdentity(
   return invoke<AssumeIdentityResult>("execute_assume_identity", {
     user,
     connection,
+  });
+}
+
+export function saveCustomEntry(
+  user?: string,
+  connection?: string,
+): Promise<SaveCustomEntryResult> {
+  return invoke<SaveCustomEntryResult>("save_custom_entry", {
+    user: user ?? null,
+    connection: connection ?? null,
   });
 }
 

@@ -2,7 +2,6 @@
   "imposter": "kbiesbrock",
   "defaultConnections": [
     "dsqlkbiesbrock.fnba-dev.network",
-    "dsqlaleroy.fnba-dev.network",
     "meleagris.fnba.com"
   ],
   "defaultUsers": [

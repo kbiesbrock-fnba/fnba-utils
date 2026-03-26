@@ -112,6 +112,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 
   <template v-else-if="step === 'result' && result">
     <AssumeIdentityResult :result="result" />
+    <div class="close-row">
+      <button class="confirm-btn" @click="emit('dismiss')">Close</button>
+    </div>
     <StatusBar hint="⏎ Close  ⎋ Close" />
   </template>
 
@@ -131,6 +134,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
         </button>
       </div>
       <pre class="error-message">{{ error }}</pre>
+    </div>
+    <div class="close-row">
+      <button class="confirm-btn" @click="emit('dismiss')">Close</button>
     </div>
     <StatusBar hint="⏎ Close  ⎋ Close" />
   </template>
@@ -200,6 +206,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 .confirm-btn:hover {
   border-color: var(--text-secondary);
   color: var(--text-primary);
+}
+
+.close-row {
+  display: flex;
+  justify-content: center;
+  padding: 0 20px 16px;
 }
 
 .loading-view {

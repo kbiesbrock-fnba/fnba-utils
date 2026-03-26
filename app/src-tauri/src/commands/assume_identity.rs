@@ -12,7 +12,7 @@ struct DefaultsFile {
     default_connections: Vec<String>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RawUser {
     label: String,
     username: String,
@@ -107,6 +107,89 @@ pub async fn execute_assume_identity(
     let stdout = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str::<AssumeIdentityResult>(stdout.trim())
         .map_err(|e| format!("Failed to parse script output: {e}\nRaw: {stdout}"))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct CustomDataWrite {
+    #[serde(rename = "CustomUsers", default)]
+    custom_users: Vec<RawUser>,
+    #[serde(rename = "CustomConnections", default)]
+    custom_connections: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveResult {
+    added_user: bool,
+    added_connection: bool,
+}
+
+#[tauri::command]
+pub async fn save_custom_entry(
+    user: Option<String>,
+    connection: Option<String>,
+) -> Result<SaveResult, String> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    let custom_path = home.join(".assumeIdentity.json");
+
+    let mut data: CustomDataWrite = if custom_path.exists() {
+        let contents =
+            std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
+        serde_json::from_str(&contents).unwrap_or_default()
+    } else {
+        CustomDataWrite::default()
+    };
+
+    let mut added_user = false;
+    let mut added_connection = false;
+
+    // Load defaults to check against both lists
+    let defaults: DefaultsFile =
+        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
+
+    if let Some(username) = user {
+        let in_defaults = defaults
+            .default_users
+            .iter()
+            .any(|u| u.username.eq_ignore_ascii_case(&username));
+        let in_custom = data
+            .custom_users
+            .iter()
+            .any(|u| u.username.eq_ignore_ascii_case(&username));
+        if !in_defaults && !in_custom {
+            data.custom_users.push(RawUser {
+                label: "Custom".to_string(),
+                username,
+            });
+            added_user = true;
+        }
+    }
+
+    if let Some(conn) = connection {
+        let in_defaults = defaults
+            .default_connections
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(&conn));
+        let in_custom = data
+            .custom_connections
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(&conn));
+        if !in_defaults && !in_custom {
+            data.custom_connections.push(conn);
+            added_connection = true;
+        }
+    }
+
+    if added_user || added_connection {
+        let json = serde_json::to_string_pretty(&data)
+            .map_err(|e| format!("Serialization error: {e}"))?;
+        std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    }
+
+    Ok(SaveResult {
+        added_user,
+        added_connection,
+    })
 }
 
 fn find_script_path() -> Result<String, String> {

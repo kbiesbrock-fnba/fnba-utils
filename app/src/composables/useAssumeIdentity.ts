@@ -2,6 +2,7 @@ import { ref } from "vue";
 import {
   getIdentityData,
   executeAssumeIdentity,
+  saveCustomEntry,
   type IdentityUser,
   type AssumeIdentityResult,
 } from "../lib/tauri";
@@ -116,12 +117,51 @@ export function useAssumeIdentity() {
     if (!selectedUser.value || !selectedConnection.value) return;
     step.value = "executing";
     loading.value = true;
+
+    const username = selectedUser.value.username;
+    const connection = selectedConnection.value;
+
+    const isNewUser = !users.value.some(
+      (u) => u.username.toLowerCase() === username.toLowerCase(),
+    );
+    const isNewConnection = !connections.value.some(
+      (c) => c.toLowerCase() === connection.toLowerCase(),
+    );
+
+    // Save custom entries BEFORE executing so the PowerShell script
+    // can resolve them via ~/.assumeIdentity.json
+    let saved: { addedUser: boolean; addedConnection: boolean } | null = null;
+    if (isNewUser || isNewConnection) {
+      try {
+        saved = await saveCustomEntry(
+          isNewUser ? username : undefined,
+          isNewConnection ? connection : undefined,
+        );
+      } catch {
+        /* best-effort */
+      }
+    }
+
     try {
-      result.value = await executeAssumeIdentity(
-        selectedUser.value.username,
-        selectedConnection.value,
-      );
-      recordRecentUser(selectedUser.value.username);
+      result.value = await executeAssumeIdentity(username, connection);
+
+      // Append "saved for next time" message on success
+      if (saved) {
+        const parts: string[] = [];
+        if (saved.addedUser) parts.push(username);
+        if (saved.addedConnection) parts.push(connection);
+        if (parts.length > 0) {
+          const added = parts.join(" and ");
+          const existing = result.value.message ?? "";
+          result.value.message = existing
+            ? `${existing} — Saved ${added} for next time.`
+            : `Saved ${added} for next time.`;
+        }
+        dataLoaded.value = false;
+        loadData();
+      }
+
+      recordRecentUser(username);
       recentUsernames.value = loadRecentUsernames();
       step.value = "result";
     } catch (e) {

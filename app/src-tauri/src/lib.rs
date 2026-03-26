@@ -69,6 +69,7 @@ pub fn run() {
             commands::hide_window,
             commands::assume_identity::get_identity_data,
             commands::assume_identity::execute_assume_identity,
+            commands::assume_identity::save_custom_entry,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

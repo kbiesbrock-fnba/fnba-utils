@@ -50,10 +50,14 @@ function onKeydown(e: KeyboardEvent) {
         (selectedIndex.value - 1 + filtered.value.length) %
         filtered.value.length;
     }
-  } else if (e.key === "Enter" && filtered.value.length > 0) {
+  } else if (e.key === "Enter") {
     e.preventDefault();
     e.stopPropagation();
-    emit("select", filtered.value[selectedIndex.value]);
+    if (filtered.value.length > 0) {
+      emit("select", filtered.value[selectedIndex.value]);
+    } else if (query.value.trim()) {
+      emit("select", query.value.trim());
+    }
   }
 }
 
@@ -69,7 +73,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   />
   <div class="picker-divider" />
   <div ref="listRef" class="picker-list">
-    <div v-if="filtered.length === 0" class="empty">No matching connections</div>
+    <div v-if="filtered.length === 0 && query.trim()" class="empty use-custom">
+      Press Enter to use <strong>{{ query.trim() }}</strong>
+    </div>
+    <div v-else-if="filtered.length === 0" class="empty">No matching connections</div>
     <div
       v-for="(conn, i) in filtered"
       :key="conn"
@@ -101,6 +108,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   text-align: center;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.use-custom strong {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
 }
 
 .picker-item {

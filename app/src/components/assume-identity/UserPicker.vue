@@ -127,11 +127,15 @@ function onKeydown(e: KeyboardEvent) {
     if (total > 0) {
       selectedIndex.value = (selectedIndex.value - 1 + total) % total;
     }
-  } else if (e.key === "Enter" && total > 0) {
+  } else if (e.key === "Enter") {
     e.preventDefault();
     e.stopPropagation();
-    const row = getRowAtIndex(selectedIndex.value);
-    if (row) emit("select", row.user);
+    if (total > 0) {
+      const row = getRowAtIndex(selectedIndex.value);
+      if (row) emit("select", row.user);
+    } else if (query.value.trim()) {
+      emit("select", { username: query.value.trim(), label: "Custom" });
+    }
   } else if (e.key === "Delete" && total > 0) {
     const row = getRowAtIndex(selectedIndex.value);
     if (row?.isRecent) {
@@ -149,7 +153,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   <CommandInput :value="query" placeholder="Select user..." @update="onUpdate" />
   <div class="picker-divider" />
   <div ref="listRef" class="picker-list">
-    <div v-if="displayData.totalItems === 0" class="empty">No matching users</div>
+    <div v-if="displayData.totalItems === 0 && query.trim()" class="empty use-custom">
+      Press Enter to use <strong>{{ query.trim() }}</strong>
+    </div>
+    <div v-else-if="displayData.totalItems === 0" class="empty">No matching users</div>
     <template v-for="(row, i) in displayData.rows" :key="i">
       <div v-if="row.kind === 'header'" class="section-header">
         {{ row.title }}
@@ -197,6 +204,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   text-align: center;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.use-custom strong {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
 }
 
 .section-header {
