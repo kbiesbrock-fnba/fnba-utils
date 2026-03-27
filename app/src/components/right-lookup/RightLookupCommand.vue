@@ -87,7 +87,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 
   <template v-else-if="step === 'result' && selectedRight">
     <RightLookupResult :right="selectedRight" :associates="associates" />
-    <StatusBar hint="↑↓ Navigate  ⏎ Copy nickname  ⎋ Back" />
+    <StatusBar hint="↑↓ Navigate  ⇥ Toggle Copy/Assume  ⏎ Execute  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'associateResult' && selectedAssociate">

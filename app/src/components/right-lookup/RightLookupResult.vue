@@ -1,19 +1,34 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import type { RightInfo, RightAssociate } from "../../lib/tauri";
 import { prefillUsername } from "../../composables/useAssumeIdentity";
 import { usePalette } from "../../composables/usePalette";
 import { assumeIdentityCommand } from "../../commands/assume-identity";
+import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{
   right: RightInfo;
   associates: RightAssociate[];
 }>();
 
+const query = ref("");
 const selectedIndex = ref(0);
+const activeAction = ref<"copy" | "assume">("assume");
 const listRef = ref<HTMLElement | null>(null);
 const copiedIndex = ref<number | null>(null);
 const { selectCommand } = usePalette();
+
+const filtered = computed(() => {
+  if (!query.value) return props.associates;
+  const q = query.value.toLowerCase();
+  return props.associates.filter(
+    (a) =>
+      (a.nickname?.toLowerCase().includes(q)) ||
+      (a.firstName?.toLowerCase().includes(q)) ||
+      (a.lastName?.toLowerCase().includes(q)) ||
+      String(a.assocId).includes(q),
+  );
+});
 
 function scrollToSelected() {
   nextTick(() => {
@@ -25,6 +40,11 @@ function scrollToSelected() {
 }
 
 watch(selectedIndex, scrollToSelected);
+
+function onUpdate(value: string) {
+  query.value = value;
+  selectedIndex.value = 0;
+}
 
 function copyNickname(assoc: RightAssociate, index: number) {
   const nick = assoc.nickname ?? String(assoc.assocId);
@@ -41,21 +61,33 @@ function assumeIdentity(assoc: RightAssociate) {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (props.associates.length === 0) return;
+  if (e.key === "Tab") {
+    e.preventDefault();
+    e.stopPropagation();
+    activeAction.value = activeAction.value === "copy" ? "assume" : "copy";
+    return;
+  }
+
+  if (filtered.value.length === 0) return;
 
   if (e.key === "ArrowDown") {
     e.preventDefault();
     selectedIndex.value =
-      (selectedIndex.value + 1) % props.associates.length;
+      (selectedIndex.value + 1) % filtered.value.length;
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
     selectedIndex.value =
-      (selectedIndex.value - 1 + props.associates.length) %
-      props.associates.length;
+      (selectedIndex.value - 1 + filtered.value.length) %
+      filtered.value.length;
   } else if (e.key === "Enter") {
     e.preventDefault();
     e.stopPropagation();
-    copyNickname(props.associates[selectedIndex.value], selectedIndex.value);
+    const assoc = filtered.value[selectedIndex.value];
+    if (activeAction.value === "assume") {
+      assumeIdentity(assoc);
+    } else {
+      copyNickname(assoc, selectedIndex.value);
+    }
   }
 }
 
@@ -66,15 +98,25 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 <template>
   <div class="result-header">
     <span class="right-name">{{ right.rightName }}</span>
-    <span class="badge">{{ associates.length }} associate{{ associates.length !== 1 ? 's' : '' }}</span>
+    <span class="badge">
+      <template v-if="query && filtered.length !== associates.length">{{ filtered.length }}/</template>{{ associates.length }} associate{{ associates.length !== 1 ? 's' : '' }}
+    </span>
   </div>
+  <CommandInput
+    :value="query"
+    placeholder="Filter by username or name..."
+    @update="onUpdate"
+  />
   <div class="picker-divider" />
   <div ref="listRef" class="result-list">
     <div v-if="associates.length === 0" class="empty">
       No associates have this right
     </div>
+    <div v-else-if="filtered.length === 0" class="empty">
+      No matching associates
+    </div>
     <div
-      v-for="(assoc, i) in associates"
+      v-for="(assoc, i) in filtered"
       :key="assoc.assocId"
       class="result-row"
       :class="{ selected: i === selectedIndex }"
@@ -89,13 +131,24 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
       <span class="assoc-name">
         {{ [assoc.firstName, assoc.lastName].filter(Boolean).join(' ') || '—' }}
       </span>
-      <button
-        class="assume-btn"
-        title="Assume this identity"
-        @click.stop="assumeIdentity(assoc)"
-      >
-        Assume
-      </button>
+      <div class="row-actions">
+        <button
+          class="action-btn"
+          :class="{ active: i === selectedIndex && activeAction === 'copy' }"
+          title="Copy nickname"
+          @click.stop="copyNickname(assoc, i)"
+        >
+          Copy
+        </button>
+        <button
+          class="action-btn"
+          :class="{ active: i === selectedIndex && activeAction === 'assume' }"
+          title="Assume this identity"
+          @click.stop="assumeIdentity(assoc)"
+        >
+          Assume
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -189,7 +242,19 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   flex: 1;
 }
 
-.assume-btn {
+.row-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.result-row:hover .row-actions,
+.result-row.selected .row-actions {
+  opacity: 1;
+}
+
+.action-btn {
   padding: 2px 10px;
   border: 1px solid var(--border-subtle);
   background: transparent;
@@ -198,17 +263,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   font-size: 11px;
   font-family: var(--font-sans);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.1s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
-.result-row:hover .assume-btn,
-.result-row.selected .assume-btn {
-  opacity: 1;
-}
-
-.assume-btn:hover {
+.action-btn:hover {
   border-color: var(--text-secondary);
   color: var(--text-primary);
+}
+
+.action-btn.active {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 </style>
