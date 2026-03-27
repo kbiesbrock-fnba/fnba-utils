@@ -147,6 +147,33 @@ async function mockInvoke<T>(
       ] as T;
     }
 
+    case "search_associates": {
+      const q = ((args?.query as string) ?? "").toLowerCase();
+      await delay(600);
+      const all = [
+        { assocId: 1001, nickname: "jsmith", firstName: "John", lastName: "Smith" },
+        { assocId: 1002, nickname: "jdoe", firstName: "Jane", lastName: "Doe" },
+        { assocId: 1003, nickname: "mbrown", firstName: "Mike", lastName: "Brown" },
+        { assocId: 1004, nickname: "agarcia", firstName: "Ana", lastName: "Garcia" },
+        { assocId: 1006, nickname: "twilson", firstName: "Tom", lastName: "Wilson" },
+      ];
+      return all.filter(
+        (a) =>
+          a.nickname.includes(q) ||
+          a.firstName.toLowerCase().includes(q) ||
+          a.lastName.toLowerCase().includes(q),
+      ) as T;
+    }
+
+    case "get_associate_rights": {
+      await delay(1000);
+      return [
+        { rightId: 100, rightName: "Account Log Edit" },
+        { rightId: 200, rightName: "Admin Panel" },
+        { rightId: 401, rightName: "Customer View" },
+      ] as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -194,4 +221,12 @@ export function getRightAssociates(
     rightName,
     rightId,
   });
+}
+
+export function searchAssociates(query: string): Promise<RightAssociate[]> {
+  return invoke<RightAssociate[]>("search_associates", { query });
+}
+
+export function getAssociateRights(assocId: number): Promise<RightInfo[]> {
+  return invoke<RightInfo[]>("get_associate_rights", { assocId });
 }

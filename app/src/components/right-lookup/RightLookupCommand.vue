@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { useRightLookup } from "../../composables/useRightLookup";
 import RightPicker from "./RightPicker.vue";
 import RightLookupResult from "./RightLookupResult.vue";
+import AssociateRightsResult from "./AssociateRightsResult.vue";
 import StatusBar from "../StatusBar.vue";
 
 const copied = ref(false);
@@ -23,11 +24,14 @@ const {
   step,
   rights,
   selectedRight,
+  selectedAssociate,
   associates,
+  associateRights,
   error,
   loadRights,
   reset,
   selectRight,
+  selectAssociate,
   goBack,
 } = useRightLookup();
 
@@ -68,20 +72,27 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   </template>
 
   <template v-else-if="step === 'rights'">
-    <RightPicker :rights="rights" @select="selectRight" />
+    <RightPicker :rights="rights" @select-right="selectRight" @select-associate="selectAssociate" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'executing'">
     <div class="loading-view">
       <div class="spinner" />
-      <span>Looking up {{ selectedRight?.rightName }}...</span>
+      <span v-if="selectedRight">Looking up {{ selectedRight.rightName }}...</span>
+      <span v-else-if="selectedAssociate">Looking up {{ selectedAssociate.nickname ?? selectedAssociate.assocId }}...</span>
+      <span v-else>Loading...</span>
     </div>
   </template>
 
   <template v-else-if="step === 'result' && selectedRight">
     <RightLookupResult :right="selectedRight" :associates="associates" />
     <StatusBar hint="↑↓ Navigate  ⏎ Copy nickname  ⎋ Back" />
+  </template>
+
+  <template v-else-if="step === 'associateResult' && selectedAssociate">
+    <AssociateRightsResult :associate="selectedAssociate" :rights="associateRights" />
+    <StatusBar hint="↑↓ Navigate  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'error'">

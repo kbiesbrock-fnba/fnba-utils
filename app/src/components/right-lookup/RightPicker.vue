@@ -1,32 +1,73 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import CommandInput from "../CommandInput.vue";
-import type { RightInfo } from "../../lib/tauri";
+import { searchAssociates, type RightInfo, type RightAssociate } from "../../lib/tauri";
 
 const props = defineProps<{
   rights: RightInfo[];
 }>();
 
 const emit = defineEmits<{
-  select: [right: RightInfo];
+  selectRight: [right: RightInfo];
+  selectAssociate: [assoc: RightAssociate];
 }>();
 
 const query = ref("");
 const selectedIndex = ref(0);
 const listRef = ref<HTMLElement | null>(null);
+const matchedAssociates = ref<RightAssociate[]>([]);
+const searchingAssociates = ref(false);
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-const filtered = computed(() => {
+const filteredRights = computed(() => {
   if (!query.value) return props.rights;
   const q = query.value.toLowerCase();
   return props.rights.filter((r) => r.rightName.toLowerCase().includes(q));
+});
+
+type DisplayRow =
+  | { kind: "header"; label: string }
+  | { kind: "right"; right: RightInfo; flatIndex: number }
+  | { kind: "associate"; assoc: RightAssociate; flatIndex: number }
+  | { kind: "searching" };
+
+const displayRows = computed(() => {
+  const rows: DisplayRow[] = [];
+  let idx = 0;
+
+  if (filteredRights.value.length > 0) {
+    if (query.value) rows.push({ kind: "header", label: "Rights" });
+    for (const right of filteredRights.value) {
+      rows.push({ kind: "right", right, flatIndex: idx++ });
+    }
+  }
+
+  if (query.value.trim().length >= 2) {
+    rows.push({ kind: "header", label: "Associates" });
+    if (searchingAssociates.value) {
+      rows.push({ kind: "searching" });
+    } else if (matchedAssociates.value.length > 0) {
+      for (const assoc of matchedAssociates.value) {
+        rows.push({ kind: "associate", assoc, flatIndex: idx++ });
+      }
+    }
+  }
+
+  return rows;
+});
+
+const totalSelectable = computed(() => {
+  return displayRows.value.filter(
+    (r) => r.kind === "right" || r.kind === "associate",
+  ).length;
 });
 
 function scrollToSelected() {
   nextTick(() => {
     const list = listRef.value;
     if (!list) return;
-    const item = list.children[selectedIndex.value] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
+    const el = list.querySelector(".selected") as HTMLElement | null;
+    el?.scrollIntoView({ block: "nearest" });
   });
 }
 
@@ -35,55 +76,104 @@ watch(selectedIndex, scrollToSelected);
 function onUpdate(value: string) {
   query.value = value;
   selectedIndex.value = 0;
+
+  if (debounceTimer) clearTimeout(debounceTimer);
+
+  if (value.trim().length >= 2) {
+    searchingAssociates.value = true;
+    debounceTimer = setTimeout(async () => {
+      try {
+        matchedAssociates.value = await searchAssociates(value.trim());
+      } catch {
+        matchedAssociates.value = [];
+      } finally {
+        searchingAssociates.value = false;
+      }
+    }, 300);
+  } else {
+    matchedAssociates.value = [];
+    searchingAssociates.value = false;
+  }
+}
+
+function selectAtIndex(index: number) {
+  const row = displayRows.value.find(
+    (r) => (r.kind === "right" || r.kind === "associate") && r.flatIndex === index,
+  );
+  if (!row) return;
+  if (row.kind === "right") emit("selectRight", row.right);
+  else if (row.kind === "associate") emit("selectAssociate", row.assoc);
 }
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "ArrowDown") {
     e.preventDefault();
-    if (filtered.value.length > 0) {
-      selectedIndex.value =
-        (selectedIndex.value + 1) % filtered.value.length;
+    if (totalSelectable.value > 0) {
+      selectedIndex.value = (selectedIndex.value + 1) % totalSelectable.value;
     }
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
-    if (filtered.value.length > 0) {
+    if (totalSelectable.value > 0) {
       selectedIndex.value =
-        (selectedIndex.value - 1 + filtered.value.length) %
-        filtered.value.length;
+        (selectedIndex.value - 1 + totalSelectable.value) % totalSelectable.value;
     }
   } else if (e.key === "Enter") {
     e.preventDefault();
     e.stopPropagation();
-    if (filtered.value.length > 0) {
-      emit("select", filtered.value[selectedIndex.value]);
+    if (totalSelectable.value > 0) {
+      selectAtIndex(selectedIndex.value);
     }
   }
 }
 
 onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown, true);
+  if (debounceTimer) clearTimeout(debounceTimer);
+});
 </script>
 
 <template>
   <CommandInput
     :value="query"
-    placeholder="Search rights..."
+    placeholder="Search rights or associates..."
     @update="onUpdate"
   />
   <div class="picker-divider" />
   <div ref="listRef" class="picker-list">
-    <div v-if="filtered.length === 0" class="empty">No matching rights</div>
-    <div
-      v-for="(right, i) in filtered"
-      :key="right.rightId"
-      class="picker-item"
-      :class="{ selected: i === selectedIndex }"
-      @click="emit('select', right)"
-      @mouseenter="selectedIndex = i"
-    >
-      <span class="picker-name">{{ right.rightName }}</span>
-      <span class="picker-id">#{{ right.rightId }}</span>
-    </div>
+    <div v-if="displayRows.length === 0" class="empty">No matching rights</div>
+    <template v-for="(row, i) in displayRows" :key="i">
+      <div v-if="row.kind === 'header'" class="section-header">
+        {{ row.label }}
+      </div>
+      <div
+        v-else-if="row.kind === 'right'"
+        class="picker-item"
+        :class="{ selected: row.flatIndex === selectedIndex }"
+        @click="emit('selectRight', row.right)"
+        @mouseenter="selectedIndex = row.flatIndex"
+      >
+        <span class="picker-name">{{ row.right.rightName }}</span>
+        <span class="picker-id">#{{ row.right.rightId }}</span>
+      </div>
+      <div
+        v-else-if="row.kind === 'associate'"
+        class="picker-item assoc-item"
+        :class="{ selected: row.flatIndex === selectedIndex }"
+        @click="emit('selectAssociate', row.assoc)"
+        @mouseenter="selectedIndex = row.flatIndex"
+      >
+        <span class="assoc-nick">{{ row.assoc.nickname ?? '—' }}</span>
+        <span class="assoc-name">
+          {{ [row.assoc.firstName, row.assoc.lastName].filter(Boolean).join(' ') || '—' }}
+        </span>
+        <span class="assoc-id">#{{ row.assoc.assocId }}</span>
+      </div>
+      <div v-else-if="row.kind === 'searching'" class="searching-row">
+        <div class="mini-spinner" />
+        <span>Searching...</span>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -105,6 +195,15 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   text-align: center;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.section-header {
+  padding: 8px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .picker-item {
@@ -135,5 +234,53 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
   font-size: 12px;
   font-family: var(--font-mono);
   color: var(--text-secondary);
+}
+
+.assoc-item {
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.assoc-nick {
+  font-size: 14px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  min-width: 100px;
+}
+
+.assoc-name {
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.assoc-id {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.searching-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.mini-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

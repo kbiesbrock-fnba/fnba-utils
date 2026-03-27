@@ -72,6 +72,8 @@ pub fn run() {
             commands::assume_identity::save_custom_entry,
             commands::right_lookup::get_all_rights,
             commands::right_lookup::get_right_associates,
+            commands::right_lookup::search_associates,
+            commands::right_lookup::get_associate_rights,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
