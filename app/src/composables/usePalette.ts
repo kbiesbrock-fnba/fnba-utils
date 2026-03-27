@@ -9,6 +9,8 @@ const mode = ref<PaletteMode>("browsing");
 const searchQuery = ref("");
 const selectedIndex = ref(0);
 const activeCommand = ref<PaletteCommand | null>(null);
+const previousCommand = ref<PaletteCommand | null>(null);
+const returningToPrevious = ref(false);
 
 const filteredCommands = computed(() => filterCommands(searchQuery.value));
 
@@ -18,6 +20,8 @@ export function usePalette() {
     searchQuery.value = "";
     selectedIndex.value = 0;
     activeCommand.value = null;
+    previousCommand.value = null;
+    returningToPrevious.value = false;
   }
 
   function dismiss() {
@@ -26,6 +30,9 @@ export function usePalette() {
   }
 
   function selectCommand(cmd: PaletteCommand) {
+    if (mode.value === "command-active" && activeCommand.value) {
+      previousCommand.value = activeCommand.value;
+    }
     activeCommand.value = cmd;
     mode.value = "command-active";
     searchQuery.value = "";
@@ -34,8 +41,14 @@ export function usePalette() {
 
   function back() {
     if (mode.value === "command-active") {
-      mode.value = "browsing";
-      activeCommand.value = null;
+      if (previousCommand.value) {
+        activeCommand.value = previousCommand.value;
+        previousCommand.value = null;
+        returningToPrevious.value = true;
+      } else {
+        mode.value = "browsing";
+        activeCommand.value = null;
+      }
       searchQuery.value = "";
       selectedIndex.value = 0;
     } else {
@@ -65,6 +78,7 @@ export function usePalette() {
     selectedIndex,
     activeCommand,
     filteredCommands,
+    returningToPrevious,
     reset,
     dismiss,
     selectCommand,

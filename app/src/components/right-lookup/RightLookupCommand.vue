@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { useRightLookup } from "../../composables/useRightLookup";
+import { usePalette } from "../../composables/usePalette";
 import RightPicker from "./RightPicker.vue";
 import RightLookupResult from "./RightLookupResult.vue";
 import AssociateRightsResult from "./AssociateRightsResult.vue";
@@ -35,9 +36,15 @@ const {
   goBack,
 } = useRightLookup();
 
+const { returningToPrevious } = usePalette();
+
 onMounted(() => {
-  reset();
-  loadRights();
+  if (returningToPrevious.value) {
+    returningToPrevious.value = false;
+  } else {
+    reset();
+    loadRights();
+  }
 });
 
 function onKeydown(e: KeyboardEvent) {
