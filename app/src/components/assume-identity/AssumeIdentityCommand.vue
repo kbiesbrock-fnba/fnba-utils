@@ -80,6 +80,8 @@ useCommandKeys({
     error: () => emit("dismiss"),
   },
 });
+
+defineExpose({ step });
 </script>
 
 <template>

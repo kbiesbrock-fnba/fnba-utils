@@ -8,4 +8,8 @@ export const rightLookupCommand: PaletteCommand = {
   icon: "\uD83D\uDD11",
   keywords: ["right", "rights", "permission", "group", "associate", "lookup", "notedb"],
   component: RightLookupCommand,
+  breadcrumbs: [
+    { label: "Search", steps: ["loading", "rights"] },
+    { label: "Results", steps: ["executing", "result", "associateResult", "error"] },
+  ],
 };

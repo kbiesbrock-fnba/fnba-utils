@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, computed } from "vue";
 import { usePalette } from "../composables/usePalette";
 import { useKeyLayer, KEY_PRIORITY } from "../composables/useKeyLayer";
 import CommandInput from "./CommandInput.vue";
@@ -17,6 +18,15 @@ const {
   confirmSelection,
   onSearchChange,
 } = usePalette();
+
+const commandRef = ref<{ step: string } | null>(null);
+
+const activeBreadcrumbIndex = computed(() => {
+  const crumbs = activeCommand.value?.breadcrumbs;
+  const step = commandRef.value?.step;
+  if (!crumbs || !step) return -1;
+  return crumbs.findIndex((b) => b.steps.includes(step));
+});
 
 useKeyLayer(
   [
@@ -76,9 +86,24 @@ useKeyLayer(
         </button>
         <span class="breadcrumb-icon">{{ activeCommand.icon }}</span>
         <span class="breadcrumb-name">{{ activeCommand.name }}</span>
+        <template v-if="activeCommand.breadcrumbs?.length">
+          <span class="breadcrumb-sep breadcrumb-sep-name">/</span>
+          <template v-for="(crumb, i) in activeCommand.breadcrumbs" :key="crumb.label">
+            <span v-if="i > 0" class="breadcrumb-sep">/</span>
+            <span
+              class="breadcrumb-step"
+              :class="{
+                'breadcrumb-step-done': i < activeBreadcrumbIndex,
+                'breadcrumb-step-active': i === activeBreadcrumbIndex,
+                'breadcrumb-step-upcoming': i > activeBreadcrumbIndex,
+              }"
+            >{{ crumb.label }}</span>
+          </template>
+        </template>
       </div>
       <div class="palette-divider" />
       <component
+        ref="commandRef"
         :is="activeCommand.component"
         @back="back"
         @dismiss="dismiss"
@@ -154,5 +179,32 @@ useKeyLayer(
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+.breadcrumb-sep {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.breadcrumb-sep-name {
+  margin-left: 2px;
+}
+
+.breadcrumb-step {
+  font-size: 12px;
+  transition: color 0.15s ease;
+}
+
+.breadcrumb-step-done {
+  color: var(--text-secondary);
+}
+
+.breadcrumb-step-active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.breadcrumb-step-upcoming {
+  color: var(--text-placeholder);
 }
 </style>
