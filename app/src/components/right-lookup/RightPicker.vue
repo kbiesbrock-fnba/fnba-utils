@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed, onUnmounted } from "vue";
 import CommandInput from "../CommandInput.vue";
 import { searchAssociates, type RightInfo, type RightAssociate } from "../../lib/tauri";
+import { useListNavigation } from "../../composables/useListNavigation";
 
 const props = defineProps<{
   rights: RightInfo[];
@@ -13,7 +14,6 @@ const emit = defineEmits<{
 }>();
 
 const query = ref("");
-const selectedIndex = ref(0);
 const listRef = ref<HTMLElement | null>(null);
 const matchedAssociates = ref<RightAssociate[]>([]);
 const searchingAssociates = ref(false);
@@ -62,20 +62,25 @@ const totalSelectable = computed(() => {
   ).length;
 });
 
-function scrollToSelected() {
-  nextTick(() => {
-    const list = listRef.value;
-    if (!list) return;
-    const el = list.querySelector(".selected") as HTMLElement | null;
-    el?.scrollIntoView({ block: "nearest" });
-  });
+function selectAtIndex(index: number) {
+  const row = displayRows.value.find(
+    (r) => (r.kind === "right" || r.kind === "associate") && r.flatIndex === index,
+  );
+  if (!row) return;
+  if (row.kind === "right") emit("selectRight", row.right);
+  else if (row.kind === "associate") emit("selectAssociate", row.assoc);
 }
 
-watch(selectedIndex, scrollToSelected);
+const { selectedIndex, resetIndex } = useListNavigation({
+  itemCount: totalSelectable,
+  onSelect: selectAtIndex,
+  listRef,
+  scrollStrategy: "selected-class",
+});
 
 function onUpdate(value: string) {
   query.value = value;
-  selectedIndex.value = 0;
+  resetIndex();
 
   if (debounceTimer) clearTimeout(debounceTimer);
 
@@ -96,39 +101,7 @@ function onUpdate(value: string) {
   }
 }
 
-function selectAtIndex(index: number) {
-  const row = displayRows.value.find(
-    (r) => (r.kind === "right" || r.kind === "associate") && r.flatIndex === index,
-  );
-  if (!row) return;
-  if (row.kind === "right") emit("selectRight", row.right);
-  else if (row.kind === "associate") emit("selectAssociate", row.assoc);
-}
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    if (totalSelectable.value > 0) {
-      selectedIndex.value = (selectedIndex.value + 1) % totalSelectable.value;
-    }
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (totalSelectable.value > 0) {
-      selectedIndex.value =
-        (selectedIndex.value - 1 + totalSelectable.value) % totalSelectable.value;
-    }
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (totalSelectable.value > 0) {
-      selectAtIndex(selectedIndex.value);
-    }
-  }
-}
-
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
 onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown, true);
   if (debounceTimer) clearTimeout(debounceTimer);
 });
 </script>

@@ -1,29 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from "vue";
 import type { RightInfo, RightAssociate } from "../../lib/tauri";
 import { prefillUsername } from "../../composables/useAssumeIdentity";
 import { usePalette } from "../../composables/usePalette";
 import { assumeIdentityCommand } from "../../commands/assume-identity";
+import { useListNavigation } from "../../composables/useListNavigation";
+import { ref } from "vue";
 
 const props = defineProps<{
   associate: RightAssociate;
   rights: RightInfo[];
 }>();
 
-const selectedIndex = ref(0);
 const listRef = ref<HTMLElement | null>(null);
 const { selectCommand } = usePalette();
-
-function scrollToSelected() {
-  nextTick(() => {
-    const list = listRef.value;
-    if (!list) return;
-    const item = list.children[selectedIndex.value] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
-  });
-}
-
-watch(selectedIndex, scrollToSelected);
 
 function assumeIdentity() {
   const nick = props.associate.nickname ?? String(props.associate.assocId);
@@ -31,21 +20,10 @@ function assumeIdentity() {
   selectCommand(assumeIdentityCommand);
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if (props.rights.length === 0) return;
-
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    selectedIndex.value = (selectedIndex.value + 1) % props.rights.length;
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    selectedIndex.value =
-      (selectedIndex.value - 1 + props.rights.length) % props.rights.length;
-  }
-}
-
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
+const { selectedIndex } = useListNavigation({
+  itemCount: () => props.rights.length,
+  listRef,
+});
 </script>
 
 <template>

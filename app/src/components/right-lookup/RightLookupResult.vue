@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
+import { ref, computed } from "vue";
 import type { RightInfo, RightAssociate } from "../../lib/tauri";
 import { prefillUsername } from "../../composables/useAssumeIdentity";
 import { usePalette } from "../../composables/usePalette";
 import { assumeIdentityCommand } from "../../commands/assume-identity";
+import { useListNavigation } from "../../composables/useListNavigation";
 import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{
@@ -12,7 +13,6 @@ const props = defineProps<{
 }>();
 
 const query = ref("");
-const selectedIndex = ref(0);
 const activeAction = ref<"copy" | "assume">("assume");
 const listRef = ref<HTMLElement | null>(null);
 const copiedIndex = ref<number | null>(null);
@@ -30,22 +30,6 @@ const filtered = computed(() => {
   );
 });
 
-function scrollToSelected() {
-  nextTick(() => {
-    const list = listRef.value;
-    if (!list) return;
-    const item = list.children[selectedIndex.value] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
-  });
-}
-
-watch(selectedIndex, scrollToSelected);
-
-function onUpdate(value: string) {
-  query.value = value;
-  selectedIndex.value = 0;
-}
-
 function copyNickname(assoc: RightAssociate, index: number) {
   const nick = assoc.nickname ?? String(assoc.assocId);
   navigator.clipboard.writeText(nick).then(() => {
@@ -60,39 +44,28 @@ function assumeIdentity(assoc: RightAssociate) {
   selectCommand(assumeIdentityCommand);
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Tab") {
-    e.preventDefault();
-    e.stopPropagation();
-    activeAction.value = activeAction.value === "copy" ? "assume" : "copy";
-    return;
-  }
+const { selectedIndex, resetIndex } = useListNavigation({
+  itemCount: () => filtered.value.length,
+  onSelect: (i) => {
+    const assoc = filtered.value[i];
+    if (activeAction.value === "assume") assumeIdentity(assoc);
+    else copyNickname(assoc, i);
+  },
+  extraKeys: [
+    {
+      key: "Tab",
+      handler: () => {
+        activeAction.value = activeAction.value === "copy" ? "assume" : "copy";
+      },
+    },
+  ],
+  listRef,
+});
 
-  if (filtered.value.length === 0) return;
-
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    selectedIndex.value =
-      (selectedIndex.value + 1) % filtered.value.length;
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    selectedIndex.value =
-      (selectedIndex.value - 1 + filtered.value.length) %
-      filtered.value.length;
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    e.stopPropagation();
-    const assoc = filtered.value[selectedIndex.value];
-    if (activeAction.value === "assume") {
-      assumeIdentity(assoc);
-    } else {
-      copyNickname(assoc, selectedIndex.value);
-    }
-  }
+function onUpdate(value: string) {
+  query.value = value;
+  resetIndex();
 }
-
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 </script>
 
 <template>

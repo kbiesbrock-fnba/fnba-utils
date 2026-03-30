@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from "vue";
 import { usePalette } from "../composables/usePalette";
+import { useKeyLayer, KEY_PRIORITY } from "../composables/useKeyLayer";
 import CommandInput from "./CommandInput.vue";
 import CommandList from "./CommandList.vue";
 import StatusBar from "./StatusBar.vue";
@@ -18,29 +18,36 @@ const {
   onSearchChange,
 } = usePalette();
 
-function onKeydown(e: KeyboardEvent) {
-  switch (e.key) {
-    case "Escape":
-      e.preventDefault();
-      back();
-      break;
-    case "ArrowDown":
-      e.preventDefault();
-      if (mode.value === "browsing") moveSelection(1);
-      break;
-    case "ArrowUp":
-      e.preventDefault();
-      if (mode.value === "browsing") moveSelection(-1);
-      break;
-    case "Enter":
-      e.preventDefault();
-      if (mode.value === "browsing") confirmSelection();
-      break;
-  }
-}
-
-onMounted(() => window.addEventListener("keydown", onKeydown));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+useKeyLayer(
+  [
+    {
+      key: "Escape",
+      handler: () => { back(); },
+    },
+    {
+      key: "ArrowDown",
+      handler: () => {
+        if (mode.value === "browsing") { moveSelection(1); return; }
+        return false;
+      },
+    },
+    {
+      key: "ArrowUp",
+      handler: () => {
+        if (mode.value === "browsing") { moveSelection(-1); return; }
+        return false;
+      },
+    },
+    {
+      key: "Enter",
+      handler: () => {
+        if (mode.value === "browsing") { confirmSelection(); return; }
+        return false;
+      },
+    },
+  ],
+  { priority: KEY_PRIORITY.PALETTE },
+);
 </script>
 
 <template>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed } from "vue";
+import { useListNavigation } from "../../composables/useListNavigation";
 import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{
@@ -11,7 +12,6 @@ const emit = defineEmits<{
 }>();
 
 const query = ref("");
-const selectedIndex = ref(0);
 const listRef = ref<HTMLElement | null>(null);
 
 const filtered = computed(() => {
@@ -20,49 +20,19 @@ const filtered = computed(() => {
   return props.connections.filter((c) => c.toLowerCase().includes(q));
 });
 
-function scrollToSelected() {
-  nextTick(() => {
-    const list = listRef.value;
-    if (!list) return;
-    const item = list.children[selectedIndex.value] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
-  });
-}
-
-watch(selectedIndex, scrollToSelected);
+const { selectedIndex, resetIndex } = useListNavigation({
+  itemCount: () => filtered.value.length,
+  onSelect: (i) => emit("select", filtered.value[i]),
+  onEnterEmpty: () => {
+    if (query.value.trim()) emit("select", query.value.trim());
+  },
+  listRef,
+});
 
 function onUpdate(value: string) {
   query.value = value;
-  selectedIndex.value = 0;
+  resetIndex();
 }
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    if (filtered.value.length > 0) {
-      selectedIndex.value =
-        (selectedIndex.value + 1) % filtered.value.length;
-    }
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (filtered.value.length > 0) {
-      selectedIndex.value =
-        (selectedIndex.value - 1 + filtered.value.length) %
-        filtered.value.length;
-    }
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (filtered.value.length > 0) {
-      emit("select", filtered.value[selectedIndex.value]);
-    } else if (query.value.trim()) {
-      emit("select", query.value.trim());
-    }
-  }
-}
-
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
 </script>
 
 <template>

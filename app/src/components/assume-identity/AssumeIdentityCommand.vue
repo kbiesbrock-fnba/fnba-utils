@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useAssumeIdentity, prefillUsername } from "../../composables/useAssumeIdentity";
+import { useCommandKeys } from "../../composables/useCommandKeys";
+import StatusBar from "../StatusBar.vue";
+import UserPicker from "./UserPicker.vue";
+import ConnectionPicker from "./ConnectionPicker.vue";
+import AssumeIdentityResult from "./AssumeIdentityResult.vue";
 
 const copied = ref(false);
 function copyError() {
@@ -10,11 +15,6 @@ function copyError() {
     setTimeout(() => (copied.value = false), 2000);
   });
 }
-import CommandInput from "../CommandInput.vue";
-import StatusBar from "../StatusBar.vue";
-import UserPicker from "./UserPicker.vue";
-import ConnectionPicker from "./ConnectionPicker.vue";
-import AssumeIdentityResult from "./AssumeIdentityResult.vue";
 
 const emit = defineEmits<{
   back: [];
@@ -58,36 +58,28 @@ onMounted(async () => {
   }
 });
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (step.value === "result") {
-      step.value = "connection";
-      selectedConnection.value = null;
-      result.value = null;
-    } else if (step.value === "error") {
-      emit("dismiss");
-    } else if (!goBack()) {
-      emit("back");
-    }
+function goBackWithResultReset(): boolean {
+  if (step.value === "result") {
+    step.value = "connection";
+    selectedConnection.value = null;
+    result.value = null;
+    return true;
   }
-  if (e.key === "Enter") {
-    if (step.value === "confirm") {
-      e.preventDefault();
-      e.stopPropagation();
-      execute();
-    }
-    if (step.value === "result" || step.value === "error") {
-      e.preventDefault();
-      e.stopPropagation();
-      emit("dismiss");
-    }
-  }
+  return goBack();
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
+useCommandKeys({
+  step,
+  goBack: goBackWithResultReset,
+  emitBack: () => emit("back"),
+  emitDismiss: () => emit("dismiss"),
+  escapeDismissSteps: ["error"],
+  enterActions: {
+    confirm: () => execute(),
+    result: () => emit("dismiss"),
+    error: () => emit("dismiss"),
+  },
+});
 </script>
 
 <template>

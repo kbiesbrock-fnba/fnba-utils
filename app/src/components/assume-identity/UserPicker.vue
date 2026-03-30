@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed } from "vue";
 import type { IdentityUser } from "../../lib/tauri";
+import { useListNavigation } from "../../composables/useListNavigation";
 import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{
@@ -14,7 +15,6 @@ const emit = defineEmits<{
 }>();
 
 const query = ref("");
-const selectedIndex = ref(0);
 const listRef = ref<HTMLElement | null>(null);
 
 type DisplayRow =
@@ -90,24 +90,6 @@ const displayData = computed(() => {
   return { rows, totalItems: flatIndex };
 });
 
-function scrollToSelected() {
-  nextTick(() => {
-    const list = listRef.value;
-    if (!list) return;
-    const item = list.querySelector(
-      `[data-index="${selectedIndex.value}"]`,
-    ) as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
-  });
-}
-
-watch(selectedIndex, scrollToSelected);
-
-function onUpdate(value: string) {
-  query.value = value;
-  selectedIndex.value = 0;
-}
-
 function getRowAtIndex(index: number) {
   for (const row of displayData.value.rows) {
     if (row.kind === "user" && row.flatIndex === index) return row;
@@ -115,38 +97,39 @@ function getRowAtIndex(index: number) {
   return undefined;
 }
 
-function onKeydown(e: KeyboardEvent) {
-  const total = displayData.value.totalItems;
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    if (total > 0) {
-      selectedIndex.value = (selectedIndex.value + 1) % total;
-    }
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (total > 0) {
-      selectedIndex.value = (selectedIndex.value - 1 + total) % total;
-    }
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (total > 0) {
-      const row = getRowAtIndex(selectedIndex.value);
-      if (row) emit("select", row.user);
-    } else if (query.value.trim()) {
+const { selectedIndex, resetIndex } = useListNavigation({
+  itemCount: () => displayData.value.totalItems,
+  onSelect: (i) => {
+    const row = getRowAtIndex(i);
+    if (row) emit("select", row.user);
+  },
+  onEnterEmpty: () => {
+    if (query.value.trim()) {
       emit("select", { username: query.value.trim(), label: "Custom" });
     }
-  } else if (e.key === "Delete" && total > 0) {
-    const row = getRowAtIndex(selectedIndex.value);
-    if (row?.isRecent) {
-      e.preventDefault();
-      emit("removeRecent", row.user.username);
-    }
-  }
-}
+  },
+  extraKeys: [
+    {
+      key: "Delete",
+      handler: () => {
+        if (displayData.value.totalItems === 0) return false;
+        const row = getRowAtIndex(selectedIndex.value);
+        if (row?.isRecent) {
+          emit("removeRecent", row.user.username);
+          return;
+        }
+        return false;
+      },
+    },
+  ],
+  listRef,
+  scrollStrategy: "data-index",
+});
 
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
+function onUpdate(value: string) {
+  query.value = value;
+  resetIndex();
+}
 </script>
 
 <template>

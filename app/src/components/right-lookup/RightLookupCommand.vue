@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, onMounted } from "vue";
 import { useRightLookup } from "../../composables/useRightLookup";
 import { usePalette } from "../../composables/usePalette";
+import { useCommandKeys } from "../../composables/useCommandKeys";
 import RightPicker from "./RightPicker.vue";
 import RightLookupResult from "./RightLookupResult.vue";
 import AssociateRightsResult from "./AssociateRightsResult.vue";
@@ -47,27 +48,16 @@ onMounted(() => {
   }
 });
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (step.value === "error") {
-      emit("dismiss");
-    } else if (!goBack()) {
-      emit("back");
-    }
-  }
-  if (e.key === "Enter") {
-    if (step.value === "error") {
-      e.preventDefault();
-      e.stopPropagation();
-      emit("dismiss");
-    }
-  }
-}
-
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
+useCommandKeys({
+  step,
+  goBack,
+  emitBack: () => emit("back"),
+  emitDismiss: () => emit("dismiss"),
+  escapeDismissSteps: ["error"],
+  enterActions: {
+    error: () => emit("dismiss"),
+  },
+});
 </script>
 
 <template>
