@@ -18,6 +18,11 @@ const layers: Layer[] = [];
 let listening = false;
 
 function dispatch(e: KeyboardEvent) {
+  // Focused buttons handle Enter natively via click synthesis — don't intercept
+  if (e.key === "Enter" && e.target instanceof HTMLButtonElement) {
+    return;
+  }
+
   for (const layer of layers) {
     const binding = layer.bindings.get(e.key);
     if (!binding) continue;
