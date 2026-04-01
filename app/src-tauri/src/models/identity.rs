@@ -22,6 +22,7 @@ pub struct IdentityData {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityState {
     pub acting_as_login: String,
     pub acting_as_name: String,

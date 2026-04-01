@@ -34,8 +34,8 @@ function copyPassword(password: string) {
         <div class="state-header current">Current</div>
         <div class="state-row">
           <span class="state-label">Acting as</span>
-          <span class="state-value">{{ result.after.acting_as_login }}</span>
-          <span class="state-meta">({{ result.after.acting_as_name }})</span>
+          <span class="state-value">{{ result.after.actingAsLogin }}</span>
+          <span class="state-meta">({{ result.after.actingAsName }})</span>
         </div>
         <div class="state-row">
           <span class="state-label">Password</span>
@@ -46,7 +46,7 @@ function copyPassword(password: string) {
         </div>
         <div class="state-row">
           <span class="state-label">Since</span>
-          <span class="state-value mono">{{ result.after.changed_at }}</span>
+          <span class="state-value mono">{{ result.after.changedAt }}</span>
         </div>
       </div>
     </template>
@@ -59,8 +59,8 @@ function copyPassword(password: string) {
         </div>
         <div class="state-row">
           <span class="state-label">Acting as</span>
-          <span class="state-value">{{ result.after.acting_as_login }}</span>
-          <span class="state-meta">({{ result.after.acting_as_name }})</span>
+          <span class="state-value">{{ result.after.actingAsLogin }}</span>
+          <span class="state-meta">({{ result.after.actingAsName }})</span>
         </div>
         <div class="state-row">
           <span class="state-label">Password</span>
@@ -71,7 +71,7 @@ function copyPassword(password: string) {
         </div>
         <div class="state-row">
           <span class="state-label">Since</span>
-          <span class="state-value mono">{{ result.after.changed_at }}</span>
+          <span class="state-value mono">{{ result.after.changedAt }}</span>
         </div>
       </div>
 
@@ -87,8 +87,8 @@ function copyPassword(password: string) {
         <div class="state-header previously">Previously</div>
         <div class="state-row">
           <span class="state-label">Was</span>
-          <span class="state-value">{{ result.before.acting_as_login }}</span>
-          <span class="state-meta">({{ result.before.acting_as_name }})</span>
+          <span class="state-value">{{ result.before.actingAsLogin }}</span>
+          <span class="state-meta">({{ result.before.actingAsName }})</span>
         </div>
         <div class="state-row">
           <span class="state-label">Password</span>
@@ -96,7 +96,7 @@ function copyPassword(password: string) {
         </div>
         <div class="state-row">
           <span class="state-label">Since</span>
-          <span class="state-value mono">{{ result.before.changed_at }}</span>
+          <span class="state-value mono">{{ result.before.changedAt }}</span>
         </div>
       </div>
     </template>

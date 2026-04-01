@@ -16,11 +16,11 @@ export interface IdentityData {
 }
 
 export interface IdentityState {
-  acting_as_login: string;
-  acting_as_name: string;
+  actingAsLogin: string;
+  actingAsName: string;
   password: string;
-  changed_at: string;
-  on_host: string;
+  changedAt: string;
+  onHost: string;
 }
 
 export interface AssumeIdentityResult {
@@ -100,18 +100,18 @@ async function mockInvoke<T>(
         server: connection,
         login: `FNBA\\${imposter}`,
         before: {
-          acting_as_login: `FNBA\\${imposter}`,
-          acting_as_name: "self",
+          actingAsLogin: `FNBA\\${imposter}`,
+          actingAsName: "self",
           password: "OldP@ss123",
-          changed_at: "09:15:22 03-25-2026",
-          on_host: connection.split(".")[0].toUpperCase(),
+          changedAt: "09:15:22 03-25-2026",
+          onHost: connection.split(".")[0].toUpperCase(),
         },
         after: {
-          acting_as_login: user.includes("\\") ? user : `FNBA\\${user}`,
-          acting_as_name: `${user} (mock)`,
+          actingAsLogin: user.includes("\\") ? user : `FNBA\\${user}`,
+          actingAsName: `${user} (mock)`,
           password: "NewP@ss456",
-          changed_at: new Date().toLocaleTimeString("en-US", { hour12: false }) + " 03-25-2026",
-          on_host: connection.split(".")[0].toUpperCase(),
+          changedAt: new Date().toLocaleTimeString("en-US", { hour12: false }) + " 03-25-2026",
+          onHost: connection.split(".")[0].toUpperCase(),
         },
         passwordChanged: true,
         alreadyAssuming: false,
