@@ -18,6 +18,7 @@ const listRef = ref<HTMLElement | null>(null);
 const matchedAssociates = ref<RightAssociate[]>([]);
 const searchingAssociates = ref(false);
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let searchVersion = 0;
 
 const filteredRights = computed(() => {
   if (!query.value) return props.rights;
@@ -83,6 +84,7 @@ function onUpdate(value: string) {
   resetIndex();
 
   if (debounceTimer) clearTimeout(debounceTimer);
+  const version = ++searchVersion;
 
   if (value.trim().length >= 2) {
     searchingAssociates.value = true;
@@ -92,7 +94,7 @@ function onUpdate(value: string) {
       } catch {
         matchedAssociates.value = [];
       } finally {
-        searchingAssociates.value = false;
+        if (version === searchVersion) searchingAssociates.value = false;
       }
     }, 300);
   } else {

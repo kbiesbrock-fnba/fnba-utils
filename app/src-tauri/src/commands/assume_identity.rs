@@ -158,6 +158,20 @@ pub async fn execute_assume_identity(
     user: String,
     connection: String,
 ) -> Result<AssumeIdentityResult, String> {
+    let imposter = imposter.trim().to_string();
+    let user = user.trim().to_string();
+    let connection = connection.trim().to_string();
+
+    if imposter.is_empty() {
+        return Err("Imposter login cannot be empty".into());
+    }
+    if user.is_empty() {
+        return Err("User login cannot be empty".into());
+    }
+    if connection.is_empty() {
+        return Err("Connection server cannot be empty".into());
+    }
+
     let login = format!("FNBA\\{imposter}");
 
     let mut client = db::connect(&connection).await?;

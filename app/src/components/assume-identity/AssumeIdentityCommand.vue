@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useAssumeIdentity, prefillUsername } from "../../composables/useAssumeIdentity";
 import { useCommandKeys } from "../../composables/useCommandKeys";
 import StatusBar from "../StatusBar.vue";
@@ -61,6 +61,8 @@ onMounted(async () => {
     selectUser(existing ?? { username, label: "Custom" });
   }
 });
+
+onUnmounted(() => reset());
 
 function goBackWithResultReset(): boolean {
   if (step.value === "result") {

@@ -189,8 +189,11 @@ export function useAssumeIdentity() {
           }
           dataLoaded.value = false;
           loadData();
-        } catch {
-          /* best-effort */
+        } catch (saveErr) {
+          const existing = result.value!.message ?? "";
+          result.value!.message = existing
+            ? `${existing} — Failed to save custom entry: ${saveErr}`
+            : `Failed to save custom entry: ${saveErr}`;
         }
       }
 
