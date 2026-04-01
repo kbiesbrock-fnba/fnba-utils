@@ -19,15 +19,21 @@ pub async fn get_all_rights() -> Result<Vec<RightInfo>, String> {
 
     let rights: Vec<RightInfo> = rows
         .iter()
-        .filter_map(|row| {
-            let right_id: i32 = row.try_get("right_id").ok()??;
-            let right_name: &str = row.try_get("right_name").ok()??;
-            Some(RightInfo {
+        .map(|row| {
+            let right_id: i32 = row
+                .try_get("right_id")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .ok_or("right_id was NULL")?;
+            let right_name: &str = row
+                .try_get("right_name")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .ok_or("right_name was NULL")?;
+            Ok(RightInfo {
                 right_id,
                 right_name: right_name.to_string(),
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
 
     Ok(rights)
 }
@@ -172,15 +178,21 @@ ORDER BY r.right_name";
 
     let rights: Vec<RightInfo> = rows
         .iter()
-        .filter_map(|row| {
-            let right_id: i32 = row.try_get("right_id").ok()??;
-            let right_name: &str = row.try_get("right_name").ok()??;
-            Some(RightInfo {
+        .map(|row| {
+            let right_id: i32 = row
+                .try_get("right_id")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .ok_or("right_id was NULL")?;
+            let right_name: &str = row
+                .try_get("right_name")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .ok_or("right_name was NULL")?;
+            Ok(RightInfo {
                 right_id,
                 right_name: right_name.to_string(),
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
 
     Ok(rights)
 }

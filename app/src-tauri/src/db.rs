@@ -20,7 +20,9 @@ pub async fn connect_to(server: &str, database: &str) -> Result<SqlClient, Strin
     config.port(1433);
     config.database(database);
     config.authentication(AuthMethod::Integrated);
-    config.trust_cert();
+    if cfg!(debug_assertions) {
+        config.trust_cert();
+    }
 
     let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect((server, 1433u16)))
         .await
