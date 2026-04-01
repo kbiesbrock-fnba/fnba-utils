@@ -30,49 +30,40 @@ export interface RecentEntry {
   timestamp: number;
 }
 
-function loadRecents(): RecentEntry[] {
+function readRecents(): RecentEntry[] {
   try {
-    const entries: RecentEntry[] = JSON.parse(
-      localStorage.getItem(RECENT_KEY) || "[]",
-    );
-    return entries.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+    return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
   } catch {
     return [];
   }
 }
 
-function recordRecent(user: IdentityUser, connection: IdentityConnection) {
+function writeRecents(entries: RecentEntry[]) {
   try {
-    let entries: RecentEntry[] = JSON.parse(
-      localStorage.getItem(RECENT_KEY) || "[]",
-    );
-    entries = entries.filter((e) => e.username !== user.username);
-    entries.unshift({
-      username: user.username,
-      label: user.label,
-      connectionServer: connection.server,
-      connectionLabel: connection.label,
-      timestamp: Date.now(),
-    });
-    localStorage.setItem(
-      RECENT_KEY,
-      JSON.stringify(entries.slice(0, MAX_RECENT)),
-    );
+    localStorage.setItem(RECENT_KEY, JSON.stringify(entries));
   } catch {
     /* ignore storage errors */
   }
 }
 
+function loadRecents(): RecentEntry[] {
+  return readRecents().sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+}
+
+function recordRecent(user: IdentityUser, connection: IdentityConnection) {
+  const entries = readRecents().filter((e) => e.username !== user.username);
+  entries.unshift({
+    username: user.username,
+    label: user.label,
+    connectionServer: connection.server,
+    connectionLabel: connection.label,
+    timestamp: Date.now(),
+  });
+  writeRecents(entries.slice(0, MAX_RECENT));
+}
+
 function deleteRecentUser(username: string) {
-  try {
-    let entries: RecentEntry[] = JSON.parse(
-      localStorage.getItem(RECENT_KEY) || "[]",
-    );
-    entries = entries.filter((e) => e.username !== username);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(entries));
-  } catch {
-    /* ignore storage errors */
-  }
+  writeRecents(readRecents().filter((e) => e.username !== username));
 }
 
 // --- Cross-command bridge ---

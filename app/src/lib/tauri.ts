@@ -66,12 +66,6 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 import identityDefaults from "../../../data/identity-defaults.json";
 
-function buildUserList(
-  users: Array<{ label: string; username: string }>,
-): IdentityUser[] {
-  return users.map((u) => ({ username: u.username, label: u.label }));
-}
-
 async function mockInvoke<T>(
   cmd: string,
   args?: Record<string, unknown>,
@@ -86,7 +80,7 @@ async function mockInvoke<T>(
       return {
         currentUser: mockUser,
         imposters: [mockUser, ...identityDefaults.imposters],
-        users: buildUserList(identityDefaults.users),
+        users: identityDefaults.users,
         connections: identityDefaults.connections,
       } as T;
     }

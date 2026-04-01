@@ -50,10 +50,7 @@ function onUpdate(value: string) {
 </template>
 
 <style scoped>
-.picker-divider {
-  height: 1px;
-  background: var(--border-subtle);
-}
+@import "./picker-shared.css";
 
 .label-prompt {
   padding: 24px 16px;

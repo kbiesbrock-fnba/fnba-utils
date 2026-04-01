@@ -153,56 +153,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.picker-divider {
-  height: 1px;
-  background: var(--border-subtle);
-}
-
-.picker-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-  max-height: 320px;
-}
-
-.empty {
-  padding: 24px 16px;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.section-header {
-  padding: 8px 16px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
+@import "../assume-identity/picker-shared.css";
 
 .picker-item {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  cursor: pointer;
-  transition: background 0.1s ease;
-  border-left: 3px solid transparent;
-}
-
-.picker-item:hover {
-  background: var(--bg-hover);
-}
-
-.picker-item.selected {
-  background: var(--bg-selected);
-  border-left-color: var(--accent-blue);
-}
-
-.picker-name {
-  font-size: 14px;
-  color: var(--text-primary);
 }
 
 .picker-id {

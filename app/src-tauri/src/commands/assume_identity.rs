@@ -9,7 +9,7 @@ const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json
 struct DefaultsFile {
     #[serde(default)]
     imposters: Vec<String>,
-    users: Vec<RawUser>,
+    users: Vec<IdentityUser>,
     connections: Vec<IdentityConnection>,
 }
 
@@ -18,18 +18,12 @@ fn get_windows_username() -> Result<String, String> {
         .map_err(|_| "Could not determine Windows username (USERNAME env var not set)".to_string())
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RawUser {
-    label: String,
-    username: String,
-}
-
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct CustomData {
     #[serde(rename = "Imposters", default)]
     imposters: Vec<String>,
     #[serde(rename = "Users", default)]
-    users: Vec<RawUser>,
+    users: Vec<IdentityUser>,
     #[serde(
         rename = "Connections",
         default,
@@ -82,16 +76,6 @@ where
 }
 
 /// Return one entry per label+username pair (no deduplication).
-fn build_user_list(users: &[RawUser]) -> Vec<IdentityUser> {
-    users
-        .iter()
-        .map(|u| IdentityUser {
-            username: u.username.clone(),
-            label: u.label.clone(),
-        })
-        .collect()
-}
-
 #[tauri::command]
 pub async fn get_identity_data() -> Result<IdentityData, String> {
     let current_user = get_windows_username()?;
@@ -147,7 +131,7 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
     Ok(IdentityData {
         current_user,
         imposters,
-        users: build_user_list(&all_users),
+        users: all_users,
         connections: all_connections,
     })
 }
@@ -269,7 +253,7 @@ pub async fn save_custom_entry(
             .iter()
             .any(|u| u.username.eq_ignore_ascii_case(&username));
         if !in_defaults && !in_custom {
-            data.users.push(RawUser {
+            data.users.push(IdentityUser {
                 label: user_label.unwrap_or_else(|| "Other".to_string()),
                 username,
             });
