@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useAssumeIdentity, prefillUsername } from "../../composables/useAssumeIdentity";
 import { useCommandKeys } from "../../composables/useCommandKeys";
 import StatusBar from "../StatusBar.vue";
+import ImposterPicker from "./ImposterPicker.vue";
 import UserPicker from "./UserPicker.vue";
 import ConnectionPicker from "./ConnectionPicker.vue";
 import AssumeIdentityResult from "./AssumeIdentityResult.vue";
@@ -23,15 +24,18 @@ const emit = defineEmits<{
 
 const {
   step,
+  imposters,
+  selectedImposter,
   users,
   connections,
   selectedUser,
   selectedConnection,
   result,
   error,
-  recentUsernames,
+  recentUsers,
   loadData,
   reset,
+  selectImposter,
   selectUser,
   selectConnection,
   execute,
@@ -85,8 +89,13 @@ defineExpose({ step });
 </script>
 
 <template>
-  <template v-if="step === 'user'">
-    <UserPicker :users="users" :recent-usernames="recentUsernames" @select="selectUser" @remove-recent="removeRecentUser" />
+  <template v-if="step === 'imposter'">
+    <ImposterPicker :imposters="imposters" :selected="selectedImposter" @select="selectImposter" />
+    <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
+  </template>
+
+  <template v-else-if="step === 'user'">
+    <UserPicker :users="users" :recent-users="recentUsers" @select="selectUser" @remove-recent="removeRecentUser" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 
@@ -102,7 +111,11 @@ defineExpose({ step });
       <div v-if="selectedUserLabels.length" class="confirm-labels">{{ selectedUserLabels.join(' · ') }}</div>
       <div class="confirm-detail">
         <span class="confirm-on">on</span>
-        <span class="confirm-connection">{{ selectedConnection }}</span>
+        <span class="confirm-connection">{{ selectedConnection?.server }}</span>
+      </div>
+      <div class="confirm-detail">
+        <span class="confirm-on">as</span>
+        <span class="confirm-connection">{{ selectedImposter }}</span>
       </div>
       <button class="confirm-btn" @click="execute">Go</button>
     </div>
@@ -112,7 +125,7 @@ defineExpose({ step });
   <template v-else-if="step === 'executing'">
     <div class="loading-view">
       <div class="spinner" />
-      <span>Becoming {{ selectedUser?.username }} on {{ selectedConnection }}...</span>
+      <span>Becoming {{ selectedUser?.username }} on {{ selectedConnection?.server }}...</span>
     </div>
   </template>
 

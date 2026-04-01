@@ -6,11 +6,19 @@ pub struct IdentityUser {
     pub label: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IdentityConnection {
+    pub label: String,
+    pub server: String,
+}
+
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityData {
-    pub imposter: String,
+    pub current_user: String,
+    pub imposters: Vec<String>,
     pub users: Vec<IdentityUser>,
-    pub connections: Vec<String>,
+    pub connections: Vec<IdentityConnection>,
 }
 
 #[derive(Serialize, Deserialize)]

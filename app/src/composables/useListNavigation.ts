@@ -43,7 +43,8 @@ export function useListNavigation(options: ListNavigationOptions) {
   if (options.onSelect || options.onEnterEmpty) {
     bindings.push({
       key: "Enter",
-      handler: () => {
+      handler: (e) => {
+        if (e.repeat) return;
         const count = getCount();
         if (count > 0 && options.onSelect) {
           options.onSelect(selectedIndex.value);

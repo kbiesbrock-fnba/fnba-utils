@@ -1,15 +1,21 @@
 use crate::db;
-use crate::models::identity::{AssumeIdentityResult, IdentityData, IdentityState, IdentityUser};
+use crate::models::identity::{
+    AssumeIdentityResult, IdentityConnection, IdentityData, IdentityState, IdentityUser,
+};
 
 const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json");
 
 #[derive(serde::Deserialize)]
 struct DefaultsFile {
-    imposter: String,
-    #[serde(rename = "defaultUsers")]
-    default_users: Vec<RawUser>,
-    #[serde(rename = "defaultConnections")]
-    default_connections: Vec<String>,
+    #[serde(default)]
+    imposters: Vec<String>,
+    users: Vec<RawUser>,
+    connections: Vec<IdentityConnection>,
+}
+
+fn get_windows_username() -> Result<String, String> {
+    std::env::var("USERNAME")
+        .map_err(|_| "Could not determine Windows username (USERNAME env var not set)".to_string())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -18,12 +24,61 @@ struct RawUser {
     username: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Default)]
 struct CustomData {
-    #[serde(rename = "CustomUsers", default)]
-    custom_users: Vec<RawUser>,
-    #[serde(rename = "CustomConnections", default)]
-    custom_connections: Vec<String>,
+    #[serde(rename = "Imposters", default)]
+    imposters: Vec<String>,
+    #[serde(rename = "Users", default)]
+    users: Vec<RawUser>,
+    #[serde(
+        rename = "Connections",
+        default,
+        deserialize_with = "deserialize_connections"
+    )]
+    connections: Vec<IdentityConnection>,
+}
+
+fn deserialize_connections<'de, D>(deserializer: D) -> Result<Vec<IdentityConnection>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct ConnectionVisitor;
+
+    impl<'de> de::Visitor<'de> for ConnectionVisitor {
+        type Value = Vec<IdentityConnection>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("an array of strings or {label,server} objects")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut out = Vec::new();
+            while let Some(val) = seq.next_element::<serde_json::Value>()? {
+                match val {
+                    serde_json::Value::String(s) => {
+                        out.push(IdentityConnection {
+                            label: "Local".to_string(),
+                            server: s,
+                        });
+                    }
+                    serde_json::Value::Object(_) => {
+                        let conn: IdentityConnection = serde_json::from_value(val)
+                            .map_err(de::Error::custom)?;
+                        out.push(conn);
+                    }
+                    _ => return Err(de::Error::custom("expected string or object")),
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_seq(ConnectionVisitor)
 }
 
 /// Return one entry per label+username pair (no deduplication).
@@ -39,11 +94,20 @@ fn build_user_list(users: &[RawUser]) -> Vec<IdentityUser> {
 
 #[tauri::command]
 pub async fn get_identity_data() -> Result<IdentityData, String> {
+    let current_user = get_windows_username()?;
     let defaults: DefaultsFile =
         serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
 
-    let mut all_users = defaults.default_users;
-    let mut all_connections = defaults.default_connections;
+    // Build imposters list: current user first, then defaults, then custom (deduped)
+    let mut imposters = vec![current_user.clone()];
+    for imp in &defaults.imposters {
+        if !imposters.iter().any(|i| i.eq_ignore_ascii_case(imp)) {
+            imposters.push(imp.clone());
+        }
+    }
+
+    let mut all_users = defaults.users;
+    let mut all_connections = defaults.connections;
 
     // Merge custom data from ~/.assumeIdentity.json
     if let Some(home) = dirs::home_dir() {
@@ -51,9 +115,17 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
         if custom_path.exists() {
             if let Ok(contents) = std::fs::read_to_string(&custom_path) {
                 if let Ok(custom) = serde_json::from_str::<CustomData>(&contents) {
-                    all_users.extend(custom.custom_users);
-                    for conn in custom.custom_connections {
-                        if !all_connections.iter().any(|c| c.eq_ignore_ascii_case(&conn)) {
+                    for imp in custom.imposters {
+                        if !imposters.iter().any(|i| i.eq_ignore_ascii_case(&imp)) {
+                            imposters.push(imp);
+                        }
+                    }
+                    all_users.extend(custom.users);
+                    for conn in custom.connections {
+                        if !all_connections
+                            .iter()
+                            .any(|c| c.server.eq_ignore_ascii_case(&conn.server))
+                        {
                             all_connections.push(conn);
                         }
                     }
@@ -62,8 +134,19 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
         }
     }
 
+    all_connections.sort_by(|a, b| {
+        let a_local = a.label.eq_ignore_ascii_case("local");
+        let b_local = b.label.eq_ignore_ascii_case("local");
+        match (a_local, b_local) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.label.cmp(&b.label),
+        }
+    });
+
     Ok(IdentityData {
-        imposter: defaults.imposter,
+        current_user,
+        imposters,
         users: build_user_list(&all_users),
         connections: all_connections,
     })
@@ -71,17 +154,15 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
 
 #[tauri::command]
 pub async fn execute_assume_identity(
+    imposter: String,
     user: String,
     connection: String,
 ) -> Result<AssumeIdentityResult, String> {
-    let defaults: DefaultsFile =
-        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
-    let imposter = &defaults.imposter;
     let login = format!("FNBA\\{imposter}");
 
     let mut client = db::connect(&connection).await?;
 
-    match db::assume_identity(&mut client, imposter, &user).await? {
+    match db::assume_identity(&mut client, &imposter, &user).await? {
         db::SwitchOutcome::ImposterNotFound => {
             Err(format!("Login {login} not found on {connection}"))
         }
@@ -127,39 +208,36 @@ pub async fn execute_assume_identity(
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-struct CustomDataWrite {
-    #[serde(rename = "CustomUsers", default)]
-    custom_users: Vec<RawUser>,
-    #[serde(rename = "CustomConnections", default)]
-    custom_connections: Vec<String>,
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
     added_user: bool,
     added_connection: bool,
+    added_imposter: bool,
 }
 
 #[tauri::command]
 pub async fn save_custom_entry(
     user: Option<String>,
+    user_label: Option<String>,
     connection: Option<String>,
+    connection_label: Option<String>,
+    imposter: Option<String>,
 ) -> Result<SaveResult, String> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
     let custom_path = home.join(".assumeIdentity.json");
 
-    let mut data: CustomDataWrite = if custom_path.exists() {
+    let mut data: CustomData = if custom_path.exists() {
         let contents =
             std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
         serde_json::from_str(&contents).unwrap_or_default()
     } else {
-        CustomDataWrite::default()
+        CustomData::default()
     };
 
     let mut added_user = false;
     let mut added_connection = false;
+    let mut added_imposter = false;
 
     // Load defaults to check against both lists
     let defaults: DefaultsFile =
@@ -167,16 +245,16 @@ pub async fn save_custom_entry(
 
     if let Some(username) = user {
         let in_defaults = defaults
-            .default_users
+            .users
             .iter()
             .any(|u| u.username.eq_ignore_ascii_case(&username));
         let in_custom = data
-            .custom_users
+            .users
             .iter()
             .any(|u| u.username.eq_ignore_ascii_case(&username));
         if !in_defaults && !in_custom {
-            data.custom_users.push(RawUser {
-                label: "Custom".to_string(),
+            data.users.push(RawUser {
+                label: user_label.unwrap_or_else(|| "Other".to_string()),
                 username,
             });
             added_user = true;
@@ -185,20 +263,38 @@ pub async fn save_custom_entry(
 
     if let Some(conn) = connection {
         let in_defaults = defaults
-            .default_connections
+            .connections
             .iter()
-            .any(|c| c.eq_ignore_ascii_case(&conn));
+            .any(|c| c.server.eq_ignore_ascii_case(&conn));
         let in_custom = data
-            .custom_connections
+            .connections
             .iter()
-            .any(|c| c.eq_ignore_ascii_case(&conn));
+            .any(|c| c.server.eq_ignore_ascii_case(&conn));
         if !in_defaults && !in_custom {
-            data.custom_connections.push(conn);
+            data.connections.push(IdentityConnection {
+                label: connection_label.unwrap_or_else(|| "Local".to_string()),
+                server: conn,
+            });
             added_connection = true;
         }
     }
 
-    if added_user || added_connection {
+    if let Some(imp) = imposter {
+        let in_defaults = defaults
+            .imposters
+            .iter()
+            .any(|i| i.eq_ignore_ascii_case(&imp));
+        let in_custom = data
+            .imposters
+            .iter()
+            .any(|i| i.eq_ignore_ascii_case(&imp));
+        if !in_defaults && !in_custom {
+            data.imposters.push(imp);
+            added_imposter = true;
+        }
+    }
+
+    if added_user || added_connection || added_imposter {
         let json = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Serialization error: {e}"))?;
         std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
@@ -207,6 +303,7 @@ pub async fn save_custom_entry(
     Ok(SaveResult {
         added_user,
         added_connection,
+        added_imposter,
     })
 }
 

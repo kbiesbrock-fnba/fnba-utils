@@ -9,6 +9,7 @@ export const assumeIdentityCommand: PaletteCommand = {
   keywords: ["sql", "identity", "login", "impersonate", "switch", "assume"],
   component: AssumeIdentityCommand,
   breadcrumbs: [
+    { label: "Imposter", steps: ["imposter"] },
     { label: "User", steps: ["user"] },
     { label: "Connection", steps: ["connection"] },
     { label: "Confirm", steps: ["confirm", "executing", "result", "error"] },

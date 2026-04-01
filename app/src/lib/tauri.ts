@@ -3,10 +3,16 @@ export interface IdentityUser {
   label: string;
 }
 
+export interface IdentityConnection {
+  label: string;
+  server: string;
+}
+
 export interface IdentityData {
-  imposter: string;
+  currentUser: string;
+  imposters: string[];
   users: IdentityUser[];
-  connections: string[];
+  connections: IdentityConnection[];
 }
 
 export interface IdentityState {
@@ -30,6 +36,7 @@ export interface AssumeIdentityResult {
 export interface SaveCustomEntryResult {
   addedUser: boolean;
   addedConnection: boolean;
+  addedImposter: boolean;
 }
 
 export interface RightInfo {
@@ -75,22 +82,25 @@ async function mockInvoke<T>(
   switch (cmd) {
     case "get_identity_data": {
       await delay(100);
+      const mockUser = "mockuser";
       return {
-        imposter: identityDefaults.imposter,
-        users: buildUserList(identityDefaults.defaultUsers),
-        connections: identityDefaults.defaultConnections,
+        currentUser: mockUser,
+        imposters: [mockUser, ...identityDefaults.imposters],
+        users: buildUserList(identityDefaults.users),
+        connections: identityDefaults.connections,
       } as T;
     }
 
     case "execute_assume_identity": {
+      const imposter = (args?.imposter as string) ?? "mockuser";
       const user = (args?.user as string) ?? "unknown";
       const connection = (args?.connection as string) ?? "unknown";
       await delay(1500); // Simulate SQL round-trip
       return {
         server: connection,
-        login: `FNBA\\${identityDefaults.imposter}`,
+        login: `FNBA\\${imposter}`,
         before: {
-          acting_as_login: `FNBA\\${identityDefaults.imposter}`,
+          acting_as_login: `FNBA\\${imposter}`,
           acting_as_name: "self",
           password: "OldP@ss123",
           changed_at: "09:15:22 03-25-2026",
@@ -112,7 +122,7 @@ async function mockInvoke<T>(
     case "save_custom_entry": {
       await delay(50);
       console.log("[mock] save_custom_entry", args);
-      return { addedUser: !!args?.user, addedConnection: !!args?.connection } as T;
+      return { addedUser: !!args?.user, addedConnection: !!args?.connection, addedImposter: !!args?.imposter } as T;
     }
 
     case "hide_window": {
@@ -186,10 +196,12 @@ export function getIdentityData(): Promise<IdentityData> {
 }
 
 export function executeAssumeIdentity(
+  imposter: string,
   user: string,
   connection: string,
 ): Promise<AssumeIdentityResult> {
   return invoke<AssumeIdentityResult>("execute_assume_identity", {
+    imposter,
     user,
     connection,
   });
@@ -197,11 +209,17 @@ export function executeAssumeIdentity(
 
 export function saveCustomEntry(
   user?: string,
+  userLabel?: string,
   connection?: string,
+  connectionLabel?: string,
+  imposter?: string,
 ): Promise<SaveCustomEntryResult> {
   return invoke<SaveCustomEntryResult>("save_custom_entry", {
     user: user ?? null,
+    userLabel: userLabel ?? null,
     connection: connection ?? null,
+    connectionLabel: connectionLabel ?? null,
+    imposter: imposter ?? null,
   });
 }
 

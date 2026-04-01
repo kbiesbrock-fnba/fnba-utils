@@ -4,10 +4,12 @@ import {
   executeAssumeIdentity,
   saveCustomEntry,
   type IdentityUser,
+  type IdentityConnection,
   type AssumeIdentityResult,
 } from "../lib/tauri";
 
 export type AssumeIdentityStep =
+  | "imposter"
   | "user"
   | "connection"
   | "confirm"
@@ -20,31 +22,38 @@ export type AssumeIdentityStep =
 const RECENT_KEY = "fnba-utils:recent-users";
 const MAX_RECENT = 5;
 
-interface RecentEntry {
+export interface RecentEntry {
   username: string;
+  label: string;
+  connectionServer: string;
+  connectionLabel: string;
   timestamp: number;
 }
 
-function loadRecentUsernames(): string[] {
+function loadRecents(): RecentEntry[] {
   try {
     const entries: RecentEntry[] = JSON.parse(
       localStorage.getItem(RECENT_KEY) || "[]",
     );
-    return entries
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .map((e) => e.username);
+    return entries.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
   } catch {
     return [];
   }
 }
 
-function recordRecentUser(username: string) {
+function recordRecent(user: IdentityUser, connection: IdentityConnection) {
   try {
     let entries: RecentEntry[] = JSON.parse(
       localStorage.getItem(RECENT_KEY) || "[]",
     );
-    entries = entries.filter((e) => e.username !== username);
-    entries.unshift({ username, timestamp: Date.now() });
+    entries = entries.filter((e) => e.username !== user.username);
+    entries.unshift({
+      username: user.username,
+      label: user.label,
+      connectionServer: connection.server,
+      connectionLabel: connection.label,
+      timestamp: Date.now(),
+    });
     localStorage.setItem(
       RECENT_KEY,
       JSON.stringify(entries.slice(0, MAX_RECENT)),
@@ -73,23 +82,31 @@ export const prefillUsername = ref<string | null>(null);
 // --- Shared state ---
 
 const step = ref<AssumeIdentityStep>("user");
+const imposters = ref<string[]>([]);
+const currentUser = ref("");
+const selectedImposter = ref<string | null>(null);
 const users = ref<IdentityUser[]>([]);
-const connections = ref<string[]>([]);
+const connections = ref<IdentityConnection[]>([]);
 const selectedUser = ref<IdentityUser | null>(null);
-const selectedConnection = ref<string | null>(null);
+const selectedConnection = ref<IdentityConnection | null>(null);
 const result = ref<AssumeIdentityResult | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
 const dataLoaded = ref(false);
-const recentUsernames = ref<string[]>(loadRecentUsernames());
+const recentUsers = ref<RecentEntry[]>(loadRecents());
 
 export function useAssumeIdentity() {
   async function loadData() {
     if (dataLoaded.value) return;
     try {
       const data = await getIdentityData();
+      currentUser.value = data.currentUser;
+      imposters.value = data.imposters;
+      if (!selectedImposter.value) {
+        selectedImposter.value = data.currentUser;
+      }
       users.value = data.users;
-      connections.value = data.connections.sort((a, b) => a.localeCompare(b));
+      connections.value = data.connections;
       dataLoaded.value = true;
     } catch (e) {
       error.value = String(e);
@@ -99,12 +116,18 @@ export function useAssumeIdentity() {
 
   function reset() {
     step.value = "user";
+    selectedImposter.value = currentUser.value || null;
     selectedUser.value = null;
     selectedConnection.value = null;
     result.value = null;
     error.value = null;
     loading.value = false;
-    recentUsernames.value = loadRecentUsernames();
+    recentUsers.value = loadRecents();
+  }
+
+  function selectImposter(imp: string) {
+    selectedImposter.value = imp;
+    step.value = "user";
   }
 
   function selectUser(user: IdentityUser) {
@@ -112,61 +135,67 @@ export function useAssumeIdentity() {
     step.value = "connection";
   }
 
-  function selectConnection(conn: string) {
+  function selectConnection(conn: IdentityConnection) {
     selectedConnection.value = conn;
     step.value = "confirm";
   }
 
   async function execute() {
-    if (!selectedUser.value || !selectedConnection.value) return;
+    if (!selectedImposter.value || !selectedUser.value || !selectedConnection.value) return;
     step.value = "executing";
     loading.value = true;
 
-    const username = selectedUser.value.username;
-    const connection = selectedConnection.value;
+    const user = selectedUser.value;
+    const conn = selectedConnection.value;
 
+    const imp = selectedImposter.value;
     const isNewUser = !users.value.some(
-      (u) => u.username.toLowerCase() === username.toLowerCase(),
+      (u) => u.username.toLowerCase() === user.username.toLowerCase(),
     );
     const isNewConnection = !connections.value.some(
-      (c) => c.toLowerCase() === connection.toLowerCase(),
+      (c) => c.server.toLowerCase() === conn.server.toLowerCase(),
+    );
+    const isNewImposter = !imposters.value.some(
+      (i) => i.toLowerCase() === imp.toLowerCase(),
     );
 
-    // Save custom entries BEFORE executing so the PowerShell script
-    // can resolve them via ~/.assumeIdentity.json
-    let saved: { addedUser: boolean; addedConnection: boolean } | null = null;
-    if (isNewUser || isNewConnection) {
-      try {
-        saved = await saveCustomEntry(
-          isNewUser ? username : undefined,
-          isNewConnection ? connection : undefined,
-        );
-      } catch {
-        /* best-effort */
-      }
-    }
-
     try {
-      result.value = await executeAssumeIdentity(username, connection);
+      result.value = await executeAssumeIdentity(
+        selectedImposter.value!,
+        user.username,
+        conn.server,
+      );
 
-      // Append "saved for next time" message on success
-      if (saved) {
-        const parts: string[] = [];
-        if (saved.addedUser) parts.push(username);
-        if (saved.addedConnection) parts.push(connection);
-        if (parts.length > 0) {
-          const added = parts.join(" and ");
-          const existing = result.value.message ?? "";
-          result.value.message = existing
-            ? `${existing} — Saved ${added} for next time.`
-            : `Saved ${added} for next time.`;
+      // Save custom entries only after a successful execution
+      if (isNewUser || isNewConnection || isNewImposter) {
+        try {
+          const saved = await saveCustomEntry(
+            isNewUser ? user.username : undefined,
+            isNewUser ? user.label : undefined,
+            isNewConnection ? conn.server : undefined,
+            isNewConnection ? conn.label : undefined,
+            isNewImposter ? imp : undefined,
+          );
+          const parts: string[] = [];
+          if (saved.addedUser) parts.push(user.username);
+          if (saved.addedConnection) parts.push(conn.server);
+          if (saved.addedImposter) parts.push(imp);
+          if (parts.length > 0) {
+            const added = parts.join(" and ");
+            const existing = result.value.message ?? "";
+            result.value.message = existing
+              ? `${existing} — Saved ${added} for next time.`
+              : `Saved ${added} for next time.`;
+          }
+          dataLoaded.value = false;
+          loadData();
+        } catch {
+          /* best-effort */
         }
-        dataLoaded.value = false;
-        loadData();
       }
 
-      recordRecentUser(username);
-      recentUsernames.value = loadRecentUsernames();
+      recordRecent(user, conn);
+      recentUsers.value = loadRecents();
       step.value = "result";
     } catch (e) {
       error.value = String(e);
@@ -178,11 +207,14 @@ export function useAssumeIdentity() {
 
   function removeRecentUser(username: string) {
     deleteRecentUser(username);
-    recentUsernames.value = loadRecentUsernames();
+    recentUsers.value = loadRecents();
   }
 
   function goBack(): boolean {
     switch (step.value) {
+      case "user":
+        step.value = "imposter";
+        return true;
       case "connection":
         step.value = "user";
         selectedUser.value = null;
@@ -198,6 +230,9 @@ export function useAssumeIdentity() {
 
   return {
     step,
+    imposters,
+    currentUser,
+    selectedImposter,
     users,
     connections,
     selectedUser,
@@ -205,9 +240,10 @@ export function useAssumeIdentity() {
     result,
     error,
     loading,
-    recentUsernames,
+    recentUsers,
     loadData,
     reset,
+    selectImposter,
     selectUser,
     selectConnection,
     execute,

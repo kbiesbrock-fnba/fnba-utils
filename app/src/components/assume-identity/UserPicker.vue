@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { IdentityUser } from "../../lib/tauri";
-import { useListNavigation } from "../../composables/useListNavigation";
+import type { IdentityUser } from "@/lib/tauri";
+import type { RecentEntry } from "@/composables/useAssumeIdentity";
+import { useListNavigation } from "@/composables/useListNavigation";
 import CommandInput from "../CommandInput.vue";
+import LabelPrompt from "./LabelPrompt.vue";
 
 const props = defineProps<{
   users: IdentityUser[];
-  recentUsernames: string[];
+  recentUsers: RecentEntry[];
 }>();
 
 const emit = defineEmits<{
@@ -16,6 +18,7 @@ const emit = defineEmits<{
 
 const query = ref("");
 const listRef = ref<HTMLElement | null>(null);
+const labelMode = ref<{ username: string } | null>(null);
 
 type DisplayRow =
   | { kind: "header"; title: string }
@@ -35,15 +38,21 @@ const displayData = computed(() => {
   let flatIndex = 0;
 
   // Recently used section
-  if (props.recentUsernames.length > 0) {
-    const recentItems: { user: IdentityUser; allLabels: string }[] = [];
-    for (const username of props.recentUsernames) {
-      const entries = matching.filter((u) => u.username === username);
-      if (entries.length > 0) {
-        const allLabels = [...new Set(entries.map((e) => e.label))]
-          .sort()
-          .join(" / ");
-        recentItems.push({ user: entries[0], allLabels });
+  if (props.recentUsers.length > 0) {
+    const recentItems: { user: IdentityUser; displayLabel: string }[] = [];
+    for (const recent of props.recentUsers) {
+      const entries = matching.filter((u) => u.username === recent.username);
+      const matchesQuery = !q || recent.username.toLowerCase().includes(q) || recent.label.toLowerCase().includes(q);
+      if (entries.length > 0 || matchesQuery) {
+        const user = entries.length > 0
+          ? entries[0]
+          : { username: recent.username, label: recent.label };
+        const userLabels = entries.length > 0
+          ? [...new Set(entries.map((e) => e.label))].sort().join(" / ")
+          : recent.label;
+        const connPart = recent.connectionLabel || recent.connectionServer;
+        const displayLabel = connPart ? `${userLabels} · ${connPart}` : userLabels;
+        recentItems.push({ user, displayLabel });
       }
     }
     if (recentItems.length > 0) {
@@ -52,7 +61,7 @@ const displayData = computed(() => {
         rows.push({
           kind: "user",
           user: item.user,
-          displayLabel: item.allLabels,
+          displayLabel: item.displayLabel,
           flatIndex: flatIndex++,
           isRecent: true,
         });
@@ -98,20 +107,21 @@ function getRowAtIndex(index: number) {
 }
 
 const { selectedIndex, resetIndex } = useListNavigation({
-  itemCount: () => displayData.value.totalItems,
+  itemCount: () => labelMode.value ? 0 : displayData.value.totalItems,
   onSelect: (i) => {
     const row = getRowAtIndex(i);
     if (row) emit("select", row.user);
   },
   onEnterEmpty: () => {
     if (query.value.trim()) {
-      emit("select", { username: query.value.trim(), label: "Custom" });
+      labelMode.value = { username: query.value.trim() };
     }
   },
   extraKeys: [
     {
       key: "Delete",
       handler: () => {
+        if (labelMode.value) return false;
         if (displayData.value.totalItems === 0) return false;
         const row = getRowAtIndex(selectedIndex.value);
         if (row?.isRecent) {
@@ -130,111 +140,66 @@ function onUpdate(value: string) {
   query.value = value;
   resetIndex();
 }
+
+function onLabelConfirm(label: string) {
+  if (!labelMode.value) return;
+  emit("select", { username: labelMode.value.username, label });
+  labelMode.value = null;
+}
+
+function onLabelCancel() {
+  labelMode.value = null;
+}
 </script>
 
 <template>
-  <CommandInput :value="query" placeholder="Select user..." @update="onUpdate" />
-  <div class="picker-divider" />
-  <div ref="listRef" class="picker-list">
-    <div v-if="displayData.totalItems === 0 && query.trim()" class="empty use-custom">
-      Press Enter to use <strong>{{ query.trim() }}</strong>
-    </div>
-    <div v-else-if="displayData.totalItems === 0" class="empty">No matching users</div>
-    <template v-for="(row, i) in displayData.rows" :key="i">
-      <div v-if="row.kind === 'header'" class="section-header">
-        {{ row.title }}
+  <LabelPrompt
+    v-if="labelMode"
+    :value="labelMode.username"
+    default-label="Other"
+    @confirm="onLabelConfirm"
+    @cancel="onLabelCancel"
+  />
+  <template v-else>
+    <CommandInput key="query" :value="query" placeholder="Select user..." @update="onUpdate" />
+    <div class="picker-divider" />
+    <div ref="listRef" class="picker-list">
+      <div v-if="displayData.totalItems === 0 && query.trim()" class="empty use-custom">
+        Press Enter to use <strong>{{ query.trim() }}</strong>
       </div>
-      <div
-        v-else
-        class="picker-item"
-        :class="{ selected: row.flatIndex === selectedIndex }"
-        :data-index="row.flatIndex"
-        @click="emit('select', row.user)"
-        @mouseenter="selectedIndex = row.flatIndex"
-      >
-        <span class="picker-name">{{ row.user.username }}</span>
-        <span v-if="row.displayLabel" class="picker-labels">{{ row.displayLabel }}</span>
-        <button
-          v-if="row.isRecent"
-          class="remove-btn"
-          title="Remove from recent (Del)"
-          @click.stop="emit('removeRecent', row.user.username)"
+      <div v-else-if="displayData.totalItems === 0" class="empty">No matching users</div>
+      <template v-for="(row, i) in displayData.rows" :key="i">
+        <div v-if="row.kind === 'header'" class="section-header">
+          {{ row.title }}
+        </div>
+        <div
+          v-else
+          class="picker-item"
+          :class="{ selected: row.flatIndex === selectedIndex }"
+          :data-index="row.flatIndex"
+          @click="emit('select', row.user)"
+          @mouseenter="selectedIndex = row.flatIndex"
         >
-          <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
-            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-          </svg>
-        </button>
-      </div>
-    </template>
-  </div>
+          <span class="picker-name">{{ row.user.username }}</span>
+          <span v-if="row.displayLabel" class="picker-labels">{{ row.displayLabel }}</span>
+          <button
+            v-if="row.isRecent"
+            class="remove-btn"
+            title="Remove from recent (Del)"
+            @click.stop="emit('removeRecent', row.user.username)"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
+        </div>
+      </template>
+    </div>
+  </template>
 </template>
 
+<style src="./picker-shared.css" scoped></style>
 <style scoped>
-.picker-divider {
-  height: 1px;
-  background: var(--border-subtle);
-}
-
-.picker-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-  max-height: 320px;
-}
-
-.empty {
-  padding: 24px 16px;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.use-custom strong {
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-}
-
-.section-header {
-  padding: 10px 16px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  user-select: none;
-}
-
-.picker-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 16px;
-  gap: 12px;
-  cursor: pointer;
-  transition: background 0.1s ease;
-  border-left: 3px solid transparent;
-}
-
-.picker-item:hover {
-  background: var(--bg-hover);
-}
-
-.picker-item.selected {
-  background: var(--bg-selected);
-  border-left-color: var(--accent-blue);
-}
-
-.picker-name {
-  font-size: 14px;
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-}
-
-.picker-labels {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
 .remove-btn {
   display: flex;
   align-items: center;

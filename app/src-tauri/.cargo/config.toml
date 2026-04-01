@@ -1,2 +1,4 @@
-[build]
-target-dir = "C:\\Users\\kbiesbrock\\.cargo-targets\\fnba-utils"
+# No target-dir here — see app/scripts/dev.sh.
+# A Windows path in this file causes WSL cargo/IDE tooling to create junk directories.
+# dev.sh sets CARGO_TARGET_DIR before invoking cargo.exe so builds use the right path.
+# IDEs default to src-tauri/target/ which is gitignored — that's fine for analysis.

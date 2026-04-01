@@ -7,4 +7,3 @@ bashrc.d/startup-files/.env
 app/node_modules/
 app/dist/
 app/src-tauri/target/
-/app/src-tauri/CUserskbiesbrock.cargo-targetsfnba-utils/

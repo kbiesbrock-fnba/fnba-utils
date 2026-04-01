@@ -34,6 +34,10 @@ for i in $(seq 1 30); do
 done
 
 # Launch Tauri dev via Windows cargo
+# Build artifacts go to a dedicated Windows-native directory outside the project tree.
+# Set here (not .cargo/config.toml) because a Windows path in config.toml creates junk
+# directories when WSL cargo or IDE tooling reads the file.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-C:\\Users\\$USER\\.cargo-targets\\fnba-utils}"
 cd "$APP_DIR/src-tauri"
 "$CARGO_WIN" tauri dev
 

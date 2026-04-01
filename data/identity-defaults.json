@@ -1,10 +1,11 @@
 {
-  "imposter": "kbiesbrock",
-  "defaultConnections": [
-    "dsqlkbiesbrock.fnba-dev.network",
-    "meleagris.fnba.com"
+  "imposters": [],
+  "connections": [
+    {"label": "Local", "server": "dsqlaleroy.fnba-dev.network"},
+    {"label": "Development", "server": "meleagris.fnba.com"},
+    {"label": "Staging", "server": "caster.fnba.com"}
   ],
-  "defaultUsers": [
+  "users": [
     { "label": "Near-god / Reporting FNBA Web", "username": "ccollins" },
     { "label": "Reporting", "username": "rnukala" },
     { "label": "Reporting", "username": "wdevaney" },
