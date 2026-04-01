@@ -6,7 +6,7 @@ import {
   type IdentityUser,
   type IdentityConnection,
   type AssumeIdentityResult,
-} from "../lib/tauri";
+} from "@/lib/tauri";
 
 export type AssumeIdentityStep =
   | "imposter"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { AssumeIdentityResult } from "../../lib/tauri";
+import type { AssumeIdentityResult } from "@/lib/tauri";
 
 const props = defineProps<{
   result: AssumeIdentityResult;

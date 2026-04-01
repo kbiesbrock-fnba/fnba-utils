@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from "vue";
 import CommandInput from "../CommandInput.vue";
-import { searchAssociates, type RightInfo, type RightAssociate } from "../../lib/tauri";
-import { useListNavigation } from "../../composables/useListNavigation";
+import { searchAssociates, type RightInfo, type RightAssociate } from "@/lib/tauri";
+import { useListNavigation } from "@/composables/useListNavigation";
 
 const props = defineProps<{
   rights: RightInfo[];

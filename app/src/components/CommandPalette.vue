@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { usePalette } from "../composables/usePalette";
-import { useKeyLayer, KEY_PRIORITY } from "../composables/useKeyLayer";
+import { usePalette } from "@/composables/usePalette";
+import { useKeyLayer, KEY_PRIORITY } from "@/composables/useKeyLayer";
 import CommandInput from "./CommandInput.vue";
 import CommandList from "./CommandList.vue";
 import StatusBar from "./StatusBar.vue";

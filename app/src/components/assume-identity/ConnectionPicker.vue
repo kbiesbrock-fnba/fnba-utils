@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { useListNavigation } from "../../composables/useListNavigation";
-import type { IdentityConnection } from "../../lib/tauri";
+import { useListNavigation } from "@/composables/useListNavigation";
+import type { IdentityConnection } from "@/lib/tauri";
 import CommandInput from "../CommandInput.vue";
 import LabelPrompt from "./LabelPrompt.vue";
 

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { RightInfo, RightAssociate } from "../../lib/tauri";
-import { prefillUsername } from "../../composables/useAssumeIdentity";
-import { usePalette } from "../../composables/usePalette";
-import { assumeIdentityCommand } from "../../commands/assume-identity";
-import { useListNavigation } from "../../composables/useListNavigation";
+import type { RightInfo, RightAssociate } from "@/lib/tauri";
+import { prefillUsername } from "@/composables/useAssumeIdentity";
+import { usePalette } from "@/composables/usePalette";
+import { assumeIdentityCommand } from "@/commands/assume-identity";
+import { useListNavigation } from "@/composables/useListNavigation";
 import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{

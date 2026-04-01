@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
-import { useRightLookup } from "../../composables/useRightLookup";
-import { usePalette } from "../../composables/usePalette";
-import { useCommandKeys } from "../../composables/useCommandKeys";
+import { useRightLookup } from "@/composables/useRightLookup";
+import { usePalette } from "@/composables/usePalette";
+import { useCommandKeys } from "@/composables/useCommandKeys";
 import ConnectionPicker from "../assume-identity/ConnectionPicker.vue";
 import RightPicker from "./RightPicker.vue";
 import RightLookupResult from "./RightLookupResult.vue";
@@ -43,9 +43,6 @@ onMounted(async () => {
   }
   reset();
   await loadConnections();
-  if (step.value === "connection" && selectedConnection.value) {
-    selectConnection(selectedConnection.value);
-  }
 });
 
 useCommandKeys({

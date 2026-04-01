@@ -4,11 +4,10 @@ import {
   getRightAssociates,
   getAssociateRights,
   getIdentityData,
-  searchAssociates,
   type IdentityConnection,
   type RightInfo,
   type RightAssociate,
-} from "../lib/tauri";
+} from "@/lib/tauri";
 
 const DEFAULT_SERVER = "meleagris";
 
@@ -46,6 +45,14 @@ export function useRightLookup() {
       const data = await getIdentityData();
       connections.value = data.connections;
       connectionsLoaded.value = true;
+      if (!selectedConnection.value) {
+        const defaultConn = data.connections.find(
+          (c) => c.server.toLowerCase().includes(DEFAULT_SERVER),
+        );
+        if (defaultConn) {
+          selectConnection(defaultConn);
+        }
+      }
     } catch (e) {
       error.value = String(e);
       step.value = "error";

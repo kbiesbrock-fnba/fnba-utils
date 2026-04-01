@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
-import { useAssumeIdentity, prefillUsername } from "../../composables/useAssumeIdentity";
-import { useCommandKeys } from "../../composables/useCommandKeys";
+import { useAssumeIdentity, prefillUsername } from "@/composables/useAssumeIdentity";
+import { useCommandKeys } from "@/composables/useCommandKeys";
 import StatusBar from "../StatusBar.vue";
 import LoadingView from "../LoadingView.vue";
 import ErrorView from "../ErrorView.vue";

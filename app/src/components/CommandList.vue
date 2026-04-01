@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from "vue";
-import type { PaletteCommand } from "../commands/types";
+import type { PaletteCommand } from "@/commands/types";
 import CommandItem from "./CommandItem.vue";
 
 const props = defineProps<{

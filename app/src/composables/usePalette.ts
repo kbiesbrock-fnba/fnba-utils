@@ -1,7 +1,7 @@
 import { ref, computed } from "vue";
-import { hideWindow } from "../lib/tauri";
-import { commands, filterCommands } from "../commands";
-import type { PaletteCommand } from "../commands/types";
+import { hideWindow } from "@/lib/tauri";
+import { filterCommands } from "@/commands";
+import type { PaletteCommand } from "@/commands/types";
 
 export type PaletteMode = "browsing" | "command-active";
 
