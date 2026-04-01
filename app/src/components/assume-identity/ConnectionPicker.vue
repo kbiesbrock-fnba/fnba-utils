@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [connection: IdentityConnection];
+  deleteCustom: [server: string];
 }>();
 
 const query = ref("");
@@ -19,7 +20,7 @@ const labelMode = ref<{ server: string } | null>(null);
 
 type DisplayRow =
   | { kind: "header"; title: string }
-  | { kind: "connection"; conn: IdentityConnection; flatIndex: number };
+  | { kind: "connection"; conn: IdentityConnection; flatIndex: number; isCustom: boolean };
 
 const displayData = computed(() => {
   const q = query.value.toLowerCase();
@@ -43,7 +44,7 @@ const displayData = computed(() => {
   for (const [label, conns] of groups) {
     rows.push({ kind: "header", title: label });
     for (const conn of conns) {
-      rows.push({ kind: "connection", conn, flatIndex: flatIndex++ });
+      rows.push({ kind: "connection", conn, flatIndex: flatIndex++, isCustom: !!conn.isCustom });
     }
   }
 
@@ -68,6 +69,21 @@ const { selectedIndex, resetIndex } = useListNavigation({
       labelMode.value = { server: query.value.trim() };
     }
   },
+  extraKeys: [
+    {
+      key: "Delete",
+      handler: () => {
+        if (labelMode.value) return false;
+        if (displayData.value.totalItems === 0) return false;
+        const row = getRowAtIndex(selectedIndex.value);
+        if (row?.isCustom) {
+          emit("deleteCustom", row.conn.server);
+          return;
+        }
+        return false;
+      },
+    },
+  ],
   listRef,
   scrollStrategy: "data-index",
 });
@@ -122,6 +138,17 @@ function onLabelCancel() {
           @mouseenter="selectedIndex = row.flatIndex"
         >
           <span class="picker-name">{{ row.conn.server }}</span>
+          <span v-if="row.isCustom" class="picker-labels custom-badge">custom</span>
+          <button
+            v-if="row.isCustom"
+            class="remove-btn"
+            title="Delete custom entry (Del)"
+            @click.stop="emit('deleteCustom', row.conn.server)"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
         </div>
       </template>
     </div>

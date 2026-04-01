@@ -1,16 +1,23 @@
 export interface IdentityUser {
   username: string;
   label: string;
+  isCustom?: boolean;
 }
 
 export interface IdentityConnection {
   label: string;
   server: string;
+  isCustom?: boolean;
+}
+
+export interface IdentityImposter {
+  name: string;
+  isCustom?: boolean;
 }
 
 export interface IdentityData {
   currentUser: string;
-  imposters: string[];
+  imposters: IdentityImposter[];
   users: IdentityUser[];
   connections: IdentityConnection[];
 }
@@ -37,6 +44,12 @@ export interface SaveCustomEntryResult {
   addedUser: boolean;
   addedConnection: boolean;
   addedImposter: boolean;
+}
+
+export interface DeleteCustomEntryResult {
+  deletedUser: boolean;
+  deletedConnection: boolean;
+  deletedImposter: boolean;
 }
 
 export interface RightInfo {
@@ -79,9 +92,20 @@ async function mockInvoke<T>(
       const mockUser = "mockuser";
       return {
         currentUser: mockUser,
-        imposters: [mockUser, ...identityDefaults.imposters],
-        users: identityDefaults.users,
-        connections: identityDefaults.connections,
+        imposters: [
+          { name: mockUser },
+          ...identityDefaults.imposters.map((i: string) => ({ name: i })),
+          { name: "customImposter", isCustom: true },
+        ],
+        users: [
+          ...identityDefaults.users,
+          { username: "customuser1", label: "Other", isCustom: true },
+          { username: "customuser2", label: "Custom Team", isCustom: true },
+        ],
+        connections: [
+          ...identityDefaults.connections,
+          { label: "Local", server: "custom-local.dev", isCustom: true },
+        ],
       } as T;
     }
 
@@ -117,6 +141,12 @@ async function mockInvoke<T>(
       await delay(50);
       console.log("[mock] save_custom_entry", args);
       return { addedUser: !!args?.user, addedConnection: !!args?.connection, addedImposter: !!args?.imposter } as T;
+    }
+
+    case "delete_custom_entry": {
+      await delay(50);
+      console.log("[mock] delete_custom_entry", args);
+      return { deletedUser: !!args?.user, deletedConnection: !!args?.connection, deletedImposter: !!args?.imposter } as T;
     }
 
     case "hide_window": {
@@ -213,6 +243,18 @@ export function saveCustomEntry(
     userLabel: userLabel ?? null,
     connection: connection ?? null,
     connectionLabel: connectionLabel ?? null,
+    imposter: imposter ?? null,
+  });
+}
+
+export function deleteCustomEntry(
+  user?: string,
+  connection?: string,
+  imposter?: string,
+): Promise<DeleteCustomEntryResult> {
+  return invoke<DeleteCustomEntryResult>("delete_custom_entry", {
+    user: user ?? null,
+    connection: connection ?? null,
     imposter: imposter ?? null,
   });
 }

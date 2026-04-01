@@ -62,3 +62,38 @@
   letter-spacing: 0.05em;
   user-select: none;
 }
+
+.custom-badge {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.remove-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
+  flex-shrink: 0;
+}
+
+.picker-item:hover .remove-btn,
+.picker-item.selected .remove-btn {
+  opacity: 1;
+}
+
+.remove-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent-red);
+}

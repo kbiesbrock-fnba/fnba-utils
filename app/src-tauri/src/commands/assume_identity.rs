@@ -1,6 +1,7 @@
 use crate::db;
 use crate::models::identity::{
-    AssumeIdentityResult, IdentityConnection, IdentityData, IdentityState, IdentityUser,
+    AssumeIdentityResult, IdentityConnection, IdentityData, IdentityImposter, IdentityState,
+    IdentityUser,
 };
 
 const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json");
@@ -58,6 +59,7 @@ where
                         out.push(IdentityConnection {
                             label: "Local".to_string(),
                             server: s,
+                            is_custom: false,
                         });
                     }
                     serde_json::Value::Object(_) => {
@@ -83,10 +85,16 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
         serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
 
     // Build imposters list: current user first, then defaults, then custom (deduped)
-    let mut imposters = vec![current_user.clone()];
+    let mut imposters = vec![IdentityImposter {
+        name: current_user.clone(),
+        is_custom: false,
+    }];
     for imp in &defaults.imposters {
-        if !imposters.iter().any(|i| i.eq_ignore_ascii_case(imp)) {
-            imposters.push(imp.clone());
+        if !imposters.iter().any(|i| i.name.eq_ignore_ascii_case(imp)) {
+            imposters.push(IdentityImposter {
+                name: imp.clone(),
+                is_custom: false,
+            });
         }
     }
 
@@ -102,17 +110,30 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
             let custom: CustomData = serde_json::from_str(&contents)
                 .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
             for imp in custom.imposters {
-                if !imposters.iter().any(|i| i.eq_ignore_ascii_case(&imp)) {
-                    imposters.push(imp);
+                if !imposters
+                    .iter()
+                    .any(|i| i.name.eq_ignore_ascii_case(&imp))
+                {
+                    imposters.push(IdentityImposter {
+                        name: imp,
+                        is_custom: true,
+                    });
                 }
             }
-            all_users.extend(custom.users);
+            for mut user in custom.users {
+                user.is_custom = true;
+                all_users.push(user);
+            }
             for conn in custom.connections {
                 if !all_connections
                     .iter()
                     .any(|c| c.server.eq_ignore_ascii_case(&conn.server))
                 {
-                    all_connections.push(conn);
+                    all_connections.push(IdentityConnection {
+                        label: conn.label,
+                        server: conn.server,
+                        is_custom: true,
+                    });
                 }
             }
         }
@@ -256,6 +277,7 @@ pub async fn save_custom_entry(
             data.users.push(IdentityUser {
                 label: user_label.unwrap_or_else(|| "Other".to_string()),
                 username,
+                is_custom: false,
             });
             added_user = true;
         }
@@ -274,6 +296,7 @@ pub async fn save_custom_entry(
             data.connections.push(IdentityConnection {
                 label: connection_label.unwrap_or_else(|| "Local".to_string()),
                 server: conn,
+                is_custom: false,
             });
             added_connection = true;
         }
@@ -304,6 +327,74 @@ pub async fn save_custom_entry(
         added_user,
         added_connection,
         added_imposter,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteResult {
+    deleted_user: bool,
+    deleted_connection: bool,
+    deleted_imposter: bool,
+}
+
+#[tauri::command]
+pub async fn delete_custom_entry(
+    user: Option<String>,
+    connection: Option<String>,
+    imposter: Option<String>,
+) -> Result<DeleteResult, String> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    let custom_path = home.join(".assumeIdentity.json");
+
+    if !custom_path.exists() {
+        return Ok(DeleteResult {
+            deleted_user: false,
+            deleted_connection: false,
+            deleted_imposter: false,
+        });
+    }
+
+    let contents =
+        std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
+    let mut data: CustomData = serde_json::from_str(&contents)
+        .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
+
+    let mut deleted_user = false;
+    let mut deleted_connection = false;
+    let mut deleted_imposter = false;
+
+    if let Some(username) = user {
+        let before = data.users.len();
+        data.users
+            .retain(|u| !u.username.eq_ignore_ascii_case(&username));
+        deleted_user = data.users.len() < before;
+    }
+
+    if let Some(server) = connection {
+        let before = data.connections.len();
+        data.connections
+            .retain(|c| !c.server.eq_ignore_ascii_case(&server));
+        deleted_connection = data.connections.len() < before;
+    }
+
+    if let Some(imp) = imposter {
+        let before = data.imposters.len();
+        data.imposters
+            .retain(|i| !i.eq_ignore_ascii_case(&imp));
+        deleted_imposter = data.imposters.len() < before;
+    }
+
+    if deleted_user || deleted_connection || deleted_imposter {
+        let json = serde_json::to_string_pretty(&data)
+            .map_err(|e| format!("Serialization error: {e}"))?;
+        std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    }
+
+    Ok(DeleteResult {
+        deleted_user,
+        deleted_connection,
+        deleted_imposter,
     })
 }
 

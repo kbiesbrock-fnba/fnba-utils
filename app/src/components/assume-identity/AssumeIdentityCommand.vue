@@ -33,6 +33,9 @@ const {
   selectConnection,
   execute,
   removeRecentUser,
+  deleteCustomUser,
+  deleteCustomConnection,
+  deleteCustomImposter,
   goBack,
 } = useAssumeIdentity();
 
@@ -85,17 +88,17 @@ defineExpose({ step });
 
 <template>
   <template v-if="step === 'imposter'">
-    <ImposterPicker :imposters="imposters" :selected="selectedImposter" @select="selectImposter" />
+    <ImposterPicker :imposters="imposters" :selected="selectedImposter" @select="selectImposter" @delete-custom="deleteCustomImposter" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'user'">
-    <UserPicker :users="users" :recent-users="recentUsers" @select="selectUser" @remove-recent="removeRecentUser" />
+    <UserPicker :users="users" :recent-users="recentUsers" @select="selectUser" @remove-recent="removeRecentUser" @delete-custom="deleteCustomUser" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'connection'">
-    <ConnectionPicker :connections="connections" @select="selectConnection" />
+    <ConnectionPicker :connections="connections" @select="selectConnection" @delete-custom="deleteCustomConnection" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 

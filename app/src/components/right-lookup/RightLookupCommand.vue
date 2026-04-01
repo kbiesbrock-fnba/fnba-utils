@@ -29,6 +29,7 @@ const {
   loadConnections,
   reset,
   selectConnection,
+  deleteCustomConnection,
   selectRight,
   selectAssociate,
   goBack,
@@ -61,7 +62,7 @@ defineExpose({ step });
 
 <template>
   <template v-if="step === 'connection'">
-    <ConnectionPicker :connections="connections" @select="selectConnection" />
+    <ConnectionPicker :connections="connections" @select="selectConnection" @delete-custom="deleteCustomConnection" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 

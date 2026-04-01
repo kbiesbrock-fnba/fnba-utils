@@ -14,6 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [user: IdentityUser];
   removeRecent: [username: string];
+  deleteCustom: [username: string];
 }>();
 
 const query = ref("");
@@ -22,7 +23,7 @@ const labelMode = ref<{ username: string } | null>(null);
 
 type DisplayRow =
   | { kind: "header"; title: string }
-  | { kind: "user"; user: IdentityUser; displayLabel: string; flatIndex: number; isRecent: boolean };
+  | { kind: "user"; user: IdentityUser; displayLabel: string; flatIndex: number; isRecent: boolean; isCustom: boolean };
 
 const displayData = computed(() => {
   const q = query.value.toLowerCase();
@@ -64,6 +65,7 @@ const displayData = computed(() => {
           displayLabel: item.displayLabel,
           flatIndex: flatIndex++,
           isRecent: true,
+          isCustom: !!item.user.isCustom,
         });
       }
     }
@@ -92,6 +94,7 @@ const displayData = computed(() => {
         displayLabel: "",
         flatIndex: flatIndex++,
         isRecent: false,
+        isCustom: !!user.isCustom,
       });
     }
   }
@@ -126,6 +129,10 @@ const { selectedIndex, resetIndex } = useListNavigation({
         const row = getRowAtIndex(selectedIndex.value);
         if (row?.isRecent) {
           emit("removeRecent", row.user.username);
+          return;
+        }
+        if (row?.isCustom) {
+          emit("deleteCustom", row.user.username);
           return;
         }
         return false;
@@ -182,11 +189,22 @@ function onLabelCancel() {
         >
           <span class="picker-name">{{ row.user.username }}</span>
           <span v-if="row.displayLabel" class="picker-labels">{{ row.displayLabel }}</span>
+          <span v-if="row.isCustom && !row.displayLabel" class="picker-labels custom-badge">custom</span>
           <button
             v-if="row.isRecent"
             class="remove-btn"
             title="Remove from recent (Del)"
             @click.stop="emit('removeRecent', row.user.username)"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
+          <button
+            v-if="row.isCustom && !row.isRecent"
+            class="remove-btn"
+            title="Delete custom entry (Del)"
+            @click.stop="emit('deleteCustom', row.user.username)"
           >
             <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
               <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
@@ -199,31 +217,3 @@ function onLabelCancel() {
 </template>
 
 <style src="./picker-shared.css" scoped></style>
-<style scoped>
-.remove-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
-  flex-shrink: 0;
-}
-
-.picker-item:hover .remove-btn,
-.picker-item.selected .remove-btn {
-  opacity: 1;
-}
-
-.remove-btn:hover {
-  background: var(--bg-hover);
-  color: var(--accent-red);
-}
-</style>

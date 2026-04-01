@@ -4,6 +4,7 @@ import {
   getRightAssociates,
   getAssociateRights,
   getIdentityData,
+  deleteCustomEntry,
   type IdentityConnection,
   type RightInfo,
   type RightAssociate,
@@ -121,6 +122,12 @@ export function useRightLookup() {
     }
   }
 
+  async function deleteCustomConnection(server: string) {
+    await deleteCustomEntry(undefined, server);
+    connectionsLoaded.value = false;
+    await loadConnections();
+  }
+
   function goBack(): boolean {
     switch (step.value) {
       case "rights":
@@ -169,6 +176,7 @@ export function useRightLookup() {
     selectConnection,
     selectRight,
     selectAssociate,
+    deleteCustomConnection,
     goBack,
   };
 }

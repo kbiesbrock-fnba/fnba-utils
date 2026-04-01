@@ -3,8 +3,10 @@ import {
   getIdentityData,
   executeAssumeIdentity,
   saveCustomEntry,
+  deleteCustomEntry,
   type IdentityUser,
   type IdentityConnection,
+  type IdentityImposter,
   type AssumeIdentityResult,
 } from "@/lib/tauri";
 
@@ -73,9 +75,9 @@ export const prefillUsername = ref<string | null>(null);
 // --- Shared state ---
 
 const step = ref<AssumeIdentityStep>("user");
-const imposters = ref<string[]>([]);
+const imposters = ref<IdentityImposter[]>([]);
 const currentUser = ref("");
-const selectedImposter = ref<string | null>(null);
+const selectedImposter = ref<string | null>(null);  // stores the name string
 const users = ref<IdentityUser[]>([]);
 const connections = ref<IdentityConnection[]>([]);
 const selectedUser = ref<IdentityUser | null>(null);
@@ -103,6 +105,11 @@ export function useAssumeIdentity() {
       error.value = String(e);
       step.value = "error";
     }
+  }
+
+  async function reloadData() {
+    dataLoaded.value = false;
+    await loadData();
   }
 
   function reset() {
@@ -147,7 +154,7 @@ export function useAssumeIdentity() {
       (c) => c.server.toLowerCase() === conn.server.toLowerCase(),
     );
     const isNewImposter = !imposters.value.some(
-      (i) => i.toLowerCase() === imp.toLowerCase(),
+      (i) => i.name.toLowerCase() === imp.toLowerCase(),
     );
 
     try {
@@ -204,6 +211,21 @@ export function useAssumeIdentity() {
     recentUsers.value = loadRecents();
   }
 
+  async function deleteCustomUser(username: string) {
+    await deleteCustomEntry(username);
+    await reloadData();
+  }
+
+  async function deleteCustomConnection(server: string) {
+    await deleteCustomEntry(undefined, server);
+    await reloadData();
+  }
+
+  async function deleteCustomImposter(name: string) {
+    await deleteCustomEntry(undefined, undefined, name);
+    await reloadData();
+  }
+
   function goBack(): boolean {
     switch (step.value) {
       case "user":
@@ -242,6 +264,9 @@ export function useAssumeIdentity() {
     selectConnection,
     execute,
     removeRecentUser,
+    deleteCustomUser,
+    deleteCustomConnection,
+    deleteCustomImposter,
     goBack,
   };
 }

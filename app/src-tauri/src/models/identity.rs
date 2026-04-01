@@ -1,22 +1,37 @@
 use serde::{Deserialize, Serialize};
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct IdentityUser {
     pub username: String,
     pub label: String,
+    #[serde(default, rename = "isCustom", skip_serializing_if = "is_false")]
+    pub is_custom: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct IdentityConnection {
     pub label: String,
     pub server: String,
+    #[serde(default, rename = "isCustom", skip_serializing_if = "is_false")]
+    pub is_custom: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IdentityImposter {
+    pub name: String,
+    #[serde(default, rename = "isCustom", skip_serializing_if = "is_false")]
+    pub is_custom: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityData {
     pub current_user: String,
-    pub imposters: Vec<String>,
+    pub imposters: Vec<IdentityImposter>,
     pub users: Vec<IdentityUser>,
     pub connections: Vec<IdentityConnection>,
 }
