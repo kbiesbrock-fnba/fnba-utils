@@ -9,6 +9,7 @@ export const rightLookupCommand: PaletteCommand = {
   keywords: ["right", "rights", "permission", "group", "associate", "lookup", "notedb"],
   component: RightLookupCommand,
   breadcrumbs: [
+    { label: "Connection", steps: ["connection"] },
     { label: "Search", steps: ["loading", "rights"] },
     { label: "Results", steps: ["executing", "result", "associateResult", "error"] },
   ],

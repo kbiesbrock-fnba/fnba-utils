@@ -2,8 +2,6 @@ use crate::db;
 use crate::models::right_lookup::{RightAssociate, RightInfo};
 use tiberius::Row;
 
-const SERVER: &str = "meleagris";
-
 fn parse_associate(row: &Row) -> Result<RightAssociate, String> {
     Ok(RightAssociate {
         assoc_id: row
@@ -26,8 +24,8 @@ fn parse_associate(row: &Row) -> Result<RightAssociate, String> {
 }
 
 #[tauri::command]
-pub async fn get_all_rights() -> Result<Vec<RightInfo>, String> {
-    let mut client = db::connect_to(SERVER, "notedb").await?;
+pub async fn get_all_rights(server: String) -> Result<Vec<RightInfo>, String> {
+    let mut client = db::connect_to(&server, "notedb").await?;
 
     let sql = "SELECT right_id, right_name FROM notedb.fnba.rights ORDER BY right_name";
 
@@ -62,6 +60,7 @@ pub async fn get_all_rights() -> Result<Vec<RightInfo>, String> {
 
 #[tauri::command]
 pub async fn get_right_associates(
+    server: String,
     right_name: Option<String>,
     right_id: Option<i32>,
 ) -> Result<Vec<RightAssociate>, String> {
@@ -69,7 +68,7 @@ pub async fn get_right_associates(
         return Err("Either right_name or right_id must be provided".into());
     }
 
-    let mut client = db::connect_to(SERVER, "notedb").await?;
+    let mut client = db::connect_to(&server, "notedb").await?;
 
     let sql = "\
 DECLARE @rightId INT = @P1;
@@ -107,12 +106,12 @@ ORDER BY per.assoc_id";
 }
 
 #[tauri::command]
-pub async fn search_associates(query: String) -> Result<Vec<RightAssociate>, String> {
+pub async fn search_associates(server: String, query: String) -> Result<Vec<RightAssociate>, String> {
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
 
-    let mut client = db::connect_to(SERVER, "notedb").await?;
+    let mut client = db::connect_to(&server, "notedb").await?;
 
     let sql = "\
 DECLARE @search VARCHAR(100) = @P1;
@@ -141,8 +140,8 @@ ORDER BY nickname";
 }
 
 #[tauri::command]
-pub async fn get_associate_rights(assoc_id: i32) -> Result<Vec<RightInfo>, String> {
-    let mut client = db::connect_to(SERVER, "notedb").await?;
+pub async fn get_associate_rights(server: String, assoc_id: i32) -> Result<Vec<RightInfo>, String> {
+    let mut client = db::connect_to(&server, "notedb").await?;
 
     let sql = "\
 SELECT DISTINCT r.right_id, r.right_name

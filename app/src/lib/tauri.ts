@@ -221,24 +221,26 @@ export function hideWindow(): Promise<void> {
   return invoke<void>("hide_window");
 }
 
-export function getAllRights(): Promise<RightInfo[]> {
-  return invoke<RightInfo[]>("get_all_rights");
+export function getAllRights(server: string): Promise<RightInfo[]> {
+  return invoke<RightInfo[]>("get_all_rights", { server });
 }
 
 export function getRightAssociates(
+  server: string,
   rightName: string | null,
   rightId: number | null,
 ): Promise<RightAssociate[]> {
   return invoke<RightAssociate[]>("get_right_associates", {
+    server,
     rightName,
     rightId,
   });
 }
 
-export function searchAssociates(query: string): Promise<RightAssociate[]> {
-  return invoke<RightAssociate[]>("search_associates", { query });
+export function searchAssociates(server: string, query: string): Promise<RightAssociate[]> {
+  return invoke<RightAssociate[]>("search_associates", { server, query });
 }
 
-export function getAssociateRights(assocId: number): Promise<RightInfo[]> {
-  return invoke<RightInfo[]>("get_associate_rights", { assocId });
+export function getAssociateRights(server: string, assocId: number): Promise<RightInfo[]> {
+  return invoke<RightInfo[]>("get_associate_rights", { server, assocId });
 }

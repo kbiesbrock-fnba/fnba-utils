@@ -6,6 +6,7 @@ import { useListNavigation } from "../../composables/useListNavigation";
 
 const props = defineProps<{
   rights: RightInfo[];
+  server: string;
 }>();
 
 const emit = defineEmits<{
@@ -90,7 +91,7 @@ function onUpdate(value: string) {
     searchingAssociates.value = true;
     debounceTimer = setTimeout(async () => {
       try {
-        matchedAssociates.value = await searchAssociates(value.trim());
+        matchedAssociates.value = await searchAssociates(props.server, value.trim());
       } catch {
         matchedAssociates.value = [];
       } finally {

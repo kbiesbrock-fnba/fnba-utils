@@ -3,6 +3,7 @@ import { onMounted } from "vue";
 import { useRightLookup } from "../../composables/useRightLookup";
 import { usePalette } from "../../composables/usePalette";
 import { useCommandKeys } from "../../composables/useCommandKeys";
+import ConnectionPicker from "../assume-identity/ConnectionPicker.vue";
 import RightPicker from "./RightPicker.vue";
 import RightLookupResult from "./RightLookupResult.vue";
 import AssociateRightsResult from "./AssociateRightsResult.vue";
@@ -17,14 +18,17 @@ const emit = defineEmits<{
 
 const {
   step,
+  connections,
+  selectedConnection,
   rights,
   selectedRight,
   selectedAssociate,
   associates,
   associateRights,
   error,
-  loadRights,
+  loadConnections,
   reset,
+  selectConnection,
   selectRight,
   selectAssociate,
   goBack,
@@ -32,12 +36,15 @@ const {
 
 const { returningToPrevious } = usePalette();
 
-onMounted(() => {
+onMounted(async () => {
   if (returningToPrevious.value) {
     returningToPrevious.value = false;
-  } else {
-    reset();
-    loadRights();
+    return;
+  }
+  reset();
+  await loadConnections();
+  if (step.value === "connection" && selectedConnection.value) {
+    selectConnection(selectedConnection.value);
   }
 });
 
@@ -56,12 +63,17 @@ defineExpose({ step });
 </script>
 
 <template>
-  <template v-if="step === 'loading'">
+  <template v-if="step === 'connection'">
+    <ConnectionPicker :connections="connections" @select="selectConnection" />
+    <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
+  </template>
+
+  <template v-else-if="step === 'loading'">
     <LoadingView message="Loading rights..." />
   </template>
 
   <template v-else-if="step === 'rights'">
-    <RightPicker :rights="rights" @select-right="selectRight" @select-associate="selectAssociate" />
+    <RightPicker :rights="rights" :server="selectedConnection?.server ?? ''" @select-right="selectRight" @select-associate="selectAssociate" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 

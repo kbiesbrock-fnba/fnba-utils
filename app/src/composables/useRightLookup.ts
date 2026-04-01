@@ -3,11 +3,17 @@ import {
   getAllRights,
   getRightAssociates,
   getAssociateRights,
+  getIdentityData,
+  searchAssociates,
+  type IdentityConnection,
   type RightInfo,
   type RightAssociate,
 } from "../lib/tauri";
 
+const DEFAULT_SERVER = "meleagris";
+
 export type RightLookupStep =
+  | "connection"
   | "loading"
   | "rights"
   | "executing"
@@ -17,7 +23,9 @@ export type RightLookupStep =
 
 // --- Shared state (singleton) ---
 
-const step = ref<RightLookupStep>("loading");
+const step = ref<RightLookupStep>("connection");
+const connections = ref<IdentityConnection[]>([]);
+const selectedConnection = ref<IdentityConnection | null>(null);
 const rights = ref<RightInfo[]>([]);
 const selectedRight = ref<RightInfo | null>(null);
 const selectedAssociate = ref<RightAssociate | null>(null);
@@ -25,13 +33,30 @@ const associates = ref<RightAssociate[]>([]);
 const associateRights = ref<RightInfo[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
+const connectionsLoaded = ref(false);
+
+function server(): string {
+  return selectedConnection.value?.server ?? DEFAULT_SERVER;
+}
 
 export function useRightLookup() {
+  async function loadConnections() {
+    if (connectionsLoaded.value) return;
+    try {
+      const data = await getIdentityData();
+      connections.value = data.connections;
+      connectionsLoaded.value = true;
+    } catch (e) {
+      error.value = String(e);
+      step.value = "error";
+    }
+  }
+
   async function loadRights() {
     step.value = "loading";
     loading.value = true;
     try {
-      rights.value = await getAllRights();
+      rights.value = await getAllRights(server());
       step.value = "rights";
     } catch (e) {
       error.value = String(e);
@@ -41,8 +66,13 @@ export function useRightLookup() {
     }
   }
 
+  function selectConnection(conn: IdentityConnection) {
+    selectedConnection.value = conn;
+    loadRights();
+  }
+
   function reset() {
-    step.value = "loading";
+    step.value = "connection";
     rights.value = [];
     selectedRight.value = null;
     selectedAssociate.value = null;
@@ -58,7 +88,7 @@ export function useRightLookup() {
     step.value = "executing";
     loading.value = true;
     try {
-      associates.value = await getRightAssociates(right.rightName, null);
+      associates.value = await getRightAssociates(server(), right.rightName, null);
       step.value = "result";
     } catch (e) {
       error.value = String(e);
@@ -74,7 +104,7 @@ export function useRightLookup() {
     step.value = "executing";
     loading.value = true;
     try {
-      associateRights.value = await getAssociateRights(assoc.assocId);
+      associateRights.value = await getAssociateRights(server(), assoc.assocId);
       step.value = "associateResult";
     } catch (e) {
       error.value = String(e);
@@ -86,6 +116,11 @@ export function useRightLookup() {
 
   function goBack(): boolean {
     switch (step.value) {
+      case "rights":
+      case "loading":
+        step.value = "connection";
+        rights.value = [];
+        return true;
       case "result":
       case "associateResult":
         step.value = "rights";
@@ -102,7 +137,9 @@ export function useRightLookup() {
           error.value = null;
           return true;
         }
-        return false;
+        step.value = "connection";
+        error.value = null;
+        return true;
       default:
         return false;
     }
@@ -110,6 +147,8 @@ export function useRightLookup() {
 
   return {
     step,
+    connections,
+    selectedConnection,
     rights,
     selectedRight,
     selectedAssociate,
@@ -117,8 +156,10 @@ export function useRightLookup() {
     associateRights,
     error,
     loading,
+    loadConnections,
     loadRights,
     reset,
+    selectConnection,
     selectRight,
     selectAssociate,
     goBack,
