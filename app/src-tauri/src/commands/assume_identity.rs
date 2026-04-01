@@ -113,22 +113,22 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
     if let Some(home) = dirs::home_dir() {
         let custom_path = home.join(".assumeIdentity.json");
         if custom_path.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&custom_path) {
-                if let Ok(custom) = serde_json::from_str::<CustomData>(&contents) {
-                    for imp in custom.imposters {
-                        if !imposters.iter().any(|i| i.eq_ignore_ascii_case(&imp)) {
-                            imposters.push(imp);
-                        }
-                    }
-                    all_users.extend(custom.users);
-                    for conn in custom.connections {
-                        if !all_connections
-                            .iter()
-                            .any(|c| c.server.eq_ignore_ascii_case(&conn.server))
-                        {
-                            all_connections.push(conn);
-                        }
-                    }
+            let contents = std::fs::read_to_string(&custom_path)
+                .map_err(|e| format!("Failed to read ~/.assumeIdentity.json: {e}"))?;
+            let custom: CustomData = serde_json::from_str(&contents)
+                .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
+            for imp in custom.imposters {
+                if !imposters.iter().any(|i| i.eq_ignore_ascii_case(&imp)) {
+                    imposters.push(imp);
+                }
+            }
+            all_users.extend(custom.users);
+            for conn in custom.connections {
+                if !all_connections
+                    .iter()
+                    .any(|c| c.server.eq_ignore_ascii_case(&conn.server))
+                {
+                    all_connections.push(conn);
                 }
             }
         }
@@ -230,7 +230,9 @@ pub async fn save_custom_entry(
     let mut data: CustomData = if custom_path.exists() {
         let contents =
             std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
-        serde_json::from_str(&contents).unwrap_or_default()
+        serde_json::from_str(&contents).map_err(|e| {
+            format!("Custom config ~/.assumeIdentity.json is malformed: {e}")
+        })?
     } else {
         CustomData::default()
     };
