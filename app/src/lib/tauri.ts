@@ -80,6 +80,8 @@ export interface ClaudeSession {
   isAlive: boolean;
   subagentCount: number;
   subagents: SubagentInfo[];
+  status: string;
+  lastMessageAt: string | null;
 }
 
 export interface ConversationMessage {
@@ -291,6 +293,8 @@ async function mockInvoke<T>(
             { agentType: "Explore", description: "Explore test patterns" },
             { agentType: "Plan", description: "Design auth feature" },
           ],
+          status: "busy",
+          lastMessageAt: new Date(now - 30000).toISOString(),
         },
         {
           pid: 67890,
@@ -305,6 +309,8 @@ async function mockInvoke<T>(
           subagents: [
             { agentType: "Plan", description: "Plan migration strategy" },
           ],
+          status: "idle",
+          lastMessageAt: new Date(now - 120000).toISOString(),
         },
         ...(Math.random() > 0.5
           ? [
@@ -319,6 +325,8 @@ async function mockInvoke<T>(
                 isAlive: true,
                 subagentCount: 0,
                 subagents: [],
+                status: "idle",
+                lastMessageAt: new Date(now - 600000).toISOString(),
               } satisfies ClaudeSession,
             ]
           : []),
@@ -439,6 +447,12 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "send_session_prompt": {
+      await delay(300);
+      console.log("[mock] send_session_prompt", args);
+      return undefined as T;
+    }
+
     case "open_in_explorer": {
       await delay(100);
       console.log("[mock] open_in_explorer", args);
@@ -550,6 +564,10 @@ export function getSessionDetail(
 
 export function killSession(pid: number): Promise<void> {
   return invoke<void>("kill_session", { pid });
+}
+
+export function sendSessionPrompt(sessionId: string, cwd: string, prompt: string): Promise<void> {
+  return invoke<void>("send_session_prompt", { sessionId, cwd, prompt });
 }
 
 export function openInExplorer(cwd: string): Promise<void> {

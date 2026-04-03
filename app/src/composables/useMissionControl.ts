@@ -36,6 +36,7 @@ const sessions = ref<ClaudeSession[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const selectedPid = ref<number | null>(null);
+const expandedPid = ref<number | null>(null);
 
 const connectionStatuses = ref<ConnectionStatus[]>([]);
 const connectionsLoading = ref(true);
@@ -136,7 +137,11 @@ async function openSideWindowWithEvent(
   }
 }
 
-async function selectSession(session: ClaudeSession) {
+function toggleSessionExpand(session: ClaudeSession) {
+  expandedPid.value = expandedPid.value === session.pid ? null : session.pid;
+}
+
+async function openSessionDetail(session: ClaudeSession) {
   selectedPid.value = session.pid;
   await openSideWindowWithEvent("session-detail", "session-selected", {
     sessionId: session.sessionId,
@@ -217,10 +222,12 @@ export function useMissionControl() {
     loading,
     error,
     selectedPid,
+    expandedPid,
     sessionsCollapsed,
     dismiss,
     togglePin,
-    selectSession,
+    toggleSessionExpand,
+    openSessionDetail,
     toggleSessionsCollapsed,
     connectionStatuses,
     connectionsLoading,

@@ -20,6 +20,8 @@ pub struct ClaudeSession {
     pub is_alive: bool,
     pub subagent_count: u32,
     pub subagents: Vec<SubagentInfo>,
+    pub status: String,
+    pub last_message_at: Option<String>,
 }
 
 #[derive(Serialize)]

@@ -3,9 +3,10 @@ import { useSessionDetail } from "@/composables/useSessionDetail";
 import SessionDetailHeader from "./SessionDetailHeader.vue";
 import SessionDetailStats from "./SessionDetailStats.vue";
 import SessionDetailActivity from "./SessionDetailActivity.vue";
+import SessionDetailPrompt from "./SessionDetailPrompt.vue";
 import SessionDetailActions from "./SessionDetailActions.vue";
 
-const { detail, loading, error, pinned, togglePin } = useSessionDetail();
+const { detail, loading, error, pinned, sending, togglePin, sendPrompt } = useSessionDetail();
 </script>
 
 <template>
@@ -21,6 +22,8 @@ const { detail, loading, error, pinned, togglePin } = useSessionDetail();
       <SessionDetailStats :stats="detail.stats" :subagent-count="detail.subagents.length" />
       <div class="sd-divider" />
       <SessionDetailActivity :messages="detail.recentMessages" />
+      <div class="sd-divider" />
+      <SessionDetailPrompt :status="detail.status" :sending="sending" @send="sendPrompt" />
       <div class="sd-divider" />
       <SessionDetailActions />
     </template>

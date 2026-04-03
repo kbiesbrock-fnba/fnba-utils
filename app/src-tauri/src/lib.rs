@@ -114,6 +114,7 @@ pub fn run() {
             commands::mission_control::execute_sql_query,
             commands::mission_control::get_session_detail,
             commands::mission_control::kill_session,
+            commands::mission_control::send_session_prompt,
             commands::mission_control::open_in_explorer,
         ])
         .build(tauri::generate_context!())

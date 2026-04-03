@@ -7,9 +7,11 @@ const {
   pinned,
   sessions,
   selectedPid,
+  expandedPid,
   sessionsCollapsed,
   togglePin,
-  selectSession,
+  toggleSessionExpand,
+  openSessionDetail,
   toggleSessionsCollapsed,
   connectionStatuses,
   connectionsLoading,
@@ -69,7 +71,9 @@ const {
           :key="s.pid"
           :session="s"
           :selected="selectedPid === s.pid"
-          @select="selectSession"
+          :expanded="expandedPid === s.pid"
+          @toggle-expand="toggleSessionExpand"
+          @open="openSessionDetail"
         />
       </div>
     </div>

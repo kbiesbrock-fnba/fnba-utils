@@ -2,6 +2,7 @@ import { ref } from "vue";
 import {
   getSessionDetail,
   killSession,
+  sendSessionPrompt,
   openInExplorer,
   isTauri,
   type SessionDetail,
@@ -13,8 +14,10 @@ const detail = ref<SessionDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const pinned = ref(localStorage.getItem(PINNED_KEY) === "true");
+const sending = ref(false);
 
 let listening = false;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function togglePin() {
   pinned.value = !pinned.value;
@@ -98,7 +101,37 @@ function copyInfo(): string {
   return text;
 }
 
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+function startPolling() {
+  stopPolling();
+  const start = Date.now();
+  pollTimer = setInterval(async () => {
+    if (!detail.value) { stopPolling(); return; }
+    if (Date.now() - start > 60000) { stopPolling(); return; }
+    await fetchDetail(detail.value.sessionId, detail.value.cwd, detail.value.pid);
+    if (detail.value?.status === "idle") stopPolling();
+  }, 3000);
+}
+
+async function sendPrompt(text: string) {
+  if (!detail.value) return;
+  sending.value = true;
+  error.value = null;
+  try {
+    await sendSessionPrompt(detail.value.sessionId, detail.value.cwd, text);
+    // Start polling to show conversation updates
+    startPolling();
+  } catch (e) {
+    error.value = String(e);
+  } finally {
+    sending.value = false;
+  }
+}
+
 export function useSessionDetail() {
   startListening();
-  return { detail, loading, error, pinned, kill, openCwd, copyInfo, fetchDetail, togglePin };
+  return { detail, loading, error, pinned, sending, kill, openCwd, copyInfo, fetchDetail, togglePin, sendPrompt };
 }

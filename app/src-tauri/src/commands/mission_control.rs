@@ -7,10 +7,24 @@ use crate::models::mission_control::{
 use std::collections::VecDeque;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 
 // --- Shared helpers ---
+
+/// How long after the last JSONL write we still consider a "user"-last session busy.
+/// Claude streams responses within seconds; if the file is older than this the session
+/// was interrupted or the user's message was never processed.
+const BUSY_STALE_SECS: u64 = 10;
+
+/// True when the file's mtime is older than `BUSY_STALE_SECS`.
+fn jsonl_is_stale(path: &Path) -> bool {
+    path.metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .map_or(false, |age| age.as_secs() > BUSY_STALE_SECS)
+}
 
 fn cwd_to_project_hash(cwd: &str) -> String {
     let trimmed = cwd.strip_prefix('/').unwrap_or(cwd);
@@ -92,8 +106,64 @@ fn parse_session(val: &serde_json::Value) -> Option<(u32, ClaudeSession)> {
             is_alive: true,
             subagent_count: 0,
             subagents: Vec::new(),
+            status: "unknown".into(),
+            last_message_at: None,
         },
     ))
+}
+
+// --- Lightweight JSONL tail for session status ---
+
+/// Read the last ~8KB of a JSONL conversation file to extract the timestamp and
+/// role of the most recent user/assistant message.  O(1) in file size.
+fn tail_conversation_status(jsonl_path: &Path) -> (Option<String>, String) {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(jsonl_path) {
+        Ok(f) => f,
+        Err(_) => return (None, "unknown".into()),
+    };
+
+    let file_len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return (None, "unknown".into()),
+    };
+
+    // Seek to the last 8KB (or start of file if smaller)
+    let offset = if file_len > 8192 { file_len - 8192 } else { 0 };
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return (None, "unknown".into());
+    }
+
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return (None, "unknown".into());
+    }
+
+    // Walk lines in reverse to find the last user/assistant record
+    for line in buf.lines().rev() {
+        let val: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let record_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if record_type != "user" && record_type != "assistant" {
+            continue;
+        }
+        let timestamp = val
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let role = val
+            .get("message")
+            .and_then(|m| m.get("role"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(record_type)
+            .to_string();
+        return (timestamp, role);
+    }
+
+    (None, "unknown".into())
 }
 
 // --- Discovery ---
@@ -169,6 +239,20 @@ fn discover_sessions(
         let subagents = read_subagents(&projects_dir, &session.cwd, &session.session_id);
         session.subagent_count = subagents.len() as u32;
         session.subagents = subagents;
+
+        // Lightweight tail of JSONL for status + last message time
+        let hash = cwd_to_project_hash(&session.cwd);
+        let jsonl_path = projects_dir.join(&hash).join(format!("{}.jsonl", &session.session_id));
+        let (last_ts, last_role) = tail_conversation_status(&jsonl_path);
+        session.status = if !alive {
+            "dead"
+        } else if last_role == "user" && !jsonl_is_stale(&jsonl_path) {
+            "busy"
+        } else {
+            "idle"
+        }
+        .to_string();
+        session.last_message_at = last_ts;
 
         sessions.push(session);
     }
@@ -311,7 +395,8 @@ fn extract_summary(content: &serde_json::Value, max_len: usize) -> (String, Opti
     if let Some(s) = content.as_str() {
         let clean = s.trim();
         let truncated = if clean.len() > max_len {
-            format!("{}...", &clean[..max_len])
+            let end = clean.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_len).last().unwrap_or(0);
+            format!("{}...", &clean[..end])
         } else {
             clean.to_string()
         };
@@ -326,7 +411,8 @@ fn extract_summary(content: &serde_json::Value, max_len: usize) -> (String, Opti
                     let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
                     let clean = text.trim();
                     let truncated = if clean.len() > max_len {
-                        format!("{}...", &clean[..max_len])
+                        let end = clean.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_len).last().unwrap_or(0);
+                        format!("{}...", &clean[..end])
                     } else {
                         clean.to_string()
                     };
@@ -445,7 +531,7 @@ fn parse_conversation(
         last_role = role;
     }
 
-    let status = if last_role == "user" {
+    let status = if last_role == "user" && !jsonl_is_stale(jsonl_path) {
         "busy".to_string()
     } else {
         "idle".to_string()
@@ -523,6 +609,50 @@ pub async fn kill_session(pid: u32) -> Result<(), String> {
         .args(["-e", "kill", &pid.to_string()])
         .output()
         .map_err(|e| format!("Failed to kill session: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn send_session_prompt(
+    session_id: String,
+    cwd: String,
+    prompt: String,
+) -> Result<(), String> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("Prompt cannot be empty".into());
+    }
+
+    // Use `claude --resume` with `-p` (print mode) to send the prompt.
+    // Spawned in the background — the JSONL is updated as it runs and
+    // the frontend polling picks up changes.
+    let mut child = std::process::Command::new("wsl.exe")
+        .args([
+            "-e", "bash", "-lc",
+            &format!(
+                "cd '{}' && claude --resume '{}' -p",
+                cwd.replace('\'', "'\\''"),
+                session_id.replace('\'', "'\\''"),
+            ),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn claude: {e}"))?;
+
+    // Pass prompt via stdin to avoid shell-escaping issues.
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        write!(stdin, "{prompt}").map_err(|e| format!("Write failed: {e}"))?;
+    }
+
+    // Don't wait for completion — claude -p can take a while.
+    // Spawn a thread to reap the child so it doesn't become a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
     Ok(())
 }
 
