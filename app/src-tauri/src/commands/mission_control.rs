@@ -1,4 +1,8 @@
-use crate::models::mission_control::{ClaudeSession, SubagentInfo};
+use crate::models::mission_control::{
+    ClaudeSession, ConversationMessage, SessionDetail, SessionStats, SubagentInfo,
+};
+use std::collections::VecDeque;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 // --- Shared helpers ---
@@ -189,4 +193,247 @@ pub async fn get_claude_sessions() -> Result<Vec<ClaudeSession>, String> {
     all_sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
 
     Ok(all_sessions)
+}
+
+// --- Session detail ---
+
+/// Extract a text summary from a message's content field.
+/// Content can be a string or an array of content blocks.
+fn extract_summary(content: &serde_json::Value, max_len: usize) -> (String, Option<String>) {
+    if let Some(s) = content.as_str() {
+        let clean = s.trim();
+        let truncated = if clean.len() > max_len {
+            format!("{}...", &clean[..max_len])
+        } else {
+            clean.to_string()
+        };
+        return (truncated, None);
+    }
+
+    if let Some(arr) = content.as_array() {
+        for block in arr {
+            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match block_type {
+                "text" => {
+                    let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    let clean = text.trim();
+                    let truncated = if clean.len() > max_len {
+                        format!("{}...", &clean[..max_len])
+                    } else {
+                        clean.to_string()
+                    };
+                    return (truncated, None);
+                }
+                "tool_use" => {
+                    let name = block
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    return (format!("[{name}]"), Some(name.to_string()));
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    (String::new(), None)
+}
+
+/// Stream a session's conversation JSONL, collecting stats and recent messages.
+fn parse_conversation(
+    jsonl_path: &Path,
+    max_recent: usize,
+) -> (SessionStats, Vec<ConversationMessage>, Option<String>, String) {
+    let mut stats = SessionStats::default();
+    let mut recent: VecDeque<ConversationMessage> = VecDeque::with_capacity(max_recent + 1);
+    let mut git_branch: Option<String> = None;
+    let mut last_role = String::new();
+
+    let file = match std::fs::File::open(jsonl_path) {
+        Ok(f) => f,
+        Err(_) => return (stats, Vec::new(), None, "unknown".to_string()),
+    };
+
+    for line in std::io::BufReader::new(file).lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let record_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if record_type != "user" && record_type != "assistant" {
+            if git_branch.is_none() {
+                if let Some(b) = val.get("gitBranch").and_then(|v| v.as_str()) {
+                    git_branch = Some(b.to_string());
+                }
+            }
+            continue;
+        }
+
+        let msg = match val.get("message") {
+            Some(m) => m,
+            None => continue,
+        };
+
+        let role = msg
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if let Some(b) = val.get("gitBranch").and_then(|v| v.as_str()) {
+            git_branch = Some(b.to_string());
+        }
+
+        // Accumulate token usage
+        if let Some(usage) = msg.get("usage") {
+            let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                + usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                + usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+            let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            stats.total_input_tokens += input;
+            stats.total_output_tokens += output;
+        }
+
+        stats.message_count += 1;
+        match role.as_str() {
+            "user" => stats.user_message_count += 1,
+            "assistant" => stats.assistant_message_count += 1,
+            _ => {}
+        }
+
+        let timestamp = val
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let content = msg.get("content").cloned().unwrap_or(serde_json::Value::Null);
+        let (summary, tool_name) = extract_summary(&content, 200);
+
+        if !summary.is_empty() {
+            recent.push_back(ConversationMessage {
+                role: role.clone(),
+                timestamp,
+                summary,
+                tool_name,
+            });
+            if recent.len() > max_recent {
+                recent.pop_front();
+            }
+        }
+
+        last_role = role;
+    }
+
+    let status = if last_role == "user" {
+        "busy".to_string()
+    } else {
+        "idle".to_string()
+    };
+
+    (stats, recent.into(), git_branch, status)
+}
+
+/// Find the claude_dir that contains a given session.
+fn find_claude_dir_for_session(pid: u32) -> Option<(PathBuf, Option<PathBuf>)> {
+    for (claude_dir, proc_root) in wsl_claude_dirs() {
+        if claude_dir.join("sessions").join(format!("{pid}.json")).exists() {
+            return Some((claude_dir, Some(proc_root)));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let claude = home.join(".claude");
+        if claude.join("sessions").join(format!("{pid}.json")).exists() {
+            return Some((claude, None));
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub async fn get_session_detail(
+    session_id: String,
+    cwd: String,
+    pid: u32,
+) -> Result<SessionDetail, String> {
+    let (claude_dir, proc_root) = find_claude_dir_for_session(pid)
+        .ok_or_else(|| format!("Session {pid} not found"))?;
+
+    let session_path = claude_dir.join("sessions").join(format!("{pid}.json"));
+    let session_json = std::fs::read_to_string(&session_path)
+        .map_err(|e| format!("Cannot read session file: {e}"))?;
+    let val: serde_json::Value =
+        serde_json::from_str(&session_json).map_err(|e| format!("Invalid session JSON: {e}"))?;
+
+    let (_, session) = parse_session(&val).ok_or("Invalid session data")?;
+
+    let is_alive = match &proc_root {
+        Some(root) => root.join(pid.to_string()).exists(),
+        None => Path::new(&format!("/proc/{pid}")).exists(),
+    };
+
+    let projects_dir = claude_dir.join("projects");
+    let hash = cwd_to_project_hash(&cwd);
+    let jsonl_path = projects_dir.join(&hash).join(format!("{session_id}.jsonl"));
+    let (stats, recent_messages, git_branch, status) = parse_conversation(&jsonl_path, 20);
+
+    let subagents = read_subagents(&projects_dir, &cwd, &session_id);
+
+    Ok(SessionDetail {
+        pid,
+        session_id,
+        cwd,
+        started_at: session.started_at,
+        kind: session.kind,
+        name: session.name,
+        entrypoint: session.entrypoint,
+        is_alive,
+        git_branch,
+        status,
+        stats,
+        recent_messages,
+        subagents,
+    })
+}
+
+#[tauri::command]
+pub async fn kill_session(pid: u32) -> Result<(), String> {
+    // WSL PIDs can only be signaled from within WSL — one-shot user action
+    std::process::Command::new("wsl.exe")
+        .args(["-e", "kill", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("Failed to kill session: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_in_explorer(cwd: String) -> Result<(), String> {
+    let windows_path = if let Some(rest) = cwd.strip_prefix("/mnt/") {
+        if let Some((drive, path)) = rest.split_once('/') {
+            format!("{}:\\{}", drive.to_uppercase(), path.replace('/', "\\"))
+        } else {
+            format!("{}:\\", rest.to_uppercase())
+        }
+    } else {
+        // Pure Linux path — open via UNC
+        format!(r"\\wsl.localhost\Ubuntu{}", cwd.replace('/', "\\"))
+    };
+
+    std::process::Command::new("explorer.exe")
+        .arg(&windows_path)
+        .spawn()
+        .map_err(|e| format!("Failed to open explorer: {e}"))?;
+    Ok(())
 }

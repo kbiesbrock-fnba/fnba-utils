@@ -110,6 +110,9 @@ pub fn run() {
             commands::right_lookup::search_associates,
             commands::right_lookup::get_associate_rights,
             commands::mission_control::get_claude_sessions,
+            commands::mission_control::get_session_detail,
+            commands::mission_control::kill_session,
+            commands::mission_control::open_in_explorer,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -123,6 +126,9 @@ pub fn run() {
             let _ = w.destroy();
         }
         if let Some(w) = handle.get_webview_window("mission-control") {
+            let _ = w.destroy();
+        }
+        if let Some(w) = handle.get_webview_window("session-detail") {
             let _ = w.destroy();
         }
         handle.exit(0);

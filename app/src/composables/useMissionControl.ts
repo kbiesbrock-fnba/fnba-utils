@@ -1,5 +1,10 @@
 import { ref } from "vue";
-import { getClaudeSessions, hideWindow, type ClaudeSession } from "@/lib/tauri";
+import {
+  getClaudeSessions,
+  hideWindow,
+  isTauri,
+  type ClaudeSession,
+} from "@/lib/tauri";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const POLL_INTERVAL = 3000;
@@ -24,6 +29,7 @@ const pinned = ref(readPinned());
 const sessions = ref<ClaudeSession[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const selectedPid = ref<number | null>(null);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
@@ -46,6 +52,58 @@ function startPolling() {
   pollTimer = setInterval(fetchSessions, POLL_INTERVAL);
 }
 
+async function showDetailWindow() {
+  if (!isTauri) return;
+
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const { PhysicalPosition } = await import("@tauri-apps/api/dpi");
+
+  const detailWin = await WebviewWindow.getByLabel("session-detail");
+  console.log("[mc] detailWin =", detailWin);
+  if (!detailWin) return;
+
+  const mcWin = getCurrentWindow();
+  const mcPos = await mcWin.outerPosition();
+  const mcSize = await mcWin.outerSize();
+
+  // Position detail window to the right of mission control with 8px gap
+  const x = mcPos.x + mcSize.width + 8;
+  const y = mcPos.y;
+
+  await detailWin.setPosition(new PhysicalPosition(x, y));
+  await detailWin.show();
+  await detailWin.setFocus();
+}
+
+async function hideDetailWindow() {
+  if (!isTauri) return;
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+  const win = await WebviewWindow.getByLabel("session-detail");
+  if (win) await win.hide();
+}
+
+async function selectSession(session: ClaudeSession) {
+  console.log("[mc] selectSession called", session.pid);
+  selectedPid.value = session.pid;
+  try {
+    await showDetailWindow();
+    console.log("[mc] showDetailWindow done");
+  } catch (e) {
+    console.error("[mc] showDetailWindow failed", e);
+  }
+
+  if (isTauri) {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("session-selected", {
+      sessionId: session.sessionId,
+      cwd: session.cwd,
+      pid: session.pid,
+    });
+    console.log("[mc] event emitted");
+  }
+}
+
 export function useMissionControl() {
   if (!initialized) {
     initialized = true;
@@ -56,10 +114,20 @@ export function useMissionControl() {
         dismiss();
       }
     });
+
+    // Listen for session-killed events from detail window
+    if (isTauri) {
+      import("@tauri-apps/api/event").then(({ listen }) => {
+        listen<{ pid: number }>("session-killed", () => {
+          selectedPid.value = null;
+          fetchSessions();
+        });
+      });
+    }
   }
 
   function dismiss() {
-    // Reset any future interactive state here
+    hideDetailWindow();
     hideWindow();
   }
 
@@ -68,5 +136,14 @@ export function useMissionControl() {
     writePinned(pinned.value);
   }
 
-  return { pinned, sessions, loading, error, dismiss, togglePin };
+  return {
+    pinned,
+    sessions,
+    loading,
+    error,
+    selectedPid,
+    dismiss,
+    togglePin,
+    selectSession,
+  };
 }

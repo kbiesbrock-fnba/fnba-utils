@@ -2,7 +2,7 @@
 import { useMissionControl } from "@/composables/useMissionControl";
 import SessionCard from "./SessionCard.vue";
 
-const { pinned, sessions, togglePin } = useMissionControl();
+const { pinned, sessions, selectedPid, togglePin, selectSession } = useMissionControl();
 </script>
 
 <template>
@@ -25,7 +25,13 @@ const { pinned, sessions, togglePin } = useMissionControl();
       <div v-if="sessions.length === 0" class="mc-empty">
         No active Claude sessions
       </div>
-      <SessionCard v-for="s in sessions" :key="s.pid" :session="s" />
+      <SessionCard
+        v-for="s in sessions"
+        :key="s.pid"
+        :session="s"
+        :selected="selectedPid === s.pid"
+        @select="selectSession"
+      />
     </div>
     <div class="mc-footer">
       <span class="mc-count">

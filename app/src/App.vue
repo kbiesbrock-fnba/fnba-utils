@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import CommandPalette from "./components/CommandPalette.vue";
 import MissionControlApp from "./components/mission-control/MissionControlApp.vue";
+import SessionDetailApp from "./components/session-detail/SessionDetailApp.vue";
 import { usePalette } from "./composables/usePalette";
 
 const { dismiss } = usePalette();
 
 const isMissionControl = window.location.hash === "#mission-control";
+const isSessionDetail = window.location.hash === "#session-detail";
 
 function onBackdropClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains("backdrop")) {
@@ -15,7 +17,8 @@ function onBackdropClick(e: MouseEvent) {
 </script>
 
 <template>
-  <MissionControlApp v-if="isMissionControl" />
+  <SessionDetailApp v-if="isSessionDetail" />
+  <MissionControlApp v-else-if="isMissionControl" />
   <div v-else class="backdrop" @mousedown="onBackdropClick">
     <CommandPalette />
   </div>

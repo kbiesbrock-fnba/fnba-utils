@@ -82,6 +82,37 @@ export interface ClaudeSession {
   subagents: SubagentInfo[];
 }
 
+export interface ConversationMessage {
+  role: string;
+  timestamp: string;
+  summary: string;
+  toolName: string | null;
+}
+
+export interface SessionStats {
+  messageCount: number;
+  userMessageCount: number;
+  assistantMessageCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+}
+
+export interface SessionDetail {
+  pid: number;
+  sessionId: string;
+  cwd: string;
+  startedAt: number;
+  kind: string | null;
+  name: string | null;
+  entrypoint: string | null;
+  isAlive: boolean;
+  gitBranch: string | null;
+  status: string;
+  stats: SessionStats;
+  recentMessages: ConversationMessage[];
+  subagents: SubagentInfo[];
+}
+
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -280,6 +311,80 @@ async function mockInvoke<T>(
       return sessions as T;
     }
 
+    case "get_session_detail": {
+      await delay(300);
+      const now = Date.now();
+      return {
+        pid: (args as Record<string, unknown>)?.pid ?? 12345,
+        sessionId: (args as Record<string, unknown>)?.sessionId ?? "abc-123",
+        cwd: (args as Record<string, unknown>)?.cwd ?? "/mnt/c/dev/my-project",
+        startedAt: now - 3600000,
+        kind: "interactive",
+        name: "refactor-auth",
+        entrypoint: "cli",
+        isAlive: true,
+        gitBranch: "feature/auth-rework",
+        status: "idle",
+        stats: {
+          messageCount: 47,
+          userMessageCount: 22,
+          assistantMessageCount: 25,
+          totalInputTokens: 1250000,
+          totalOutputTokens: 48000,
+        },
+        recentMessages: [
+          {
+            role: "user",
+            timestamp: new Date(now - 300000).toISOString(),
+            summary: "Can you refactor the auth middleware to use JWT?",
+            toolName: null,
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now - 295000).toISOString(),
+            summary: "[Read]",
+            toolName: "Read",
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now - 280000).toISOString(),
+            summary:
+              "I see the current auth middleware uses session tokens. I'll refactor it to use JWT with refresh token rotation.",
+            toolName: null,
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now - 260000).toISOString(),
+            summary: "[Edit]",
+            toolName: "Edit",
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now - 240000).toISOString(),
+            summary:
+              "Done. The middleware now validates JWTs and handles refresh token rotation automatically.",
+            toolName: null,
+          },
+        ],
+        subagents: [
+          { agentType: "Explore", description: "Explore auth patterns" },
+          { agentType: "Plan", description: "Design JWT migration" },
+        ],
+      } as T;
+    }
+
+    case "kill_session": {
+      await delay(100);
+      console.log("[mock] kill_session", args);
+      return undefined as T;
+    }
+
+    case "open_in_explorer": {
+      await delay(100);
+      console.log("[mock] open_in_explorer", args);
+      return undefined as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -362,3 +467,21 @@ export function getAssociateRights(server: string, assocId: number): Promise<Rig
 export function getClaudeSessions(): Promise<ClaudeSession[]> {
   return invoke<ClaudeSession[]>("get_claude_sessions");
 }
+
+export function getSessionDetail(
+  sessionId: string,
+  cwd: string,
+  pid: number,
+): Promise<SessionDetail> {
+  return invoke<SessionDetail>("get_session_detail", { sessionId, cwd, pid });
+}
+
+export function killSession(pid: number): Promise<void> {
+  return invoke<void>("kill_session", { pid });
+}
+
+export function openInExplorer(cwd: string): Promise<void> {
+  return invoke<void>("open_in_explorer", { cwd });
+}
+
+export { isTauri };

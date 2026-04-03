@@ -2,7 +2,8 @@
 import { computed } from "vue";
 import type { ClaudeSession } from "@/lib/tauri";
 
-const props = defineProps<{ session: ClaudeSession }>();
+const props = defineProps<{ session: ClaudeSession; selected?: boolean }>();
+const emit = defineEmits<{ select: [session: ClaudeSession] }>();
 
 const shortCwd = computed(() => {
   const parts = props.session.cwd.split("/");
@@ -34,7 +35,7 @@ const agentTypeSummary = computed(() => {
 </script>
 
 <template>
-  <div class="session-card">
+  <div class="session-card" :class="{ selected }" @click="emit('select', session)">
     <div class="session-row">
       <span class="session-name" :title="session.cwd">{{ displayName }}</span>
       <span class="session-time">{{ relativeTime }}</span>
@@ -56,6 +57,13 @@ const agentTypeSummary = computed(() => {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-subtle);
   transition: background 0.1s ease;
+  cursor: pointer;
+}
+
+.session-card.selected {
+  background: var(--bg-selected);
+  border-left: 2px solid var(--accent-blue);
+  padding-left: 12px;
 }
 
 .session-card:last-child {
