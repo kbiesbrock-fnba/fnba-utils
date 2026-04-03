@@ -24,6 +24,23 @@
         "visible": false,
         "alwaysOnTop": true,
         "skipTaskbar": true
+      },
+      {
+        "label": "mission-control",
+        "title": "Mission Control",
+        "url": "index.html#mission-control",
+        "width": 320,
+        "height": 420,
+        "x": 0,
+        "y": 0,
+        "resizable": false,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
       }
     ],
     "security": {

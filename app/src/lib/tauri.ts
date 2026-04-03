@@ -64,6 +64,24 @@ export interface RightAssociate {
   lastName: string | null;
 }
 
+export interface SubagentInfo {
+  agentType: string;
+  description: string;
+}
+
+export interface ClaudeSession {
+  pid: number;
+  sessionId: string;
+  cwd: string;
+  startedAt: number;
+  kind: string | null;
+  name: string | null;
+  entrypoint: string | null;
+  isAlive: boolean;
+  subagentCount: number;
+  subagents: SubagentInfo[];
+}
+
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -208,6 +226,60 @@ async function mockInvoke<T>(
       ] as T;
     }
 
+    case "get_claude_sessions": {
+      await delay(200);
+      const now = Date.now();
+      const sessions: ClaudeSession[] = [
+        {
+          pid: 12345,
+          sessionId: "abc-123-def",
+          cwd: "/mnt/c/dev/my-project",
+          startedAt: now - 3600000,
+          kind: "interactive",
+          name: null,
+          entrypoint: "cli",
+          isAlive: true,
+          subagentCount: 3,
+          subagents: [
+            { agentType: "Explore", description: "Explore codebase structure" },
+            { agentType: "Explore", description: "Explore test patterns" },
+            { agentType: "Plan", description: "Design auth feature" },
+          ],
+        },
+        {
+          pid: 67890,
+          sessionId: "ghi-456-jkl",
+          cwd: "/mnt/c/dev/other-project",
+          startedAt: now - 900000,
+          kind: "interactive",
+          name: "refactor-auth",
+          entrypoint: "cli",
+          isAlive: true,
+          subagentCount: 1,
+          subagents: [
+            { agentType: "Plan", description: "Plan migration strategy" },
+          ],
+        },
+        ...(Math.random() > 0.5
+          ? [
+              {
+                pid: 11111,
+                sessionId: "mno-789-pqr",
+                cwd: "/mnt/c/dev/docs",
+                startedAt: now - 120000,
+                kind: "interactive",
+                name: "update-readme",
+                entrypoint: "cli",
+                isAlive: true,
+                subagentCount: 0,
+                subagents: [],
+              } satisfies ClaudeSession,
+            ]
+          : []),
+      ];
+      return sessions as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -285,4 +357,8 @@ export function searchAssociates(server: string, query: string): Promise<RightAs
 
 export function getAssociateRights(server: string, assocId: number): Promise<RightInfo[]> {
   return invoke<RightInfo[]>("get_associate_rights", { server, assocId });
+}
+
+export function getClaudeSessions(): Promise<ClaudeSession[]> {
+  return invoke<ClaudeSession[]>("get_claude_sessions");
 }

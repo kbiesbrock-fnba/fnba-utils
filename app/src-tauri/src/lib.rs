@@ -35,7 +35,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // --- Global Shortcut: Win+Shift+F ---
+            // --- Global Shortcut: Win+Shift+F (command palette) ---
             app.global_shortcut().on_shortcut(
                 "Super+Shift+F",
                 move |app: &AppHandle, _shortcut, event| {
@@ -63,6 +63,40 @@ pub fn run() {
                 },
             )?;
 
+            // --- Global Shortcut: Win+Shift+C (Mission Control) ---
+            app.global_shortcut().on_shortcut(
+                "Super+Shift+C",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(w) = app.get_webview_window("mission-control") {
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
+                            } else {
+                                // Position at bottom-left of the current monitor
+                                if let Ok(Some(monitor)) = w.current_monitor() {
+                                    let mon_size = monitor.size();
+                                    let mon_pos = monitor.position();
+                                    let win_size = w.outer_size().unwrap_or(
+                                        tauri::PhysicalSize::new(320, 420),
+                                    );
+                                    let margin = 16;
+                                    let x = mon_pos.x + margin;
+                                    let y = mon_pos.y + mon_size.height as i32
+                                        - win_size.height as i32
+                                        - margin
+                                        - 48; // taskbar clearance
+                                    let _ = w.set_position(tauri::Position::Physical(
+                                        tauri::PhysicalPosition::new(x, y),
+                                    ));
+                                }
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    }
+                },
+            )?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -75,6 +109,7 @@ pub fn run() {
             commands::right_lookup::get_right_associates,
             commands::right_lookup::search_associates,
             commands::right_lookup::get_associate_rights,
+            commands::mission_control::get_claude_sessions,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
