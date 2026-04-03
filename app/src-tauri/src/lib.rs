@@ -122,6 +122,9 @@ pub fn run() {
         if let Some(w) = handle.get_webview_window("main") {
             let _ = w.destroy();
         }
+        if let Some(w) = handle.get_webview_window("mission-control") {
+            let _ = w.destroy();
+        }
         handle.exit(0);
     })
     .expect("failed to set Ctrl+C handler");
