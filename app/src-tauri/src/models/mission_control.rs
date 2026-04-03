@@ -58,3 +58,14 @@ pub struct SessionDetail {
     pub recent_messages: Vec<ConversationMessage>,
     pub subagents: Vec<SubagentInfo>,
 }
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionStatus {
+    pub label: String,
+    pub server: String,
+    pub acting_as_login: Option<String>,
+    pub acting_as_name: Option<String>,
+    pub is_self: bool,
+    pub error: Option<String>,
+}

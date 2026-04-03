@@ -77,31 +77,15 @@ where
     deserializer.deserialize_seq(ConnectionVisitor)
 }
 
-/// Return one entry per label+username pair (no deduplication).
-#[tauri::command]
-pub async fn get_identity_data() -> Result<IdentityData, String> {
+/// Load all connections (defaults + custom), sorted with "Local" first.
+/// Returns `(current_user, connections)`.
+pub fn load_all_connections() -> Result<(String, Vec<IdentityConnection>), String> {
     let current_user = get_windows_username()?;
     let defaults: DefaultsFile =
         serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
 
-    // Build imposters list: current user first, then defaults, then custom (deduped)
-    let mut imposters = vec![IdentityImposter {
-        name: current_user.clone(),
-        is_custom: false,
-    }];
-    for imp in &defaults.imposters {
-        if !imposters.iter().any(|i| i.name.eq_ignore_ascii_case(imp)) {
-            imposters.push(IdentityImposter {
-                name: imp.clone(),
-                is_custom: false,
-            });
-        }
-    }
-
-    let mut all_users = defaults.users;
     let mut all_connections = defaults.connections;
 
-    // Merge custom data from ~/.assumeIdentity.json
     if let Some(home) = dirs::home_dir() {
         let custom_path = home.join(".assumeIdentity.json");
         if custom_path.exists() {
@@ -109,21 +93,6 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
                 .map_err(|e| format!("Failed to read ~/.assumeIdentity.json: {e}"))?;
             let custom: CustomData = serde_json::from_str(&contents)
                 .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
-            for imp in custom.imposters {
-                if !imposters
-                    .iter()
-                    .any(|i| i.name.eq_ignore_ascii_case(&imp))
-                {
-                    imposters.push(IdentityImposter {
-                        name: imp,
-                        is_custom: true,
-                    });
-                }
-            }
-            for mut user in custom.users {
-                user.is_custom = true;
-                all_users.push(user);
-            }
             for conn in custom.connections {
                 if !all_connections
                     .iter()
@@ -148,6 +117,59 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
             _ => a.label.cmp(&b.label),
         }
     });
+
+    Ok((current_user, all_connections))
+}
+
+/// Return one entry per label+username pair (no deduplication).
+#[tauri::command]
+pub async fn get_identity_data() -> Result<IdentityData, String> {
+    let (current_user, all_connections) = load_all_connections()?;
+
+    let defaults: DefaultsFile =
+        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
+
+    // Build imposters list: current user first, then defaults, then custom (deduped)
+    let mut imposters = vec![IdentityImposter {
+        name: current_user.clone(),
+        is_custom: false,
+    }];
+    for imp in &defaults.imposters {
+        if !imposters.iter().any(|i| i.name.eq_ignore_ascii_case(imp)) {
+            imposters.push(IdentityImposter {
+                name: imp.clone(),
+                is_custom: false,
+            });
+        }
+    }
+
+    let mut all_users = defaults.users;
+
+    // Merge custom imposters and users from ~/.assumeIdentity.json
+    if let Some(home) = dirs::home_dir() {
+        let custom_path = home.join(".assumeIdentity.json");
+        if custom_path.exists() {
+            let contents = std::fs::read_to_string(&custom_path)
+                .map_err(|e| format!("Failed to read ~/.assumeIdentity.json: {e}"))?;
+            let custom: CustomData = serde_json::from_str(&contents)
+                .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
+            for imp in custom.imposters {
+                if !imposters
+                    .iter()
+                    .any(|i| i.name.eq_ignore_ascii_case(&imp))
+                {
+                    imposters.push(IdentityImposter {
+                        name: imp,
+                        is_custom: true,
+                    });
+                }
+            }
+            for mut user in custom.users {
+                user.is_custom = true;
+                all_users.push(user);
+            }
+        }
+    }
 
     Ok(IdentityData {
         current_user,

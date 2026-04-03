@@ -113,6 +113,15 @@ export interface SessionDetail {
   subagents: SubagentInfo[];
 }
 
+export interface ConnectionStatus {
+  label: string;
+  server: string;
+  actingAsLogin: string | null;
+  actingAsName: string | null;
+  isSelf: boolean;
+  error: string | null;
+}
+
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -311,6 +320,36 @@ async function mockInvoke<T>(
       return sessions as T;
     }
 
+    case "get_connection_statuses": {
+      await delay(1200);
+      return [
+        {
+          label: "Local",
+          server: "dsqlaleroy.fnba-dev.network",
+          actingAsLogin: "FNBA\\mockuser",
+          actingAsName: "self",
+          isSelf: true,
+          error: null,
+        },
+        {
+          label: "Development",
+          server: "meleagris.fnba.com",
+          actingAsLogin: "FNBA\\ccollins",
+          actingAsName: "Chris Collins",
+          isSelf: false,
+          error: null,
+        },
+        {
+          label: "Staging",
+          server: "caster.fnba.com",
+          actingAsLogin: null,
+          actingAsName: null,
+          isSelf: false,
+          error: "Connection to caster.fnba.com timed out after 8s",
+        },
+      ] as T;
+    }
+
     case "get_session_detail": {
       await delay(300);
       const now = Date.now();
@@ -466,6 +505,10 @@ export function getAssociateRights(server: string, assocId: number): Promise<Rig
 
 export function getClaudeSessions(): Promise<ClaudeSession[]> {
   return invoke<ClaudeSession[]>("get_claude_sessions");
+}
+
+export function getConnectionStatuses(): Promise<ConnectionStatus[]> {
+  return invoke<ConnectionStatus[]>("get_connection_statuses");
 }
 
 export function getSessionDetail(

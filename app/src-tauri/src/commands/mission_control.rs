@@ -1,9 +1,13 @@
+use crate::commands::assume_identity::load_all_connections;
+use crate::db;
 use crate::models::mission_control::{
-    ClaudeSession, ConversationMessage, SessionDetail, SessionStats, SubagentInfo,
+    ClaudeSession, ConnectionStatus, ConversationMessage, SessionDetail, SessionStats, SubagentInfo,
 };
 use std::collections::VecDeque;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::time::timeout;
 
 // --- Shared helpers ---
 
@@ -193,6 +197,77 @@ pub async fn get_claude_sessions() -> Result<Vec<ClaudeSession>, String> {
     all_sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
 
     Ok(all_sessions)
+}
+
+// --- Connection statuses ---
+
+const STATUS_QUERY_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[tauri::command]
+pub async fn get_connection_statuses() -> Result<Vec<ConnectionStatus>, String> {
+    let (current_user, connections) = load_all_connections()?;
+
+    let mut handles = Vec::new();
+    for conn in connections {
+        let imposter = current_user.clone();
+        let label = conn.label.clone();
+        let server = conn.server.clone();
+        handles.push(tokio::spawn(async move {
+            match timeout(STATUS_QUERY_TIMEOUT, async {
+                let mut client = db::connect(&server).await?;
+                db::check_acting_as(&mut client, &imposter).await
+            })
+            .await
+            {
+                Ok(Ok((login, name, is_self))) => ConnectionStatus {
+                    label,
+                    server,
+                    acting_as_login: Some(login),
+                    acting_as_name: Some(name),
+                    is_self,
+                    error: None,
+                },
+                Ok(Err(e)) => ConnectionStatus {
+                    label,
+                    server,
+                    acting_as_login: None,
+                    acting_as_name: None,
+                    is_self: false,
+                    error: Some(e),
+                },
+                Err(_) => ConnectionStatus {
+                    label,
+                    server,
+                    acting_as_login: None,
+                    acting_as_name: None,
+                    is_self: false,
+                    error: Some(format!(
+                        "Timed out after {}s",
+                        STATUS_QUERY_TIMEOUT.as_secs()
+                    )),
+                },
+            }
+        }));
+    }
+
+    let mut results = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(status) => results.push(status),
+            Err(e) => {
+                results.push(ConnectionStatus {
+                    label: "unknown".into(),
+                    server: "unknown".into(),
+                    acting_as_login: None,
+                    acting_as_name: None,
+                    is_self: false,
+                    error: Some(format!("Task failed: {e}")),
+                });
+            }
+        }
+    }
+
+    Ok(results)
 }
 
 // --- Session detail ---

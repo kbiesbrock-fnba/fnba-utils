@@ -77,7 +77,7 @@ pub fn run() {
                                     let mon_size = monitor.size();
                                     let mon_pos = monitor.position();
                                     let win_size = w.outer_size().unwrap_or(
-                                        tauri::PhysicalSize::new(320, 420),
+                                        tauri::PhysicalSize::new(320, 560),
                                     );
                                     let margin = 16;
                                     let x = mon_pos.x + margin;
@@ -110,6 +110,7 @@ pub fn run() {
             commands::right_lookup::search_associates,
             commands::right_lookup::get_associate_rights,
             commands::mission_control::get_claude_sessions,
+            commands::mission_control::get_connection_statuses,
             commands::mission_control::get_session_detail,
             commands::mission_control::kill_session,
             commands::mission_control::open_in_explorer,

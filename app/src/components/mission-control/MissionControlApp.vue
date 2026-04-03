@@ -1,8 +1,20 @@
 <script setup lang="ts">
 import { useMissionControl } from "@/composables/useMissionControl";
+import ConnectionStatusPanel from "./ConnectionStatusPanel.vue";
 import SessionCard from "./SessionCard.vue";
 
-const { pinned, sessions, selectedPid, togglePin, selectSession } = useMissionControl();
+const {
+  pinned,
+  sessions,
+  selectedPid,
+  togglePin,
+  selectSession,
+  connectionStatuses,
+  connectionsLoading,
+  connectionsCollapsed,
+  toggleConnectionsCollapsed,
+  refreshConnections,
+} = useMissionControl();
 </script>
 
 <template>
@@ -20,6 +32,14 @@ const { pinned, sessions, selectedPid, togglePin, selectSession } = useMissionCo
         </svg>
       </button>
     </div>
+    <div class="mc-divider" />
+    <ConnectionStatusPanel
+      :statuses="connectionStatuses"
+      :loading="connectionsLoading"
+      :collapsed="connectionsCollapsed"
+      @toggle="toggleConnectionsCollapsed"
+      @refresh="refreshConnections"
+    />
     <div class="mc-divider" />
     <div class="mc-list">
       <div v-if="sessions.length === 0" class="mc-empty">

@@ -204,6 +204,54 @@ END";
     Ok(SwitchOutcome::Switched { before, after })
 }
 
+pub async fn check_acting_as(
+    client: &mut SqlClient,
+    imposter: &str,
+) -> Result<(String, String, bool), String> {
+    let sql = "\
+DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + @P1;
+
+SELECT
+    ISNULL(
+        (SELECT MIN(al2.domain_username)
+         FROM logincheck.fnba_reporting.associate_login al2
+         WHERE al2.assoc_id = al.assoc_id
+           AND al2.domain_username <> @ImposterLogin),
+        @ImposterLogin
+    ) AS acting_as_login,
+    per.first_name + ' ' + per.last_name AS acting_as_name
+FROM logincheck.fnba_reporting.associate_login al
+JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
+WHERE al.domain_username = @ImposterLogin;";
+
+    let row = client
+        .query(sql, &[&imposter])
+        .await
+        .map_err(|e| format!("Status query failed: {e}"))?
+        .into_row()
+        .await
+        .map_err(|e| format!("Status result read failed: {e}"))?;
+
+    match row {
+        Some(row) => {
+            let acting_as_login = row
+                .try_get::<&str, _>("acting_as_login")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("")
+                .to_string();
+            let acting_as_name = row
+                .try_get::<&str, _>("acting_as_name")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("unknown")
+                .to_string();
+            let imposter_login = format!("FNBA\\{imposter}");
+            let is_self = acting_as_login == imposter_login || acting_as_login.is_empty();
+            Ok((acting_as_login, acting_as_name, is_self))
+        }
+        None => Err(format!("Login FNBA\\{imposter} not found")),
+    }
+}
+
 fn parse_login(row: &Row, imposter: &str) -> String {
     let login = row
         .try_get::<&str, _>("acting_as_login")

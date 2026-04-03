@@ -1,13 +1,17 @@
 import { ref } from "vue";
 import {
   getClaudeSessions,
+  getConnectionStatuses,
   hideWindow,
   isTauri,
   type ClaudeSession,
+  type ConnectionStatus,
 } from "@/lib/tauri";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
+const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
 const POLL_INTERVAL = 3000;
+const CONNECTIONS_POLL_INTERVAL = 30000;
 
 function readPinned(): boolean {
   try {
@@ -25,13 +29,34 @@ function writePinned(v: boolean) {
   }
 }
 
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(CONNECTIONS_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeCollapsed(v: boolean) {
+  try {
+    localStorage.setItem(CONNECTIONS_COLLAPSED_KEY, String(v));
+  } catch {
+    // ignore
+  }
+}
+
 const pinned = ref(readPinned());
 const sessions = ref<ClaudeSession[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const selectedPid = ref<number | null>(null);
 
+const connectionStatuses = ref<ConnectionStatus[]>([]);
+const connectionsLoading = ref(false);
+const connectionsCollapsed = ref(readCollapsed());
+
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let connectionsPollTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
 
 async function fetchSessions() {
@@ -50,6 +75,23 @@ function startPolling() {
   if (pollTimer) return;
   fetchSessions();
   pollTimer = setInterval(fetchSessions, POLL_INTERVAL);
+}
+
+async function fetchConnectionStatuses() {
+  try {
+    connectionsLoading.value = true;
+    connectionStatuses.value = await getConnectionStatuses();
+  } catch (e) {
+    console.error("Connection status fetch failed:", e);
+  } finally {
+    connectionsLoading.value = false;
+  }
+}
+
+function startConnectionsPolling() {
+  if (connectionsPollTimer) return;
+  fetchConnectionStatuses();
+  connectionsPollTimer = setInterval(fetchConnectionStatuses, CONNECTIONS_POLL_INTERVAL);
 }
 
 async function showDetailWindow() {
@@ -108,6 +150,7 @@ export function useMissionControl() {
   if (!initialized) {
     initialized = true;
     startPolling();
+    startConnectionsPolling();
 
     window.addEventListener("blur", () => {
       if (!pinned.value) {
@@ -136,6 +179,15 @@ export function useMissionControl() {
     writePinned(pinned.value);
   }
 
+  function toggleConnectionsCollapsed() {
+    connectionsCollapsed.value = !connectionsCollapsed.value;
+    writeCollapsed(connectionsCollapsed.value);
+  }
+
+  function refreshConnections() {
+    fetchConnectionStatuses();
+  }
+
   return {
     pinned,
     sessions,
@@ -145,5 +197,10 @@ export function useMissionControl() {
     dismiss,
     togglePin,
     selectSession,
+    connectionStatuses,
+    connectionsLoading,
+    connectionsCollapsed,
+    toggleConnectionsCollapsed,
+    refreshConnections,
   };
 }
