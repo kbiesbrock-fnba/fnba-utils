@@ -7,15 +7,32 @@ import {
   type SessionDetail,
 } from "@/lib/tauri";
 
+const PINNED_KEY = "fnba-utils:session-detail-pinned";
+
 const detail = ref<SessionDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const pinned = ref(localStorage.getItem(PINNED_KEY) === "true");
 
 let listening = false;
+
+function togglePin() {
+  pinned.value = !pinned.value;
+  try { localStorage.setItem(PINNED_KEY, String(pinned.value)); } catch { /* ignore */ }
+}
 
 async function startListening() {
   if (listening) return;
   listening = true;
+
+  window.addEventListener("blur", async () => {
+    if (!pinned.value) {
+      if (isTauri) {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().hide();
+      }
+    }
+  });
 
   if (isTauri) {
     const { listen } = await import("@tauri-apps/api/event");
@@ -83,5 +100,5 @@ function copyInfo(): string {
 
 export function useSessionDetail() {
   startListening();
-  return { detail, loading, error, kill, openCwd, copyInfo, fetchDetail };
+  return { detail, loading, error, pinned, kill, openCwd, copyInfo, fetchDetail, togglePin };
 }

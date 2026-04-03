@@ -5,7 +5,7 @@ import SessionDetailStats from "./SessionDetailStats.vue";
 import SessionDetailActivity from "./SessionDetailActivity.vue";
 import SessionDetailActions from "./SessionDetailActions.vue";
 
-const { detail, loading, error } = useSessionDetail();
+const { detail, loading, error, pinned, togglePin } = useSessionDetail();
 </script>
 
 <template>
@@ -16,7 +16,7 @@ const { detail, loading, error } = useSessionDetail();
     <div v-else-if="loading && !detail" class="sd-empty">Loading...</div>
     <div v-else-if="error" class="sd-empty sd-error">{{ error }}</div>
     <template v-else-if="detail">
-      <SessionDetailHeader :detail="detail" />
+      <SessionDetailHeader :detail="detail" :pinned="pinned" @toggle-pin="togglePin" />
       <div class="sd-divider" />
       <SessionDetailStats :stats="detail.stats" :subagent-count="detail.subagents.length" />
       <div class="sd-divider" />

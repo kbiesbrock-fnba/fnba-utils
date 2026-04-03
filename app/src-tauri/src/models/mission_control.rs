@@ -69,3 +69,11 @@ pub struct ConnectionStatus {
     pub is_self: bool,
     pub error: Option<String>,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub row_count: usize,
+}

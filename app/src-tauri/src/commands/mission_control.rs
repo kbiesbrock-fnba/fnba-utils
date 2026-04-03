@@ -1,7 +1,8 @@
 use crate::commands::assume_identity::load_all_connections;
 use crate::db;
 use crate::models::mission_control::{
-    ClaudeSession, ConnectionStatus, ConversationMessage, SessionDetail, SessionStats, SubagentInfo,
+    ClaudeSession, ConnectionStatus, ConversationMessage, QueryResult, SessionDetail, SessionStats,
+    SubagentInfo,
 };
 use std::collections::VecDeque;
 use std::io::BufRead;
@@ -268,6 +269,38 @@ pub async fn get_connection_statuses() -> Result<Vec<ConnectionStatus>, String> 
     }
 
     Ok(results)
+}
+
+// --- Ad-hoc SQL query ---
+
+#[tauri::command]
+pub async fn execute_sql_query(
+    server: String,
+    database: String,
+    sql: String,
+) -> Result<QueryResult, String> {
+    let server = server.trim().to_string();
+    let database = database.trim().to_string();
+    let sql = sql.trim().to_string();
+
+    if server.is_empty() {
+        return Err("Server cannot be empty".into());
+    }
+    if sql.is_empty() {
+        return Err("Query cannot be empty".into());
+    }
+
+    let db_name = if database.is_empty() { "master" } else { &database };
+
+    let mut client = db::connect_to(&server, db_name).await?;
+    let (columns, rows) = db::execute_query(&mut client, &sql).await?;
+    let row_count = rows.len();
+
+    Ok(QueryResult {
+        columns,
+        rows,
+        row_count,
+    })
 }
 
 // --- Session detail ---

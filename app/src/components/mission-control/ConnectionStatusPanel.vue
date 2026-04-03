@@ -11,6 +11,7 @@ defineProps<{
 const emit = defineEmits<{
   toggle: [];
   refresh: [];
+  select: [status: ConnectionStatus];
 }>();
 </script>
 
@@ -44,7 +45,12 @@ const emit = defineEmits<{
     <div v-if="!collapsed" class="conn-list">
       <div v-if="statuses.length === 0 && loading" class="conn-empty">Loading...</div>
       <div v-else-if="statuses.length === 0" class="conn-empty">No connections configured</div>
-      <ConnectionStatusRow v-for="s in statuses" :key="s.server" :status="s" />
+      <ConnectionStatusRow
+        v-for="s in statuses"
+        :key="s.server"
+        :status="s"
+        @dblclick="!s.error && emit('select', s)"
+      />
     </div>
   </div>
 </template>

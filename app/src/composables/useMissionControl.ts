@@ -10,59 +10,50 @@ import {
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
+const SESSIONS_COLLAPSED_KEY = "fnba-utils:mc-sessions-collapsed";
 const POLL_INTERVAL = 3000;
 const CONNECTIONS_POLL_INTERVAL = 30000;
+const BLUR_SUPPRESS_MS = 300;
 
-function readPinned(): boolean {
+function readBool(key: string): boolean {
   try {
-    return localStorage.getItem(PINNED_KEY) === "true";
+    return localStorage.getItem(key) === "true";
   } catch {
     return false;
   }
 }
 
-function writePinned(v: boolean) {
+function writeBool(key: string, v: boolean) {
   try {
-    localStorage.setItem(PINNED_KEY, String(v));
+    localStorage.setItem(key, String(v));
   } catch {
     // ignore
   }
 }
 
-function readCollapsed(): boolean {
-  try {
-    return localStorage.getItem(CONNECTIONS_COLLAPSED_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function writeCollapsed(v: boolean) {
-  try {
-    localStorage.setItem(CONNECTIONS_COLLAPSED_KEY, String(v));
-  } catch {
-    // ignore
-  }
-}
-
-const pinned = ref(readPinned());
+const pinned = ref(readBool(PINNED_KEY));
 const sessions = ref<ClaudeSession[]>([]);
-const loading = ref(false);
+const loading = ref(true);
 const error = ref<string | null>(null);
 const selectedPid = ref<number | null>(null);
 
 const connectionStatuses = ref<ConnectionStatus[]>([]);
-const connectionsLoading = ref(false);
-const connectionsCollapsed = ref(readCollapsed());
+const connectionsLoading = ref(true);
+const connectionsCollapsed = ref(readBool(CONNECTIONS_COLLAPSED_KEY));
+const sessionsCollapsed = ref(readBool(SESSIONS_COLLAPSED_KEY));
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let connectionsPollTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
+let suppressBlur = false;
 
 async function fetchSessions() {
   try {
-    loading.value = true;
-    sessions.value = await getClaudeSessions();
+    const next = await getClaudeSessions();
+    // Skip reactive update if nothing changed
+    if (JSON.stringify(next) !== JSON.stringify(sessions.value)) {
+      sessions.value = next;
+    }
     error.value = null;
   } catch (e) {
     error.value = String(e);
@@ -79,8 +70,10 @@ function startPolling() {
 
 async function fetchConnectionStatuses() {
   try {
-    connectionsLoading.value = true;
-    connectionStatuses.value = await getConnectionStatuses();
+    const next = await getConnectionStatuses();
+    if (JSON.stringify(next) !== JSON.stringify(connectionStatuses.value)) {
+      connectionStatuses.value = next;
+    }
   } catch (e) {
     console.error("Connection status fetch failed:", e);
   } finally {
@@ -94,56 +87,62 @@ function startConnectionsPolling() {
   connectionsPollTimer = setInterval(fetchConnectionStatuses, CONNECTIONS_POLL_INTERVAL);
 }
 
-async function showDetailWindow() {
+// --- Side window helpers (session-detail, sql-query, etc.) ---
+
+async function showSideWindow(label: string) {
   if (!isTauri) return;
 
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { PhysicalPosition } = await import("@tauri-apps/api/dpi");
 
-  const detailWin = await WebviewWindow.getByLabel("session-detail");
-  console.log("[mc] detailWin =", detailWin);
-  if (!detailWin) return;
+  const win = await WebviewWindow.getByLabel(label);
+  if (!win) return;
 
   const mcWin = getCurrentWindow();
-  const mcPos = await mcWin.outerPosition();
-  const mcSize = await mcWin.outerSize();
+  const [mcPos, mcSize] = await Promise.all([
+    mcWin.outerPosition(),
+    mcWin.outerSize(),
+  ]);
 
-  // Position detail window to the right of mission control with 8px gap
-  const x = mcPos.x + mcSize.width + 8;
-  const y = mcPos.y;
-
-  await detailWin.setPosition(new PhysicalPosition(x, y));
-  await detailWin.show();
-  await detailWin.setFocus();
+  await win.setPosition(new PhysicalPosition(mcPos.x + mcSize.width + 8, mcPos.y));
+  await win.show();
+  await win.setFocus();
 }
 
-async function hideDetailWindow() {
+async function hideSideWindow(label: string) {
   if (!isTauri) return;
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-  const win = await WebviewWindow.getByLabel("session-detail");
+  const win = await WebviewWindow.getByLabel(label);
   if (win) await win.hide();
 }
 
-async function selectSession(session: ClaudeSession) {
-  console.log("[mc] selectSession called", session.pid);
-  selectedPid.value = session.pid;
+async function openSideWindowWithEvent(
+  label: string,
+  eventName: string,
+  payload: Record<string, unknown>,
+) {
+  suppressBlur = true;
   try {
-    await showDetailWindow();
-    console.log("[mc] showDetailWindow done");
+    await showSideWindow(label);
   } catch (e) {
-    console.error("[mc] showDetailWindow failed", e);
+    console.error(`[mc] show ${label} failed`, e);
   }
+  setTimeout(() => { suppressBlur = false; }, BLUR_SUPPRESS_MS);
 
   if (isTauri) {
     const { emit } = await import("@tauri-apps/api/event");
-    await emit("session-selected", {
-      sessionId: session.sessionId,
-      cwd: session.cwd,
-      pid: session.pid,
-    });
-    console.log("[mc] event emitted");
+    await emit(eventName, payload);
   }
+}
+
+async function selectSession(session: ClaudeSession) {
+  selectedPid.value = session.pid;
+  await openSideWindowWithEvent("session-detail", "session-selected", {
+    sessionId: session.sessionId,
+    cwd: session.cwd,
+    pid: session.pid,
+  });
 }
 
 export function useMissionControl() {
@@ -153,7 +152,7 @@ export function useMissionControl() {
     startConnectionsPolling();
 
     window.addEventListener("blur", () => {
-      if (!pinned.value) {
+      if (!pinned.value && !suppressBlur) {
         dismiss();
       }
     });
@@ -170,18 +169,42 @@ export function useMissionControl() {
   }
 
   function dismiss() {
-    hideDetailWindow();
+    hideSideWindow("session-detail");
+    hideSideWindow("sql-query");
     hideWindow();
+  }
+
+  async function selectConnection(status: ConnectionStatus) {
+    // Write to localStorage so sql-query window can read on init
+    // (before the event listener is ready)
+    try {
+      localStorage.setItem(
+        "fnba-utils:sql-query-connection",
+        JSON.stringify({ server: status.server, label: status.label }),
+      );
+    } catch {
+      // ignore
+    }
+
+    await openSideWindowWithEvent("sql-query", "connection-selected", {
+      server: status.server,
+      label: status.label,
+    });
   }
 
   function togglePin() {
     pinned.value = !pinned.value;
-    writePinned(pinned.value);
+    writeBool(PINNED_KEY, pinned.value);
   }
 
   function toggleConnectionsCollapsed() {
     connectionsCollapsed.value = !connectionsCollapsed.value;
-    writeCollapsed(connectionsCollapsed.value);
+    writeBool(CONNECTIONS_COLLAPSED_KEY, connectionsCollapsed.value);
+  }
+
+  function toggleSessionsCollapsed() {
+    sessionsCollapsed.value = !sessionsCollapsed.value;
+    writeBool(SESSIONS_COLLAPSED_KEY, sessionsCollapsed.value);
   }
 
   function refreshConnections() {
@@ -194,13 +217,16 @@ export function useMissionControl() {
     loading,
     error,
     selectedPid,
+    sessionsCollapsed,
     dismiss,
     togglePin,
     selectSession,
+    toggleSessionsCollapsed,
     connectionStatuses,
     connectionsLoading,
     connectionsCollapsed,
     toggleConnectionsCollapsed,
     refreshConnections,
+    selectConnection,
   };
 }

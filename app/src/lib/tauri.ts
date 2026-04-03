@@ -122,6 +122,12 @@ export interface ConnectionStatus {
   error: string | null;
 }
 
+export interface QueryResult {
+  columns: string[];
+  rows: string[][];
+  rowCount: number;
+}
+
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -350,6 +356,21 @@ async function mockInvoke<T>(
       ] as T;
     }
 
+    case "execute_sql_query": {
+      await delay(800);
+      const q = ((args?.sql as string) ?? "").toLowerCase();
+      if (q.includes("error")) throw new Error("Mock SQL error: syntax error near 'error'");
+      return {
+        columns: ["id", "name", "status", "created_at"],
+        rows: [
+          ["1", "Alice", "active", "2026-01-15 09:30:00"],
+          ["2", "Bob", "inactive", "2026-02-20 14:15:00"],
+          ["3", "Charlie", "active", "2026-03-10 11:00:00"],
+        ],
+        rowCount: 3,
+      } as T;
+    }
+
     case "get_session_detail": {
       await delay(300);
       const now = Date.now();
@@ -509,6 +530,14 @@ export function getClaudeSessions(): Promise<ClaudeSession[]> {
 
 export function getConnectionStatuses(): Promise<ConnectionStatus[]> {
   return invoke<ConnectionStatus[]>("get_connection_statuses");
+}
+
+export function executeSqlQuery(
+  server: string,
+  database: string,
+  sql: string,
+): Promise<QueryResult> {
+  return invoke<QueryResult>("execute_sql_query", { server, database, sql });
 }
 
 export function getSessionDetail(

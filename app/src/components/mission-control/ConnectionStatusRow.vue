@@ -28,7 +28,7 @@ const tooltip = computed(() => {
 </script>
 
 <template>
-  <div class="conn-row" :title="tooltip">
+  <div class="conn-row" :class="{ clickable: !status.error }" :title="tooltip">
     <span class="conn-dot" :class="dotClass" />
     <span class="conn-server">{{ shortServer }}</span>
     <span class="conn-badge">{{ status.label }}</span>
@@ -44,6 +44,10 @@ const tooltip = computed(() => {
   padding: 5px 14px;
   font-size: 12px;
   transition: background 0.1s ease;
+}
+
+.conn-row.clickable {
+  cursor: pointer;
 }
 
 .conn-row:hover {
