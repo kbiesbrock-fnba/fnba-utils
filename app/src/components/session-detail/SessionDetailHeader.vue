@@ -23,9 +23,11 @@ const elapsed = computed(() => {
   return `${days}d ${hrs % 24}h`;
 });
 
-const statusColor = computed(() =>
-  props.detail.status === "busy" ? "var(--accent-yellow)" : "var(--accent-green)",
-);
+const statusColor = computed(() => {
+  if (props.detail.status === "busy") return "var(--accent-yellow)";
+  if (props.detail.status === "dead") return "var(--accent-red)";
+  return "var(--accent-green)";
+});
 </script>
 
 <template>

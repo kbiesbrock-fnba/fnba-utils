@@ -69,6 +69,8 @@ export interface SubagentInfo {
   description: string;
 }
 
+export type SessionStatus = "idle" | "busy" | "dead" | "unknown";
+
 export interface ClaudeSession {
   pid: number;
   sessionId: string;
@@ -80,7 +82,7 @@ export interface ClaudeSession {
   isAlive: boolean;
   subagentCount: number;
   subagents: SubagentInfo[];
-  status: string;
+  status: SessionStatus;
   lastMessageAt: string | null;
 }
 
@@ -109,7 +111,7 @@ export interface SessionDetail {
   entrypoint: string | null;
   isAlive: boolean;
   gitBranch: string | null;
-  status: string;
+  status: SessionStatus;
   stats: SessionStats;
   recentMessages: ConversationMessage[];
   subagents: SubagentInfo[];
@@ -128,6 +130,18 @@ export interface QueryResult {
   columns: string[];
   rows: string[][];
   rowCount: number;
+}
+
+// --- PTY session types ---
+
+export interface PtyDataEvent {
+  sessionId: string;
+  /** Base64-encoded terminal output bytes. */
+  data: string;
+}
+
+export interface PtyClosedEvent {
+  sessionId: string;
 }
 
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
@@ -447,9 +461,42 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
-    case "send_session_prompt": {
-      await delay(300);
-      console.log("[mock] send_session_prompt", args);
+    case "pickup_session": {
+      console.log("[mock] pickup_session", args);
+      const sid = (args?.sessionId as string) ?? "mock-session";
+      // Simulate PTY output with fake terminal data
+      const encoder = new TextEncoder();
+      (async () => {
+        await delay(500);
+        const lines = [
+          "\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m\r\n",
+          "\x1b[1;36m│\x1b[0m  Claude Code  \x1b[2mv2.1.92\x1b[0m              \x1b[1;36m│\x1b[0m\r\n",
+          "\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m\r\n\r\n",
+          "\x1b[1;32m>\x1b[0m Resuming session... \r\n\r\n",
+          "\x1b[1;33mclaude\x1b[0m \x1b[2m(mock mode)\x1b[0m\r\n\r\n",
+        ];
+        for (const line of lines) {
+          await delay(200);
+          const b64 = btoa(String.fromCharCode(...encoder.encode(line)));
+          window.dispatchEvent(new CustomEvent("mock-pty-data", {
+            detail: { sessionId: sid, data: b64 },
+          }));
+        }
+      })();
+      return undefined as T;
+    }
+
+    case "write_pty": {
+      console.log("[mock] write_pty", args);
+      return undefined as T;
+    }
+
+    case "resize_pty": {
+      return undefined as T;
+    }
+
+    case "drop_pty": {
+      console.log("[mock] drop_pty", args);
       return undefined as T;
     }
 
@@ -566,8 +613,46 @@ export function killSession(pid: number): Promise<void> {
   return invoke<void>("kill_session", { pid });
 }
 
-export function sendSessionPrompt(sessionId: string, cwd: string, prompt: string): Promise<void> {
-  return invoke<void>("send_session_prompt", { sessionId, cwd, prompt });
+export function pickupSession(sessionId: string, cwd: string, pid: number, cols: number, rows: number, name?: string | null): Promise<void> {
+  return invoke<void>("pickup_session", { sessionId, cwd, pid, cols, rows, name: name ?? null });
+}
+
+export function writePty(sessionId: string, data: string): Promise<void> {
+  return invoke<void>("write_pty", { sessionId, data });
+}
+
+export function resizePty(sessionId: string, cols: number, rows: number): Promise<void> {
+  return invoke<void>("resize_pty", { sessionId, cols, rows });
+}
+
+export function dropPty(sessionId: string): Promise<void> {
+  return invoke<void>("drop_pty", { sessionId });
+}
+
+/** Listen for PTY output data. Returns an unlisten function. */
+export async function onPtyData(
+  handler: (event: PtyDataEvent) => void,
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<PtyDataEvent>("pty-data", (e) => handler(e.payload));
+  }
+  const listener = (e: Event) => handler((e as CustomEvent).detail);
+  window.addEventListener("mock-pty-data", listener);
+  return () => window.removeEventListener("mock-pty-data", listener);
+}
+
+/** Listen for PTY session closed. Returns an unlisten function. */
+export async function onPtyClosed(
+  handler: (event: PtyClosedEvent) => void,
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<PtyClosedEvent>("pty-closed", (e) => handler(e.payload));
+  }
+  const listener = (e: Event) => handler((e as CustomEvent).detail);
+  window.addEventListener("mock-pty-closed", listener);
+  return () => window.removeEventListener("mock-pty-closed", listener);
 }
 
 export function openInExplorer(cwd: string): Promise<void> {

@@ -3,10 +3,10 @@ import { useSessionDetail } from "@/composables/useSessionDetail";
 import SessionDetailHeader from "./SessionDetailHeader.vue";
 import SessionDetailStats from "./SessionDetailStats.vue";
 import SessionDetailActivity from "./SessionDetailActivity.vue";
-import SessionDetailPrompt from "./SessionDetailPrompt.vue";
 import SessionDetailActions from "./SessionDetailActions.vue";
+import TerminalPane from "./TerminalPane.vue";
 
-const { detail, loading, error, pinned, sending, togglePin, sendPrompt } = useSessionDetail();
+const { detail, loading, error, pinned, terminalActive, togglePin, pickup, release, onTerminalClosed, onTerminalError } = useSessionDetail();
 </script>
 
 <template>
@@ -15,17 +15,39 @@ const { detail, loading, error, pinned, sending, togglePin, sendPrompt } = useSe
       Select a session in Mission Control
     </div>
     <div v-else-if="loading && !detail" class="sd-empty">Loading...</div>
-    <div v-else-if="error" class="sd-empty sd-error">{{ error }}</div>
+    <div v-else-if="error && !detail" class="sd-empty sd-error">{{ error }}</div>
     <template v-else-if="detail">
-      <SessionDetailHeader :detail="detail" :pinned="pinned" @toggle-pin="togglePin" />
-      <div class="sd-divider" />
-      <SessionDetailStats :stats="detail.stats" :subagent-count="detail.subagents.length" />
-      <div class="sd-divider" />
-      <SessionDetailActivity :messages="detail.recentMessages" />
-      <div class="sd-divider" />
-      <SessionDetailPrompt :status="detail.status" :sending="sending" @send="sendPrompt" />
-      <div class="sd-divider" />
-      <SessionDetailActions />
+      <!-- Terminal mode: compact header + full terminal -->
+      <template v-if="terminalActive">
+        <div class="sd-terminal-header" data-tauri-drag-region>
+          <span class="sd-terminal-name">{{ detail.name ?? detail.sessionId }}</span>
+          <button class="sd-release-btn" @click="release">Close</button>
+        </div>
+        <TerminalPane
+          :session-id="detail.sessionId"
+          :cwd="detail.cwd"
+          :pid="detail.pid"
+          :name="detail.name"
+          @closed="onTerminalClosed"
+          @error="onTerminalError"
+        />
+      </template>
+
+      <!-- Info mode: existing layout + Pick Up button -->
+      <template v-else>
+        <SessionDetailHeader :detail="detail" :pinned="pinned" @toggle-pin="togglePin" />
+        <div class="sd-divider" />
+        <SessionDetailStats :stats="detail.stats" :subagent-count="detail.subagents.length" />
+        <div class="sd-divider" />
+        <SessionDetailActivity :messages="detail.recentMessages" />
+        <div v-if="error" class="sd-inline-error">{{ error }}</div>
+        <div class="sd-divider" />
+        <div class="sd-pickup-section" v-if="detail.isAlive">
+          <button class="sd-pickup-btn" @click="pickup">Take Over</button>
+        </div>
+        <div class="sd-divider" />
+        <SessionDetailActions />
+      </template>
     </template>
   </div>
 </template>
@@ -65,5 +87,74 @@ const { detail, loading, error, pinned, sending, togglePin, sendPrompt } = useSe
 
 .sd-error {
   color: var(--accent-red);
+}
+
+.sd-inline-error {
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--accent-red);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+/* Terminal mode header */
+.sd-terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+.sd-terminal-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sd-release-btn {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  background: rgba(96, 165, 250, 0.1);
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.1s ease;
+  -webkit-app-region: no-drag;
+}
+
+.sd-release-btn:hover {
+  background: rgba(96, 165, 250, 0.2);
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+/* Pick Up button */
+.sd-pickup-section {
+  padding: 10px 14px;
+}
+
+.sd-pickup-btn {
+  width: 100%;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.1);
+  color: var(--accent-green);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sd-pickup-btn:hover {
+  background: rgba(52, 211, 153, 0.2);
+  border-color: rgba(52, 211, 153, 0.5);
 }
 </style>

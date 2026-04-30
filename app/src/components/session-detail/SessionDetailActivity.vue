@@ -45,7 +45,9 @@ const displayMessages = computed(() =>
 .sd-activity {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 .sd-activity-empty {
@@ -59,6 +61,7 @@ const displayMessages = computed(() =>
   display: flex;
   gap: 8px;
   padding: 8px 14px;
+  overflow: hidden;
   transition: background 0.1s ease;
 }
 

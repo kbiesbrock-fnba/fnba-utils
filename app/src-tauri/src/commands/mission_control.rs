@@ -1,13 +1,14 @@
 use crate::commands::assume_identity::load_all_connections;
 use crate::db;
 use crate::models::mission_control::{
-    ClaudeSession, ConnectionStatus, ConversationMessage, QueryResult, SessionDetail, SessionStats,
-    SubagentInfo,
+    ClaudeSession, ConnectionStatus, ConversationMessage, PtySession, PtyState, QueryResult,
+    SessionDetail, SessionStats, SessionStatus, SubagentInfo,
 };
 use std::collections::VecDeque;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+use tauri::{Emitter, Manager};
 use tokio::time::timeout;
 
 // --- Shared helpers ---
@@ -106,7 +107,7 @@ fn parse_session(val: &serde_json::Value) -> Option<(u32, ClaudeSession)> {
             is_alive: true,
             subagent_count: 0,
             subagents: Vec::new(),
-            status: "unknown".into(),
+            status: SessionStatus::Unknown,
             last_message_at: None,
         },
     ))
@@ -129,16 +130,18 @@ fn tail_conversation_status(jsonl_path: &Path) -> (Option<String>, String) {
         Err(_) => return (None, "unknown".into()),
     };
 
-    // Seek to the last 8KB (or start of file if smaller)
+    // Seek to the last 8KB (or start of file if smaller).
+    // May land mid-character in UTF-8, so read as bytes and use lossy conversion.
     let offset = if file_len > 8192 { file_len - 8192 } else { 0 };
     if file.seek(SeekFrom::Start(offset)).is_err() {
         return (None, "unknown".into());
     }
 
-    let mut buf = String::new();
-    if file.read_to_string(&mut buf).is_err() {
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
         return (None, "unknown".into());
     }
+    let buf = String::from_utf8_lossy(&bytes);
 
     // Walk lines in reverse to find the last user/assistant record
     for line in buf.lines().rev() {
@@ -232,26 +235,25 @@ fn discover_sessions(
             Some(root) => root.join(pid.to_string()).exists(),
             None => Path::new(&format!("/proc/{pid}")).exists(),
         };
-        if !alive {
-            continue;
-        }
+        session.is_alive = alive;
 
-        let subagents = read_subagents(&projects_dir, &session.cwd, &session.session_id);
-        session.subagent_count = subagents.len() as u32;
-        session.subagents = subagents;
+        if alive {
+            let subagents = read_subagents(&projects_dir, &session.cwd, &session.session_id);
+            session.subagent_count = subagents.len() as u32;
+            session.subagents = subagents;
+        }
 
         // Lightweight tail of JSONL for status + last message time
         let hash = cwd_to_project_hash(&session.cwd);
         let jsonl_path = projects_dir.join(&hash).join(format!("{}.jsonl", &session.session_id));
         let (last_ts, last_role) = tail_conversation_status(&jsonl_path);
         session.status = if !alive {
-            "dead"
+            SessionStatus::Dead
         } else if last_role == "user" && !jsonl_is_stale(&jsonl_path) {
-            "busy"
+            SessionStatus::Busy
         } else {
-            "idle"
-        }
-        .to_string();
+            SessionStatus::Idle
+        };
         session.last_message_at = last_ts;
 
         sessions.push(session);
@@ -279,6 +281,8 @@ pub async fn get_claude_sessions() -> Result<Vec<ClaudeSession>, String> {
         }
     }
 
+    // Filter out dead sessions — only show alive ones
+    all_sessions.retain(|s| s.is_alive);
     all_sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
 
     Ok(all_sessions)
@@ -389,18 +393,25 @@ pub async fn execute_sql_query(
 
 // --- Session detail ---
 
+/// Truncate a string at a char boundary, appending "..." if truncated.
+fn truncate_at_char_boundary(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let end = s
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= max_len)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &s[..end])
+}
+
 /// Extract a text summary from a message's content field.
 /// Content can be a string or an array of content blocks.
 fn extract_summary(content: &serde_json::Value, max_len: usize) -> (String, Option<String>) {
     if let Some(s) = content.as_str() {
-        let clean = s.trim();
-        let truncated = if clean.len() > max_len {
-            let end = clean.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_len).last().unwrap_or(0);
-            format!("{}...", &clean[..end])
-        } else {
-            clean.to_string()
-        };
-        return (truncated, None);
+        return (truncate_at_char_boundary(s.trim(), max_len), None);
     }
 
     if let Some(arr) = content.as_array() {
@@ -409,14 +420,7 @@ fn extract_summary(content: &serde_json::Value, max_len: usize) -> (String, Opti
             match block_type {
                 "text" => {
                     let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                    let clean = text.trim();
-                    let truncated = if clean.len() > max_len {
-                        let end = clean.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_len).last().unwrap_or(0);
-                        format!("{}...", &clean[..end])
-                    } else {
-                        clean.to_string()
-                    };
-                    return (truncated, None);
+                    return (truncate_at_char_boundary(text.trim(), max_len), None);
                 }
                 "tool_use" => {
                     let name = block
@@ -437,7 +441,7 @@ fn extract_summary(content: &serde_json::Value, max_len: usize) -> (String, Opti
 fn parse_conversation(
     jsonl_path: &Path,
     max_recent: usize,
-) -> (SessionStats, Vec<ConversationMessage>, Option<String>, String) {
+) -> (SessionStats, Vec<ConversationMessage>, Option<String>, SessionStatus) {
     let mut stats = SessionStats::default();
     let mut recent: VecDeque<ConversationMessage> = VecDeque::with_capacity(max_recent + 1);
     let mut git_branch: Option<String> = None;
@@ -445,7 +449,7 @@ fn parse_conversation(
 
     let file = match std::fs::File::open(jsonl_path) {
         Ok(f) => f,
-        Err(_) => return (stats, Vec::new(), None, "unknown".to_string()),
+        Err(_) => return (stats, Vec::new(), None, SessionStatus::Unknown),
     };
 
     for line in std::io::BufReader::new(file).lines() {
@@ -532,9 +536,9 @@ fn parse_conversation(
     }
 
     let status = if last_role == "user" && !jsonl_is_stale(jsonl_path) {
-        "busy".to_string()
+        SessionStatus::Busy
     } else {
-        "idle".to_string()
+        SessionStatus::Idle
     };
 
     (stats, recent.into(), git_branch, status)
@@ -612,47 +616,170 @@ pub async fn kill_session(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
+// --- PTY session management ---
+
+/// Pick up a Claude session: kill the original process and spawn it inside a ConPTY.
+/// The frontend receives raw terminal output via `pty-data` events.
+/// `cols` and `rows` come from the already-mounted xterm.js terminal.
 #[tauri::command]
-pub async fn send_session_prompt(
+pub async fn pickup_session(
+    app: tauri::AppHandle,
     session_id: String,
     cwd: String,
-    prompt: String,
+    pid: u32,
+    cols: u16,
+    rows: u16,
+    name: Option<String>,
+    state: tauri::State<'_, PtyState>,
 ) -> Result<(), String> {
-    let prompt = prompt.trim().to_string();
-    if prompt.is_empty() {
-        return Err("Prompt cannot be empty".into());
+    use portable_pty::{CommandBuilder, native_pty_system, PtySize};
+
+    // Don't allow picking up the same session twice
+    if state.sessions.lock().unwrap().contains_key(&session_id) {
+        return Err("Session is already picked up".into());
     }
 
-    // Use `claude --resume` with `-p` (print mode) to send the prompt.
-    // Spawned in the background — the JSONL is updated as it runs and
-    // the frontend polling picks up changes.
-    let mut child = std::process::Command::new("wsl.exe")
-        .args([
-            "-e", "bash", "-lc",
-            &format!(
-                "cd '{}' && claude --resume '{}' -p",
-                cwd.replace('\'', "'\\''"),
-                session_id.replace('\'', "'\\''"),
-            ),
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn claude: {e}"))?;
+    // Kill the original claude process gracefully
+    let _ = std::process::Command::new("wsl.exe")
+        .args(["-e", "kill", &pid.to_string()])
+        .output();
 
-    // Pass prompt via stdin to avoid shell-escaping issues.
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        write!(stdin, "{prompt}").map_err(|e| format!("Write failed: {e}"))?;
+    // Wait for the process to die (poll /proc/<pid> via UNC)
+    let proc_path = PathBuf::from(format!(r"\\wsl.localhost\Ubuntu\proc\{pid}"));
+    let start = std::time::Instant::now();
+    while proc_path.exists() {
+        if start.elapsed() > Duration::from_secs(5) {
+            let _ = std::process::Command::new("wsl.exe")
+                .args(["-e", "kill", "-9", &pid.to_string()])
+                .output();
+            std::thread::sleep(Duration::from_millis(500));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
 
-    // Don't wait for completion — claude -p can take a while.
-    // Spawn a thread to reap the child so it doesn't become a zombie.
+    // Use frontend-provided terminal dimensions so the PTY matches xterm.js
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| format!("Failed to open PTY: {e}"))?;
+
+    // Use --resume "<name>" if available (survives session file cleanup), else --continue
+    let resume_arg = match &name {
+        Some(n) if !n.is_empty() => format!("claude --resume '{}'", n.replace('\'', "'\\''")),
+        _ => "claude --continue".to_string(),
+    };
+
+    let mut cmd = CommandBuilder::new("wsl.exe");
+    cmd.args([
+        "-e",
+        "bash",
+        "-lc",
+        &format!(
+            "cd '{}' && {}",
+            cwd.replace('\'', "'\\''"),
+            resume_arg,
+        ),
+    ]);
+
+    let _child = pair.slave.spawn_command(cmd)
+        .map_err(|e| format!("Failed to spawn claude in PTY: {e}"))?;
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader()
+        .map_err(|e| format!("Failed to clone PTY reader: {e}"))?;
+    let writer = pair.master.take_writer()
+        .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
+
+    // Store the PTY session — master MUST stay alive or the PTY closes
+    state.sessions.lock().unwrap().insert(
+        session_id.clone(),
+        PtySession {
+            writer,
+            master: pair.master,
+            session_id: session_id.clone(),
+            cwd: cwd.clone(),
+        },
+    );
+
+    // Background thread: read PTY output and emit as base64-encoded Tauri events
+    let sid = session_id.clone();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        let mut buf = [0u8; 4096];
+
+        loop {
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break, // EOF — PTY closed
+                Ok(n) => {
+                    let encoded = engine.encode(&buf[..n]);
+                    let _ = app.emit("pty-data", serde_json::json!({
+                        "sessionId": sid,
+                        "data": encoded,
+                    }));
+                }
+                Err(_) => break,
+            }
+        }
+
+        // PTY closed — emit event
+        let _ = app.emit("pty-closed", serde_json::json!({
+            "sessionId": sid,
+        }));
+
+        // Clean up state
+        if let Ok(mut sessions) = app.state::<PtyState>().sessions.lock() {
+            sessions.remove(&sid);
+        }
     });
 
+    Ok(())
+}
+
+/// Write user input to an active PTY session.
+#[tauri::command]
+pub async fn write_pty(
+    session_id: String,
+    data: String,
+    state: tauri::State<'_, PtyState>,
+) -> Result<(), String> {
+    use std::io::Write;
+    let mut sessions = state.sessions.lock().unwrap();
+    let session = sessions.get_mut(&session_id)
+        .ok_or("No active PTY for this session")?;
+    session.writer.write_all(data.as_bytes())
+        .map_err(|e| format!("Write failed: {e}"))?;
+    session.writer.flush()
+        .map_err(|e| format!("Flush failed: {e}"))?;
+    Ok(())
+}
+
+/// Resize an active PTY session.
+#[tauri::command]
+pub async fn resize_pty(
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    state: tauri::State<'_, PtyState>,
+) -> Result<(), String> {
+    use portable_pty::PtySize;
+    let mut sessions = state.sessions.lock().unwrap();
+    let session = sessions.get_mut(&session_id)
+        .ok_or("No active PTY for this session")?;
+    session.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| format!("Resize failed: {e}"))?;
+    Ok(())
+}
+
+/// Drop a picked-up PTY session, cleaning up state.
+/// The reader thread will also clean up on EOF.
+#[tauri::command]
+pub async fn drop_pty(
+    session_id: String,
+    state: tauri::State<'_, PtyState>,
+) -> Result<(), String> {
+    state.sessions.lock().unwrap().remove(&session_id);
     Ok(())
 }
 

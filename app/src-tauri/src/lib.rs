@@ -13,6 +13,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(models::mission_control::PtyState::new())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
@@ -114,7 +115,10 @@ pub fn run() {
             commands::mission_control::execute_sql_query,
             commands::mission_control::get_session_detail,
             commands::mission_control::kill_session,
-            commands::mission_control::send_session_prompt,
+            commands::mission_control::pickup_session,
+            commands::mission_control::write_pty,
+            commands::mission_control::resize_pty,
+            commands::mission_control::drop_pty,
             commands::mission_control::open_in_explorer,
         ])
         .build(tauri::generate_context!())

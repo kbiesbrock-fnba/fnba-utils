@@ -1,5 +1,14 @@
 use serde::Serialize;
 
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    Idle,
+    Busy,
+    Dead,
+    Unknown,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentInfo {
@@ -20,7 +29,7 @@ pub struct ClaudeSession {
     pub is_alive: bool,
     pub subagent_count: u32,
     pub subagents: Vec<SubagentInfo>,
-    pub status: String,
+    pub status: SessionStatus,
     pub last_message_at: Option<String>,
 }
 
@@ -55,7 +64,7 @@ pub struct SessionDetail {
     pub entrypoint: Option<String>,
     pub is_alive: bool,
     pub git_branch: Option<String>,
-    pub status: String,
+    pub status: SessionStatus,
     pub stats: SessionStats,
     pub recent_messages: Vec<ConversationMessage>,
     pub subagents: Vec<SubagentInfo>,
@@ -78,4 +87,24 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub row_count: usize,
+}
+
+/// Managed state for tracking active PTY sessions.
+pub struct PtyState {
+    pub sessions: std::sync::Mutex<std::collections::HashMap<String, PtySession>>,
+}
+
+pub struct PtySession {
+    pub writer: Box<dyn std::io::Write + Send>,
+    pub master: Box<dyn portable_pty::MasterPty + Send>,
+    pub session_id: String,
+    pub cwd: String,
+}
+
+impl PtyState {
+    pub fn new() -> Self {
+        Self {
+            sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
 }

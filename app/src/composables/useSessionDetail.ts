@@ -2,7 +2,7 @@ import { ref } from "vue";
 import {
   getSessionDetail,
   killSession,
-  sendSessionPrompt,
+  dropPty,
   openInExplorer,
   isTauri,
   type SessionDetail,
@@ -14,14 +14,19 @@ const detail = ref<SessionDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const pinned = ref(localStorage.getItem(PINNED_KEY) === "true");
-const sending = ref(false);
+
+/** Whether the terminal is active (session picked up). */
+const terminalActive = ref(false);
 
 let listening = false;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function togglePin() {
   pinned.value = !pinned.value;
-  try { localStorage.setItem(PINNED_KEY, String(pinned.value)); } catch { /* ignore */ }
+  try {
+    localStorage.setItem(PINNED_KEY, String(pinned.value));
+  } catch {
+    /* ignore */
+  }
 }
 
 async function startListening() {
@@ -29,7 +34,8 @@ async function startListening() {
   listening = true;
 
   window.addEventListener("blur", async () => {
-    if (!pinned.value) {
+    // Don't auto-hide when terminal is active — user is interacting
+    if (!pinned.value && !terminalActive.value) {
       if (isTauri) {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
         await getCurrentWindow().hide();
@@ -42,6 +48,7 @@ async function startListening() {
     await listen<{ sessionId: string; cwd: string; pid: number }>(
       "session-selected",
       (event) => {
+        terminalActive.value = false;
         fetchDetail(
           event.payload.sessionId,
           event.payload.cwd,
@@ -64,17 +71,47 @@ async function fetchDetail(sessionId: string, cwd: string, pid: number) {
   }
 }
 
+function pickup() {
+  if (!detail.value) return;
+  error.value = null;
+  // Just flip to terminal mode — TerminalPane will call pickupSession
+  // after mounting xterm.js so it can pass the actual terminal dimensions.
+  terminalActive.value = true;
+}
+
+async function release() {
+  if (!detail.value) return;
+  await dropPty(detail.value.sessionId).catch(() => {});
+  terminalActive.value = false;
+}
+
+function onTerminalClosed() {
+  terminalActive.value = false;
+  if (detail.value) {
+    fetchDetail(detail.value.sessionId, detail.value.cwd, detail.value.pid);
+  }
+}
+
+function onTerminalError(msg: string) {
+  error.value = msg;
+  terminalActive.value = false;
+}
+
 async function kill() {
   if (!detail.value) return;
   const pid = detail.value.pid;
-  await killSession(pid);
-  detail.value = null;
+  try {
+    await killSession(pid);
+    detail.value = null;
 
-  if (isTauri) {
-    const { emit } = await import("@tauri-apps/api/event");
-    await emit("session-killed", { pid });
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().hide();
+    if (isTauri) {
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit("session-killed", { pid });
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().hide();
+    }
+  } catch (e) {
+    error.value = String(e);
   }
 }
 
@@ -101,37 +138,22 @@ function copyInfo(): string {
   return text;
 }
 
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
-
-function startPolling() {
-  stopPolling();
-  const start = Date.now();
-  pollTimer = setInterval(async () => {
-    if (!detail.value) { stopPolling(); return; }
-    if (Date.now() - start > 60000) { stopPolling(); return; }
-    await fetchDetail(detail.value.sessionId, detail.value.cwd, detail.value.pid);
-    if (detail.value?.status === "idle") stopPolling();
-  }, 3000);
-}
-
-async function sendPrompt(text: string) {
-  if (!detail.value) return;
-  sending.value = true;
-  error.value = null;
-  try {
-    await sendSessionPrompt(detail.value.sessionId, detail.value.cwd, text);
-    // Start polling to show conversation updates
-    startPolling();
-  } catch (e) {
-    error.value = String(e);
-  } finally {
-    sending.value = false;
-  }
-}
-
 export function useSessionDetail() {
   startListening();
-  return { detail, loading, error, pinned, sending, kill, openCwd, copyInfo, fetchDetail, togglePin, sendPrompt };
+  return {
+    detail,
+    loading,
+    error,
+    pinned,
+    terminalActive,
+    kill,
+    openCwd,
+    copyInfo,
+    fetchDetail,
+    togglePin,
+    pickup,
+    release,
+    onTerminalClosed,
+    onTerminalError,
+  };
 }
