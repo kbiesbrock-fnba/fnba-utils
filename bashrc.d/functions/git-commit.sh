@@ -18,6 +18,9 @@ commit() {
   fi
 
   echo ""
+  echo "--- Files to be committed ---"
+  git diff --cached --name-status
+  echo ""
   echo "--- Proposed commit message ---"
   echo "$msg"
   echo "-------------------------------"
