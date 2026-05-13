@@ -33,7 +33,7 @@ pub struct ClaudeSession {
     pub last_message_at: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationMessage {
     pub role: String,
@@ -42,7 +42,7 @@ pub struct ConversationMessage {
     pub tool_name: Option<String>,
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionStats {
     pub message_count: u32,
@@ -89,22 +89,51 @@ pub struct QueryResult {
     pub row_count: usize,
 }
 
-/// Managed state for tracking active PTY sessions.
-pub struct PtyState {
-    pub sessions: std::sync::Mutex<std::collections::HashMap<String, PtySession>>,
+/// Managed state for parallel-resume Claude sidecars driven by the Mission Control chat UI.
+///
+/// Architecture: each entry is a second `claude --resume <id>` (interactive, no `--print`)
+/// running in parallel with whatever already had the session open (e.g. IntelliJ). Both
+/// processes append to the same JSONL transcript — that's the documented "two terminals,
+/// one session" pattern. We send user input via PTY keystrokes (bracketed-paste wrapped)
+/// and render output by tailing the JSONL file, not by parsing the TUI stream.
+///
+/// Ownership:
+/// - `_master`: held to keep the PTY open. Dropping closes the slave → claude exits on SIGHUP.
+/// - `_tail_stop`: send-side of a channel watched by the JSONL tail thread. Dropping
+///   (or sending) signals the thread to exit.
+pub struct ClaudeIoState {
+    pub sessions: std::sync::Mutex<std::collections::HashMap<String, ClaudeIoSession>>,
 }
 
-pub struct PtySession {
+pub struct ClaudeIoSession {
     pub writer: Box<dyn std::io::Write + Send>,
-    pub master: Box<dyn portable_pty::MasterPty + Send>,
-    pub session_id: String,
-    pub cwd: String,
+    pub _master: Box<dyn portable_pty::MasterPty + Send>,
+    pub _tail_stop: std::sync::mpsc::Sender<()>,
 }
 
-impl PtyState {
+impl ClaudeIoState {
     pub fn new() -> Self {
         Self {
             sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+/// Managed state for in-flight ad-hoc SQL queries so they can be cancelled.
+///
+/// Keyed by a frontend-generated `query_id`. The sender fires when the user
+/// clicks Cancel; the corresponding `execute_sql_query` task watches the
+/// receiver via `tokio::select!` and drops its `SqlClient` (closing the TCP
+/// connection, which causes SQL Server to abort the request).
+pub struct SqlQueryState {
+    pub queries:
+        std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl SqlQueryState {
+    pub fn new() -> Self {
+        Self {
+            queries: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 }

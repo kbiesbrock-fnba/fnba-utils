@@ -4,9 +4,9 @@ import SessionDetailHeader from "./SessionDetailHeader.vue";
 import SessionDetailStats from "./SessionDetailStats.vue";
 import SessionDetailActivity from "./SessionDetailActivity.vue";
 import SessionDetailActions from "./SessionDetailActions.vue";
-import TerminalPane from "./TerminalPane.vue";
+import ChatPane from "./ChatPane.vue";
 
-const { detail, loading, error, pinned, terminalActive, togglePin, pickup, release, onTerminalClosed, onTerminalError } = useSessionDetail();
+const { detail, loading, error, pinned, chatActive, togglePin, openChat, closeChat, onChatClosed, onChatError } = useSessionDetail();
 </script>
 
 <template>
@@ -17,23 +17,21 @@ const { detail, loading, error, pinned, terminalActive, togglePin, pickup, relea
     <div v-else-if="loading && !detail" class="sd-empty">Loading...</div>
     <div v-else-if="error && !detail" class="sd-empty sd-error">{{ error }}</div>
     <template v-else-if="detail">
-      <!-- Terminal mode: compact header + full terminal -->
-      <template v-if="terminalActive">
-        <div class="sd-terminal-header" data-tauri-drag-region>
-          <span class="sd-terminal-name">{{ detail.name ?? detail.sessionId }}</span>
-          <button class="sd-release-btn" @click="release">Close</button>
+      <!-- Chat mode: compact header + chat pane -->
+      <template v-if="chatActive">
+        <div class="sd-chat-header" data-tauri-drag-region>
+          <span class="sd-chat-name">{{ detail.name ?? detail.sessionId }}</span>
+          <button class="sd-release-btn" @click="closeChat">Close</button>
         </div>
-        <TerminalPane
+        <ChatPane
           :session-id="detail.sessionId"
           :cwd="detail.cwd"
-          :pid="detail.pid"
-          :name="detail.name"
-          @closed="onTerminalClosed"
-          @error="onTerminalError"
+          @closed="onChatClosed"
+          @error="onChatError"
         />
       </template>
 
-      <!-- Info mode: existing layout + Pick Up button -->
+      <!-- Info mode: existing layout + Open Chat button -->
       <template v-else>
         <SessionDetailHeader :detail="detail" :pinned="pinned" @toggle-pin="togglePin" />
         <div class="sd-divider" />
@@ -43,7 +41,7 @@ const { detail, loading, error, pinned, terminalActive, togglePin, pickup, relea
         <div v-if="error" class="sd-inline-error">{{ error }}</div>
         <div class="sd-divider" />
         <div class="sd-pickup-section" v-if="detail.isAlive">
-          <button class="sd-pickup-btn" @click="pickup">Take Over</button>
+          <button class="sd-pickup-btn" @click="openChat">Open Chat</button>
         </div>
         <div class="sd-divider" />
         <SessionDetailActions />
@@ -96,8 +94,8 @@ const { detail, loading, error, pinned, terminalActive, togglePin, pickup, relea
   background: rgba(248, 113, 113, 0.08);
 }
 
-/* Terminal mode header */
-.sd-terminal-header {
+/* Chat mode header */
+.sd-chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -106,7 +104,7 @@ const { detail, loading, error, pinned, terminalActive, togglePin, pickup, relea
   -webkit-app-region: drag;
 }
 
-.sd-terminal-name {
+.sd-chat-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);

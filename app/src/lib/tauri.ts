@@ -132,16 +132,55 @@ export interface QueryResult {
   rowCount: number;
 }
 
-// --- PTY session types ---
+// --- Claude SDK (stream-json) session types ---
 
-export interface PtyDataEvent {
+/**
+ * Discriminated union of Claude Code stream-json events.
+ * Unknown variants land in `Unknown` so the UI can stay forward-compatible
+ * with new event shapes added by future Claude releases.
+ */
+export type ClaudeEvent =
+  | { type: "system"; subtype?: string; [k: string]: unknown }
+  | { type: "user"; message: { role: "user"; content: unknown }; [k: string]: unknown }
+  | {
+      type: "assistant";
+      message: {
+        role: "assistant";
+        content: Array<
+          | { type: "text"; text: string }
+          | { type: "tool_use"; id: string; name: string; input: unknown }
+          | { type: string; [k: string]: unknown }
+        >;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
+        [k: string]: unknown;
+      };
+      [k: string]: unknown;
+    }
+  | {
+      type: "result";
+      subtype?: "success" | "error" | string;
+      duration_ms?: number;
+      num_turns?: number;
+      total_cost_usd?: number;
+      [k: string]: unknown;
+    }
+  | { type: "stderr"; text: string }
+  | { type: "raw"; text: string }
+  | { type: string; [k: string]: unknown };
+
+export interface ClaudeEventEnvelope {
   sessionId: string;
-  /** Base64-encoded terminal output bytes. */
-  data: string;
+  event: ClaudeEvent;
 }
 
-export interface PtyClosedEvent {
+export interface ClaudeSessionClosedEvent {
   sessionId: string;
+  exitCode: number;
 }
 
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
@@ -158,6 +197,13 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 // --- Mock layer for browser development ---
 
 import identityDefaults from "../../../data/identity-defaults.json";
+
+// In-flight mock SQL queries, keyed by queryId. Each entry holds the timer handle
+// and a reject() callback so the mock kill_sql_query can abort the pending query.
+const mockSqlQueries = new Map<
+  string,
+  { timer: ReturnType<typeof setTimeout>; reject: (err: Error) => void }
+>();
 
 async function mockInvoke<T>(
   cmd: string,
@@ -379,8 +425,22 @@ async function mockInvoke<T>(
     }
 
     case "execute_sql_query": {
-      await delay(800);
+      const queryId = (args?.queryId as string) ?? "";
       const q = ((args?.sql as string) ?? "").toLowerCase();
+      // Longer delay if the query mentions "slow" or "waitfor" so the mock cancel is testable.
+      const ms = q.includes("waitfor") || q.includes("slow") ? 30_000 : 800;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            mockSqlQueries.delete(queryId);
+            resolve();
+          }, ms);
+          if (queryId) mockSqlQueries.set(queryId, { timer, reject });
+        });
+      } catch (e) {
+        if (queryId) mockSqlQueries.delete(queryId);
+        throw e;
+      }
       if (q.includes("error")) throw new Error("Mock SQL error: syntax error near 'error'");
       return {
         columns: ["id", "name", "status", "created_at"],
@@ -391,6 +451,17 @@ async function mockInvoke<T>(
         ],
         rowCount: 3,
       } as T;
+    }
+
+    case "kill_sql_query": {
+      const queryId = (args?.queryId as string) ?? "";
+      const entry = mockSqlQueries.get(queryId);
+      if (entry) {
+        clearTimeout(entry.timer);
+        mockSqlQueries.delete(queryId);
+        entry.reject(new Error("Query was cancelled"));
+      }
+      return undefined as T;
     }
 
     case "get_session_detail": {
@@ -461,42 +532,74 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
-    case "pickup_session": {
-      console.log("[mock] pickup_session", args);
+    case "start_claude_session": {
+      console.log("[mock] start_claude_session", args);
       const sid = (args?.sessionId as string) ?? "mock-session";
-      // Simulate PTY output with fake terminal data
-      const encoder = new TextEncoder();
+      const emit = (event: ClaudeEvent) =>
+        window.dispatchEvent(
+          new CustomEvent("mock-claude-event", { detail: { sessionId: sid, event } }),
+        );
       (async () => {
-        await delay(500);
-        const lines = [
-          "\x1b[1;36m╭─────────────────────────────────────╮\x1b[0m\r\n",
-          "\x1b[1;36m│\x1b[0m  Claude Code  \x1b[2mv2.1.92\x1b[0m              \x1b[1;36m│\x1b[0m\r\n",
-          "\x1b[1;36m╰─────────────────────────────────────╯\x1b[0m\r\n\r\n",
-          "\x1b[1;32m>\x1b[0m Resuming session... \r\n\r\n",
-          "\x1b[1;33mclaude\x1b[0m \x1b[2m(mock mode)\x1b[0m\r\n\r\n",
-        ];
-        for (const line of lines) {
-          await delay(200);
-          const b64 = btoa(String.fromCharCode(...encoder.encode(line)));
-          window.dispatchEvent(new CustomEvent("mock-pty-data", {
-            detail: { sessionId: sid, data: b64 },
-          }));
-        }
+        await delay(200);
+        emit({ type: "system", subtype: "init", session_id: sid, model: "claude-opus-4-7" });
+        await delay(300);
+        emit({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Hi! Mock chat ready." }],
+            usage: { input_tokens: 12, output_tokens: 5 },
+          },
+        });
+        emit({ type: "result", subtype: "success", duration_ms: 500, num_turns: 1 });
       })();
       return undefined as T;
     }
 
-    case "write_pty": {
-      console.log("[mock] write_pty", args);
+    case "send_claude_message": {
+      console.log("[mock] send_claude_message", args);
+      const sid = (args?.sessionId as string) ?? "mock-session";
+      const content = (args?.content as string) ?? "";
+      (async () => {
+        await delay(200);
+        const reply: ClaudeEvent = {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `Mock reply to: ${content.slice(0, 80)}`,
+              },
+            ],
+            usage: { input_tokens: 24, output_tokens: 18 },
+          },
+        };
+        window.dispatchEvent(
+          new CustomEvent("mock-claude-event", { detail: { sessionId: sid, event: reply } }),
+        );
+        await delay(80);
+        const result: ClaudeEvent = {
+          type: "result",
+          subtype: "success",
+          duration_ms: 280,
+          num_turns: 1,
+        };
+        window.dispatchEvent(
+          new CustomEvent("mock-claude-event", { detail: { sessionId: sid, event: result } }),
+        );
+      })();
       return undefined as T;
     }
 
-    case "resize_pty": {
-      return undefined as T;
-    }
-
-    case "drop_pty": {
-      console.log("[mock] drop_pty", args);
+    case "stop_claude_session": {
+      console.log("[mock] stop_claude_session", args);
+      const sid = (args?.sessionId as string) ?? "mock-session";
+      window.dispatchEvent(
+        new CustomEvent("mock-claude-session-closed", {
+          detail: { sessionId: sid, exitCode: 0 },
+        }),
+      );
       return undefined as T;
     }
 
@@ -597,8 +700,13 @@ export function executeSqlQuery(
   server: string,
   database: string,
   sql: string,
+  queryId: string,
 ): Promise<QueryResult> {
-  return invoke<QueryResult>("execute_sql_query", { server, database, sql });
+  return invoke<QueryResult>("execute_sql_query", { server, database, sql, queryId });
+}
+
+export function killSqlQuery(queryId: string): Promise<void> {
+  return invoke<void>("kill_sql_query", { queryId });
 }
 
 export function getSessionDetail(
@@ -613,46 +721,47 @@ export function killSession(pid: number): Promise<void> {
   return invoke<void>("kill_session", { pid });
 }
 
-export function pickupSession(sessionId: string, cwd: string, pid: number, cols: number, rows: number, name?: string | null): Promise<void> {
-  return invoke<void>("pickup_session", { sessionId, cwd, pid, cols, rows, name: name ?? null });
+/** Spawn a Claude SDK process for an existing session and start streaming events. */
+export function startClaudeSession(sessionId: string, cwd: string): Promise<void> {
+  return invoke<void>("start_claude_session", { sessionId, cwd });
 }
 
-export function writePty(sessionId: string, data: string): Promise<void> {
-  return invoke<void>("write_pty", { sessionId, data });
+/** Send a user message to a running Claude SDK session. */
+export function sendClaudeMessage(sessionId: string, content: string): Promise<void> {
+  return invoke<void>("send_claude_message", { sessionId, content });
 }
 
-export function resizePty(sessionId: string, cols: number, rows: number): Promise<void> {
-  return invoke<void>("resize_pty", { sessionId, cols, rows });
+/** Terminate a running Claude SDK session. The original interactive Claude is unaffected. */
+export function stopClaudeSession(sessionId: string): Promise<void> {
+  return invoke<void>("stop_claude_session", { sessionId });
 }
 
-export function dropPty(sessionId: string): Promise<void> {
-  return invoke<void>("drop_pty", { sessionId });
-}
-
-/** Listen for PTY output data. Returns an unlisten function. */
-export async function onPtyData(
-  handler: (event: PtyDataEvent) => void,
+/** Listen for stream-json events from any active Claude SDK session. Filter on sessionId yourself. */
+export async function onClaudeEvent(
+  handler: (event: ClaudeEventEnvelope) => void,
 ): Promise<() => void> {
   if (isTauri) {
     const { listen } = await import("@tauri-apps/api/event");
-    return listen<PtyDataEvent>("pty-data", (e) => handler(e.payload));
+    return listen<ClaudeEventEnvelope>("claude-event", (e) => handler(e.payload));
   }
   const listener = (e: Event) => handler((e as CustomEvent).detail);
-  window.addEventListener("mock-pty-data", listener);
-  return () => window.removeEventListener("mock-pty-data", listener);
+  window.addEventListener("mock-claude-event", listener);
+  return () => window.removeEventListener("mock-claude-event", listener);
 }
 
-/** Listen for PTY session closed. Returns an unlisten function. */
-export async function onPtyClosed(
-  handler: (event: PtyClosedEvent) => void,
+/** Listen for Claude SDK session exit. Returns an unlisten function. */
+export async function onClaudeSessionClosed(
+  handler: (event: ClaudeSessionClosedEvent) => void,
 ): Promise<() => void> {
   if (isTauri) {
     const { listen } = await import("@tauri-apps/api/event");
-    return listen<PtyClosedEvent>("pty-closed", (e) => handler(e.payload));
+    return listen<ClaudeSessionClosedEvent>("claude-session-closed", (e) =>
+      handler(e.payload),
+    );
   }
   const listener = (e: Event) => handler((e as CustomEvent).detail);
-  window.addEventListener("mock-pty-closed", listener);
-  return () => window.removeEventListener("mock-pty-closed", listener);
+  window.addEventListener("mock-claude-session-closed", listener);
+  return () => window.removeEventListener("mock-claude-session-closed", listener);
 }
 
 export function openInExplorer(cwd: string): Promise<void> {

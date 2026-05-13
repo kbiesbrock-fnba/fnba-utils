@@ -2,60 +2,76 @@ import { ref } from "vue";
 import {
   getSessionDetail,
   killSession,
-  dropPty,
+  stopClaudeSession,
   openInExplorer,
   isTauri,
   type SessionDetail,
 } from "@/lib/tauri";
+import {
+  isPanelPinned,
+  readHashParams,
+  rememberWindowFocus,
+  setPanelPinned,
+  type PinnedPanel,
+} from "@/lib/panelStorage";
 
-const PINNED_KEY = "fnba-utils:session-detail-pinned";
+const params = readHashParams();
+const initialSessionId = params.get("sessionId") ?? "";
+const initialCwd = params.get("cwd") ?? "";
+const parsedPid = Number.parseInt(params.get("pid") ?? "", 10);
+const initialPid = Number.isFinite(parsedPid) && parsedPid > 0 ? parsedPid : 0;
+const hasInitial = !!initialSessionId && !!initialCwd && initialPid > 0;
 
 const detail = ref<SessionDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
-const pinned = ref(localStorage.getItem(PINNED_KEY) === "true");
 
-/** Whether the terminal is active (session picked up). */
-const terminalActive = ref(false);
+function ownPanel(): PinnedPanel {
+  return {
+    kind: "session-detail",
+    sessionId: initialSessionId,
+    cwd: initialCwd,
+    pid: initialPid,
+  };
+}
+
+const pinned = ref(hasInitial ? isPanelPinned(ownPanel()) : false);
+
+/** Whether the chat pane is open (Claude SDK side-car running). */
+const chatActive = ref(false);
 
 let listening = false;
 
 function togglePin() {
+  if (!hasInitial) return;
   pinned.value = !pinned.value;
-  try {
-    localStorage.setItem(PINNED_KEY, String(pinned.value));
-  } catch {
-    /* ignore */
-  }
+  setPanelPinned(ownPanel(), pinned.value);
 }
 
 async function startListening() {
-  if (listening) return;
-  listening = true;
+  // First call wires up window-level listeners (idempotent thereafter).
+  // Initial fetch must still run on every call so a re-mount picks up data.
+  if (!listening) {
+    listening = true;
 
-  window.addEventListener("blur", async () => {
-    // Don't auto-hide when terminal is active — user is interacting
-    if (!pinned.value && !terminalActive.value) {
-      if (isTauri) {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        await getCurrentWindow().hide();
-      }
+    if (isTauri) {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      rememberWindowFocus(getCurrentWindow().label);
     }
-  });
 
-  if (isTauri) {
-    const { listen } = await import("@tauri-apps/api/event");
-    await listen<{ sessionId: string; cwd: string; pid: number }>(
-      "session-selected",
-      (event) => {
-        terminalActive.value = false;
-        fetchDetail(
-          event.payload.sessionId,
-          event.payload.cwd,
-          event.payload.pid,
-        );
-      },
-    );
+    window.addEventListener("blur", async () => {
+      // Don't auto-hide when chat is active — user is interacting
+      if (!pinned.value && !chatActive.value) {
+        if (isTauri) {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
+          await getCurrentWindow().hide();
+        }
+      }
+    });
+  }
+
+  if (hasInitial && !detail.value) {
+    fetchDetail(initialSessionId, initialCwd, initialPid);
   }
 }
 
@@ -71,44 +87,51 @@ async function fetchDetail(sessionId: string, cwd: string, pid: number) {
   }
 }
 
-function pickup() {
+function openChat() {
   if (!detail.value) return;
   error.value = null;
-  // Just flip to terminal mode — TerminalPane will call pickupSession
-  // after mounting xterm.js so it can pass the actual terminal dimensions.
-  terminalActive.value = true;
+  chatActive.value = true;
 }
 
-async function release() {
+async function closeChat() {
   if (!detail.value) return;
-  await dropPty(detail.value.sessionId).catch(() => {});
-  terminalActive.value = false;
+  await stopClaudeSession(detail.value.sessionId).catch(() => {});
+  chatActive.value = false;
 }
 
-function onTerminalClosed() {
-  terminalActive.value = false;
+function onChatClosed() {
+  chatActive.value = false;
   if (detail.value) {
     fetchDetail(detail.value.sessionId, detail.value.cwd, detail.value.pid);
   }
 }
 
-function onTerminalError(msg: string) {
+function onChatError(msg: string) {
   error.value = msg;
-  terminalActive.value = false;
+  chatActive.value = false;
 }
 
 async function kill() {
   if (!detail.value) return;
   const pid = detail.value.pid;
   try {
+    // Tear down the chat sidecar (and its PTY drain + tail threads) before the
+    // window is destroyed. Otherwise the window goes away mid-IPC and the
+    // ChatPane's onUnmounted cleanup races destroy() — leaking the sidecar.
+    if (chatActive.value) await closeChat();
+
     await killSession(pid);
+
+    // PID is gone — drop the pinned descriptor since it would no longer
+    // resolve to a real session on next restore.
+    if (pinned.value) togglePin();
     detail.value = null;
 
     if (isTauri) {
       const { emit } = await import("@tauri-apps/api/event");
       await emit("session-killed", { pid });
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().hide();
+      await getCurrentWindow().destroy();
     }
   } catch (e) {
     error.value = String(e);
@@ -145,15 +168,15 @@ export function useSessionDetail() {
     loading,
     error,
     pinned,
-    terminalActive,
+    chatActive,
     kill,
     openCwd,
     copyInfo,
     fetchDetail,
     togglePin,
-    pickup,
-    release,
-    onTerminalClosed,
-    onTerminalError,
+    openChat,
+    closeChat,
+    onChatClosed,
+    onChatError,
   };
 }

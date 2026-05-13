@@ -5,7 +5,7 @@ mod models;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, RunEvent,
+    AppHandle, Emitter, Manager, RunEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -13,7 +13,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .manage(models::mission_control::PtyState::new())
+        .manage(models::mission_control::ClaudeIoState::new())
+        .manage(models::mission_control::SqlQueryState::new())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
@@ -72,6 +73,13 @@ pub fn run() {
                         if let Some(w) = app.get_webview_window("mission-control") {
                             if w.is_visible().unwrap_or(false) {
                                 let _ = w.hide();
+                                for (label, win) in app.webview_windows() {
+                                    if label.starts_with("session-detail:")
+                                        || label.starts_with("sql-query:")
+                                    {
+                                        let _ = win.hide();
+                                    }
+                                }
                             } else {
                                 // Position at bottom-left of the current monitor
                                 if let Ok(Some(monitor)) = w.current_monitor() {
@@ -92,6 +100,7 @@ pub fn run() {
                                 }
                                 let _ = w.show();
                                 let _ = w.set_focus();
+                                let _ = app.emit("mc-shown", ());
                             }
                         }
                     }
@@ -113,12 +122,12 @@ pub fn run() {
             commands::mission_control::get_claude_sessions,
             commands::mission_control::get_connection_statuses,
             commands::mission_control::execute_sql_query,
+            commands::mission_control::kill_sql_query,
             commands::mission_control::get_session_detail,
             commands::mission_control::kill_session,
-            commands::mission_control::pickup_session,
-            commands::mission_control::write_pty,
-            commands::mission_control::resize_pty,
-            commands::mission_control::drop_pty,
+            commands::mission_control::start_claude_session,
+            commands::mission_control::send_claude_message,
+            commands::mission_control::stop_claude_session,
             commands::mission_control::open_in_explorer,
         ])
         .build(tauri::generate_context!())
@@ -129,17 +138,8 @@ pub fn run() {
     let handle = app.handle().clone();
     ctrlc::set_handler(move || {
         eprintln!("Ctrl+C received — shutting down FNBA Utils…");
-        if let Some(w) = handle.get_webview_window("main") {
-            let _ = w.destroy();
-        }
-        if let Some(w) = handle.get_webview_window("mission-control") {
-            let _ = w.destroy();
-        }
-        if let Some(w) = handle.get_webview_window("session-detail") {
-            let _ = w.destroy();
-        }
-        if let Some(w) = handle.get_webview_window("sql-query") {
-            let _ = w.destroy();
+        for (_label, win) in handle.webview_windows() {
+            let _ = win.destroy();
         }
         handle.exit(0);
     })
