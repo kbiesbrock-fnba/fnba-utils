@@ -39,6 +39,91 @@ pub async fn connect_to(server: &str, database: &str) -> Result<SqlClient, Strin
     Ok(client)
 }
 
+pub async fn execute_query(
+    client: &mut SqlClient,
+    sql: &str,
+) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    let stream = client
+        .query(sql, &[])
+        .await
+        .map_err(|e| format!("Query failed: {e}"))?;
+
+    let results = stream
+        .into_results()
+        .await
+        .map_err(|e| format!("Result read failed: {e}"))?;
+
+    // Take the first non-empty result set
+    let rows = results
+        .into_iter()
+        .find(|rs| !rs.is_empty())
+        .unwrap_or_default();
+
+    if rows.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let columns: Vec<String> = rows[0]
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect();
+
+    let col_count = columns.len();
+    let mut out_rows = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let mut cells = Vec::with_capacity(col_count);
+        for i in 0..col_count {
+            // Try common types in order of likelihood; fall through to NULL
+            let val = row
+                .try_get::<&str, _>(i)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string())
+                .or_else(|| {
+                    row.try_get::<i64, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<i32, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<i16, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<f64, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<bool, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<NaiveDateTime, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
+                });
+            cells.push(val.unwrap_or_else(|| "NULL".to_string()));
+        }
+        out_rows.push(cells);
+    }
+
+    Ok((columns, out_rows))
+}
+
 pub enum SwitchOutcome {
     AlreadyAssuming {
         acting_as_login: String,
@@ -202,6 +287,54 @@ END";
     let after = parse_state_row(after_row, &imposter_login)?;
 
     Ok(SwitchOutcome::Switched { before, after })
+}
+
+pub async fn check_acting_as(
+    client: &mut SqlClient,
+    imposter: &str,
+) -> Result<(String, String, bool), String> {
+    let sql = "\
+DECLARE @ImposterLogin VARCHAR(35) = 'FNBA\\' + @P1;
+
+SELECT
+    ISNULL(
+        (SELECT MIN(al2.domain_username)
+         FROM logincheck.fnba_reporting.associate_login al2
+         WHERE al2.assoc_id = al.assoc_id
+           AND al2.domain_username <> @ImposterLogin),
+        @ImposterLogin
+    ) AS acting_as_login,
+    per.first_name + ' ' + per.last_name AS acting_as_name
+FROM logincheck.fnba_reporting.associate_login al
+JOIN perdb.fnba.associate per ON per.assoc_id = al.assoc_id
+WHERE al.domain_username = @ImposterLogin;";
+
+    let row = client
+        .query(sql, &[&imposter])
+        .await
+        .map_err(|e| format!("Status query failed: {e}"))?
+        .into_row()
+        .await
+        .map_err(|e| format!("Status result read failed: {e}"))?;
+
+    match row {
+        Some(row) => {
+            let acting_as_login = row
+                .try_get::<&str, _>("acting_as_login")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("")
+                .to_string();
+            let acting_as_name = row
+                .try_get::<&str, _>("acting_as_name")
+                .map_err(|e| format!("Column read error: {e}"))?
+                .unwrap_or("unknown")
+                .to_string();
+            let imposter_login = format!("FNBA\\{imposter}");
+            let is_self = acting_as_login == imposter_login || acting_as_login.is_empty();
+            Ok((acting_as_login, acting_as_name, is_self))
+        }
+        None => Err(format!("Login FNBA\\{imposter} not found")),
+    }
 }
 
 fn parse_login(row: &Row, imposter: &str) -> String {

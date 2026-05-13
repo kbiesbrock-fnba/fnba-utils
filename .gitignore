@@ -2,6 +2,8 @@
 .idea/
 .assumeIdentity.json
 bashrc.d/startup-files/.env
+/.env
+.env
 
 # App build artifacts
 app/node_modules/
