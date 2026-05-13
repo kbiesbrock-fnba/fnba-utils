@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ClaudeSession } from "@/lib/tauri";
+import { displayNameForSession, formatRelative } from "@/lib/format";
+
+type SessionStatusKey = "dead" | "busy" | "idle";
+const STATUS_INFO: Record<SessionStatusKey, { dotClass: string; label: string }> = {
+  dead: { dotClass: "dot-dead", label: "dead" },
+  busy: { dotClass: "dot-busy", label: "busy" },
+  idle: { dotClass: "dot-idle", label: "idle" },
+};
 
 const props = defineProps<{
   session: ClaudeSession;
@@ -13,36 +21,19 @@ const emit = defineEmits<{
   open: [session: ClaudeSession];
 }>();
 
-const shortCwd = computed(() => {
-  const parts = props.session.cwd.split("/");
-  return parts[parts.length - 1] || props.session.cwd;
-});
+const displayName = computed(() =>
+  displayNameForSession(props.session.name, props.session.cwd),
+);
 
-const displayName = computed(() => props.session.name || shortCwd.value);
+const relativeTime = computed(() =>
+  formatRelative(props.session.lastMessageAt ?? props.session.startedAt),
+);
 
-const relativeTime = computed(() => {
-  const ts = props.session.lastMessageAt
-    ? new Date(props.session.lastMessageAt).getTime()
-    : props.session.startedAt;
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-});
-
-const statusDotClass = computed(() => {
-  if (props.session.status === "dead") return "dot-dead";
-  if (props.session.status === "busy") return "dot-busy";
-  return "dot-idle";
-});
-
-const statusLabel = computed(() => {
-  if (props.session.status === "dead") return "dead";
-  if (props.session.status === "busy") return "busy";
-  return "idle";
+const status = computed(() => {
+  const key = (props.session.status === "dead" || props.session.status === "busy"
+    ? props.session.status
+    : "idle") as SessionStatusKey;
+  return STATUS_INFO[key];
 });
 
 const agentTypeSummary = computed(() => {
@@ -74,7 +65,7 @@ function handleKeydown(e: KeyboardEvent) {
     tabindex="0"
     role="button"
     :aria-expanded="expanded"
-    :aria-label="`${displayName} — ${statusLabel}`"
+    :aria-label="`${displayName} — ${status.label}`"
     @click="emit('toggle-expand', session)"
     @keydown="handleKeydown"
   >
@@ -89,7 +80,7 @@ function handleKeydown(e: KeyboardEvent) {
       >
         <path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z" />
       </svg>
-      <span class="session-dot" :class="statusDotClass" />
+      <span class="session-dot" :class="status.dotClass" />
       <span class="session-name" :title="session.cwd">{{ displayName }}</span>
       <button class="session-open-btn compact-open" title="Open session detail" @click.stop="emit('open', session)">Open</button>
       <span class="session-time">{{ relativeTime }}</span>
@@ -97,7 +88,7 @@ function handleKeydown(e: KeyboardEvent) {
     <div class="session-expand-wrapper" :class="{ expanded }">
       <div class="session-expanded">
         <div class="session-detail-row">
-          <span class="session-badge status-badge" :class="statusDotClass">{{ statusLabel }}</span>
+          <span class="session-badge status-badge" :class="status.dotClass">{{ status.label }}</span>
           <span v-if="session.kind" class="session-badge muted">{{ session.kind }}</span>
           <span class="session-badge muted">PID {{ session.pid }}</span>
           <button class="session-open-btn expanded-open" @click.stop="emit('open', session)">Open</button>

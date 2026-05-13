@@ -7,9 +7,9 @@ import { usePalette } from "./composables/usePalette";
 
 const { dismiss } = usePalette();
 
-const isMissionControl = window.location.hash === "#mission-control";
-const isSessionDetail = window.location.hash === "#session-detail";
-const isSqlQuery = window.location.hash === "#sql-query";
+const isMissionControl = window.location.hash.startsWith("#mission-control");
+const isSessionDetail = window.location.hash.startsWith("#session-detail");
+const isSqlQuery = window.location.hash.startsWith("#sql-query");
 
 function onBackdropClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains("backdrop")) {

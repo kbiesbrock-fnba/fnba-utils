@@ -1,23 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ConversationMessage } from "@/lib/tauri";
+import { formatTime } from "@/lib/format";
 
 const props = defineProps<{ messages: ConversationMessage[] }>();
-
-function formatTime(iso: string): string {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}
 
 const displayMessages = computed(() =>
   props.messages.map((m) => ({
     ...m,
-    time: formatTime(m.timestamp),
+    time: m.timestamp ? formatTime(m.timestamp) : "",
     isUser: m.role === "user",
     isTool: !!m.toolName,
   })),

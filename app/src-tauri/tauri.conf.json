@@ -41,42 +41,6 @@
         "visible": false,
         "alwaysOnTop": true,
         "skipTaskbar": true
-      },
-      {
-        "label": "sql-query",
-        "title": "SQL Query",
-        "url": "index.html#sql-query",
-        "width": 700,
-        "height": 520,
-        "x": 0,
-        "y": 0,
-        "resizable": false,
-        "decorations": false,
-        "shadow": false,
-        "transparent": true,
-        "backgroundColor": "#00000000",
-        "visible": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true
-      },
-      {
-        "label": "session-detail",
-        "title": "Session Detail",
-        "url": "index.html#session-detail",
-        "width": 440,
-        "height": 640,
-        "minWidth": 360,
-        "minHeight": 400,
-        "x": 0,
-        "y": 0,
-        "resizable": true,
-        "decorations": false,
-        "shadow": false,
-        "transparent": true,
-        "backgroundColor": "#00000000",
-        "visible": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true
       }
     ],
     "security": {

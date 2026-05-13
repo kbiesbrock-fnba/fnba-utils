@@ -2,11 +2,18 @@ import { ref } from "vue";
 import {
   executeSqlQuery,
   isTauri,
+  killSqlQuery,
   type QueryResult,
 } from "@/lib/tauri";
+import {
+  isPanelPinned,
+  readHashParams,
+  rememberWindowFocus,
+  setPanelPinned,
+  type PinnedPanel,
+} from "@/lib/panelStorage";
 
 const SAVED_KEY = "fnba-utils:saved-sql-queries";
-const PINNED_KEY = "fnba-utils:sql-query-pinned";
 
 export interface SavedQuery {
   name: string;
@@ -27,42 +34,40 @@ function writeSaved(queries: SavedQuery[]) {
   try {
     localStorage.setItem(SAVED_KEY, JSON.stringify(queries));
   } catch {
-    // ignore
+    /* ignore */
   }
 }
 
-function readInitialConnection(): { server: string; label: string } | null {
-  try {
-    const raw = localStorage.getItem("fnba-utils:sql-query-connection");
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
+const params = readHashParams();
+const initialServer = params.get("server") ?? "";
+const initialLabel = params.get("label") ?? "";
 
-const initial = readInitialConnection();
-const server = ref(initial?.server ?? "");
-const label = ref(initial?.label ?? "");
+const server = ref(initialServer);
+const label = ref(initialLabel);
 const sql = ref("");
 const database = ref("");
 const result = ref<QueryResult | null>(null);
 const error = ref<string | null>(null);
 const running = ref(false);
-const pinned = ref(localStorage.getItem(PINNED_KEY) === "true");
+const currentQueryId = ref<string | null>(null);
+
+function ownPanel(): PinnedPanel {
+  return { kind: "sql-query", server: server.value, label: label.value };
+}
+
+const pinned = ref(server.value ? isPanelPinned(ownPanel()) : false);
 const savedQueries = ref<SavedQuery[]>(readSaved());
 
 let listening = false;
 
-function applyConnection(s: string, l: string) {
-  server.value = s;
-  label.value = l;
-  result.value = null;
-  error.value = null;
-}
-
 async function startListening() {
   if (listening) return;
   listening = true;
+
+  if (isTauri) {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    rememberWindowFocus(getCurrentWindow().label);
+  }
 
   window.addEventListener("blur", async () => {
     if (!pinned.value) {
@@ -72,42 +77,38 @@ async function startListening() {
       }
     }
   });
-
-  // Re-read localStorage every time this window gains focus.
-  // This catches the initial open (where the event may fire before the
-  // listener is registered) and subsequent connection switches.
-  window.addEventListener("focus", () => {
-    const conn = readInitialConnection();
-    if (conn && conn.server && conn.server !== server.value) {
-      applyConnection(conn.server, conn.label);
-    }
-  });
-
-  if (isTauri) {
-    const { listen } = await import("@tauri-apps/api/event");
-    await listen<{ server: string; label: string }>(
-      "connection-selected",
-      (event) => {
-        applyConnection(event.payload.server, event.payload.label);
-      },
-    );
-  }
 }
 
 async function runQuery() {
   const query = sql.value.trim();
   if (!query || !server.value) return;
 
+  const queryId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `q-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  currentQueryId.value = queryId;
   running.value = true;
   error.value = null;
   result.value = null;
 
   try {
-    result.value = await executeSqlQuery(server.value, database.value, query);
+    result.value = await executeSqlQuery(server.value, database.value, query, queryId);
   } catch (e) {
     error.value = String(e);
   } finally {
     running.value = false;
+    currentQueryId.value = null;
+  }
+}
+
+async function cancelQuery() {
+  const id = currentQueryId.value;
+  if (!id) return;
+  try {
+    await killSqlQuery(id);
+  } catch (e) {
+    error.value = String(e);
   }
 }
 
@@ -135,7 +136,7 @@ function loadQuery(index: number) {
 
 function togglePin() {
   pinned.value = !pinned.value;
-  try { localStorage.setItem(PINNED_KEY, String(pinned.value)); } catch { /* ignore */ }
+  setPanelPinned(ownPanel(), pinned.value);
 }
 
 async function closeWindow() {
@@ -157,6 +158,7 @@ export function useSqlQuery() {
     running,
     savedQueries,
     runQuery,
+    cancelQuery,
     pinned,
     saveQuery,
     removeQuery,
