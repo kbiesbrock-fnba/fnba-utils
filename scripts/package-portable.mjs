@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const appDir = join(scriptDir, "..");
+const appDir = join(scriptDir, "..", "app");
 const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8"));
 const version = pkg.version;
 
