@@ -1,9 +1,24 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "path";
-import { computeVersion } from "./scripts/version.mjs";
+import { execFileSync } from "node:child_process";
+import pkg from "./package.json";
 
 const host = process.env.TAURI_DEV_HOST;
+
+function gitCount(): string {
+  try {
+    return execFileSync("git", ["rev-list", "--count", "HEAD"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "0";
+  }
+}
+
+const appVersion = `${pkg.version}+${gitCount()}`;
 
 export default defineConfig({
   plugins: [vue()],
@@ -13,7 +28,7 @@ export default defineConfig({
     },
   },
   define: {
-    __APP_VERSION__: JSON.stringify(computeVersion()),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   clearScreen: false,
   server: {
