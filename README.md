@@ -37,8 +37,9 @@ cp bashrc.d/startup-files/.env.example bashrc.d/startup-files/.env
 - `bashrc.d/functions/pwd.sh` - pwd that also copies path to clipboard
 - `bashrc.d/functions/rebash.sh` - Reload ~/.bashrc
 - `bashrc.d/functions/wwd.sh` - Print and copy Windows path of cwd
+- `bashrc.d/functions/fnbau.sh` - Launch the FNBA Utils desktop app (builds via PowerShell on first run)
 - `assumeIdentity/` - Assume SQL identities against FNBA servers
-- `app/` - FNBA Utils desktop app (Tauri + Vue command palette)
+- `app/` - FNBA Utils desktop app (Tauri + Vue command palette). See [`app/README.md`](./app/README.md) for end-user docs and [`app/RELEASE_NOTES.md`](./app/RELEASE_NOTES.md) for the per-version changelog.
 
 ## Desktop App
 
@@ -62,9 +63,22 @@ bash scripts/dev.sh
 
 Requires Rust + MSVC Build Tools + Tauri CLI installed on Windows. See `scripts/dev.sh` for details.
 
-### Current commands
+### End-user docs
 
-- **Assume Identity** — Switch SQL identity on a target server. Two-step picker (user → connection) with search filtering.
+See [`app/README.md`](./app/README.md) for the user manual (requirements, hotkeys, custom config, troubleshooting) and [`app/RELEASE_NOTES.md`](./app/RELEASE_NOTES.md) for the per-version changelog.
+
+## Releases
+
+Pre-built portable zips live in [`releases/`](./releases/). Each is named `fnba-utils-portable-<version>.zip` and contains the unsigned exe, the user `README.md`, `RELEASE_NOTES.md`, and an `example.assumeIdentity.json` template.
+
+To cut a new release on a machine with the Windows Rust toolchain:
+
+```bash
+cd app
+npm run package
+```
+
+That builds the release binary, stages everything into `app/dist-portable/`, then writes the final zip to `releases/`. Commit the zip alongside any code changes in the same PR so distribution stays in lockstep with the version.
 
 ## Optional tools
 

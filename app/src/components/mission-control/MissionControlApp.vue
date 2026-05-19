@@ -26,7 +26,10 @@ const {
 <template>
   <div class="mc-app">
     <div class="mc-header">
-      <span class="mc-title">Mission Control</span>
+      <div class="mc-title-group">
+        <span class="mc-title">Mission Control</span>
+        <span class="mc-experimental" title="Work in progress; behavior may change between builds">(experimental)</span>
+      </div>
       <PinButton
         :pinned="pinned"
         :size="24"
@@ -102,11 +105,29 @@ const {
   -webkit-app-region: drag;
 }
 
+.mc-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .mc-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: 0.2px;
+}
+
+.mc-experimental {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-style: italic;
+  letter-spacing: 0.2px;
+  opacity: 0.85;
+  -webkit-app-region: no-drag;
+  cursor: help;
 }
 
 .mc-divider {
