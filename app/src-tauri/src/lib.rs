@@ -3,7 +3,7 @@ mod db;
 mod models;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, RunEvent,
 };
@@ -18,12 +18,23 @@ pub fn run() {
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
+            let about = PredefinedMenuItem::about(
+                app,
+                Some("About FNBA Utils"),
+                Some(AboutMetadata {
+                    name: Some("FNBA Utils".to_string()),
+                    version: Some(env!("APP_VERSION").to_string()),
+                    copyright: Some("FNBA".to_string()),
+                    ..Default::default()
+                }),
+            )?;
+            let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit FNBA Utils", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &sep, &about, &quit])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("FNBA Utils")
+                .tooltip(format!("FNBA Utils {}", env!("APP_VERSION")))
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),

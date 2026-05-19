@@ -74,7 +74,7 @@ useKeyLayer(
         :selected-index="selectedIndex"
         @select="(i) => { selectedIndex = i; confirmSelection(); }"
       />
-      <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Close" />
+      <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Close" show-version />
     </template>
 
     <template v-else-if="mode === 'command-active' && activeCommand">

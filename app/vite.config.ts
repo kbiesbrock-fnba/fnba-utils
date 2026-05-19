@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "path";
+import { computeVersion } from "./scripts/version.mjs";
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -10,6 +11,9 @@ export default defineConfig({
     alias: {
       "@": resolve(__dirname, "src"),
     },
+  },
+  define: {
+    __APP_VERSION__: JSON.stringify(computeVersion()),
   },
   clearScreen: false,
   server: {
