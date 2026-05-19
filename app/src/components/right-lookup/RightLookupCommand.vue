@@ -26,12 +26,14 @@ const {
   associates,
   associateRights,
   error,
+  recentRights,
   loadConnections,
   reset,
   selectConnection,
   deleteCustomConnection,
   selectRight,
   selectAssociate,
+  removeRecentRight,
   goBack,
 } = useRightLookup();
 
@@ -71,7 +73,7 @@ defineExpose({ step });
   </template>
 
   <template v-else-if="step === 'rights'">
-    <RightPicker :rights="rights" :server="selectedConnection?.server ?? ''" @select-right="selectRight" @select-associate="selectAssociate" />
+    <RightPicker :rights="rights" :recent-rights="recentRights" :server="selectedConnection?.server ?? ''" @select-right="selectRight" @select-associate="selectAssociate" @remove-recent="removeRecentRight" />
     <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
   </template>
 

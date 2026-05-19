@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useListNavigation } from "@/composables/useListNavigation";
+import { KEY_PRIORITY } from "@/composables/useKeyLayer";
 import CommandInput from "../CommandInput.vue";
 
 const props = defineProps<{
@@ -29,6 +30,7 @@ useListNavigation({
       },
     },
   ],
+  priority: KEY_PRIORITY.MODAL,
 });
 
 function onUpdate(value: string) {

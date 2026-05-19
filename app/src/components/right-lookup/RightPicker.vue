@@ -3,15 +3,18 @@ import { ref, computed, onUnmounted } from "vue";
 import CommandInput from "../CommandInput.vue";
 import { searchAssociates, type RightInfo, type RightAssociate } from "@/lib/tauri";
 import { useListNavigation } from "@/composables/useListNavigation";
+import type { RecentRight } from "@/composables/useRightLookup";
 
 const props = defineProps<{
   rights: RightInfo[];
+  recentRights: RecentRight[];
   server: string;
 }>();
 
 const emit = defineEmits<{
   selectRight: [right: RightInfo];
   selectAssociate: [assoc: RightAssociate];
+  removeRecent: [rightId: number];
 }>();
 
 const query = ref("");
@@ -27,9 +30,20 @@ const filteredRights = computed(() => {
   return props.rights.filter((r) => r.rightName.toLowerCase().includes(q));
 });
 
+const filteredRecents = computed(() => {
+  const q = query.value.toLowerCase();
+  const out: RightInfo[] = [];
+  for (const recent of props.recentRights) {
+    if (q && !recent.rightName.toLowerCase().includes(q)) continue;
+    const match = props.rights.find((r) => r.rightName === recent.rightName);
+    out.push(match ?? { rightId: recent.rightId, rightName: recent.rightName });
+  }
+  return out;
+});
+
 type DisplayRow =
   | { kind: "header"; label: string }
-  | { kind: "right"; right: RightInfo; flatIndex: number }
+  | { kind: "right"; right: RightInfo; flatIndex: number; isRecent: boolean }
   | { kind: "associate"; assoc: RightAssociate; flatIndex: number }
   | { kind: "searching" };
 
@@ -37,10 +51,19 @@ const displayRows = computed(() => {
   const rows: DisplayRow[] = [];
   let idx = 0;
 
+  if (filteredRecents.value.length > 0) {
+    rows.push({ kind: "header", label: "Recently Used" });
+    for (const right of filteredRecents.value) {
+      rows.push({ kind: "right", right, flatIndex: idx++, isRecent: true });
+    }
+  }
+
   if (filteredRights.value.length > 0) {
-    if (query.value) rows.push({ kind: "header", label: "Rights" });
+    if (query.value || filteredRecents.value.length > 0) {
+      rows.push({ kind: "header", label: "Rights" });
+    }
     for (const right of filteredRights.value) {
-      rows.push({ kind: "right", right, flatIndex: idx++ });
+      rows.push({ kind: "right", right, flatIndex: idx++, isRecent: false });
     }
   }
 
@@ -64,10 +87,14 @@ const totalSelectable = computed(() => {
   ).length;
 });
 
-function selectAtIndex(index: number) {
-  const row = displayRows.value.find(
+function rowAtIndex(index: number) {
+  return displayRows.value.find(
     (r) => (r.kind === "right" || r.kind === "associate") && r.flatIndex === index,
   );
+}
+
+function selectAtIndex(index: number) {
+  const row = rowAtIndex(index);
   if (!row) return;
   if (row.kind === "right") emit("selectRight", row.right);
   else if (row.kind === "associate") emit("selectAssociate", row.assoc);
@@ -76,6 +103,20 @@ function selectAtIndex(index: number) {
 const { selectedIndex, resetIndex } = useListNavigation({
   itemCount: totalSelectable,
   onSelect: selectAtIndex,
+  extraKeys: [
+    {
+      key: "Delete",
+      handler: () => {
+        if (totalSelectable.value === 0) return false;
+        const row = rowAtIndex(selectedIndex.value);
+        if (row?.kind === "right" && row.isRecent) {
+          emit("removeRecent", row.right.rightId);
+          return;
+        }
+        return false;
+      },
+    },
+  ],
   listRef,
   scrollStrategy: "selected-class",
 });
@@ -131,6 +172,16 @@ onUnmounted(() => {
       >
         <span class="picker-name">{{ row.right.rightName }}</span>
         <span class="picker-id">#{{ row.right.rightId }}</span>
+        <button
+          v-if="row.isRecent"
+          class="remove-btn"
+          title="Remove from recent (Del)"
+          @click.stop="emit('removeRecent', row.right.rightId)"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+          </svg>
+        </button>
       </div>
       <div
         v-else-if="row.kind === 'associate'"

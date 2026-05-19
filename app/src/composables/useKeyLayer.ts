@@ -68,6 +68,7 @@ function removeLayer(id: symbol) {
 }
 
 export const KEY_PRIORITY = {
+  MODAL: 400,
   PICKER: 300,
   COMMAND: 200,
   PALETTE: 100,

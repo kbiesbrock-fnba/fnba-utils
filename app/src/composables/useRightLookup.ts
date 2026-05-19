@@ -21,6 +21,51 @@ export type RightLookupStep =
   | "associateResult"
   | "error";
 
+// --- Recent-right tracking via localStorage ---
+
+const RECENT_RIGHTS_KEY = "fnba-utils:recent-rights";
+const MAX_RECENT_RIGHTS = 5;
+
+export interface RecentRight {
+  rightId: number;
+  rightName: string;
+  timestamp: number;
+}
+
+function readRecentRights(): RecentRight[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_RIGHTS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentRights(entries: RecentRight[]) {
+  try {
+    localStorage.setItem(RECENT_RIGHTS_KEY, JSON.stringify(entries));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function loadRecentRights(): RecentRight[] {
+  return readRecentRights().sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+}
+
+function recordRecentRight(right: RightInfo) {
+  const entries = readRecentRights().filter((e) => e.rightId !== right.rightId);
+  entries.unshift({
+    rightId: right.rightId,
+    rightName: right.rightName,
+    timestamp: Date.now(),
+  });
+  writeRecentRights(entries.slice(0, MAX_RECENT_RIGHTS));
+}
+
+function deleteRecentRight(rightId: number) {
+  writeRecentRights(readRecentRights().filter((e) => e.rightId !== rightId));
+}
+
 // --- Shared state (singleton) ---
 
 const step = ref<RightLookupStep>("connection");
@@ -34,6 +79,7 @@ const associateRights = ref<RightInfo[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
 const connectionsLoaded = ref(false);
+const recentRights = ref<RecentRight[]>(loadRecentRights());
 
 function server(): string {
   return selectedConnection.value?.server ?? DEFAULT_SERVER;
@@ -88,6 +134,7 @@ export function useRightLookup() {
     associateRights.value = [];
     error.value = null;
     loading.value = false;
+    recentRights.value = loadRecentRights();
   }
 
   async function selectRight(right: RightInfo) {
@@ -97,6 +144,8 @@ export function useRightLookup() {
     loading.value = true;
     try {
       associates.value = await getRightAssociates(server(), right.rightName, null);
+      recordRecentRight(right);
+      recentRights.value = loadRecentRights();
       step.value = "result";
     } catch (e) {
       error.value = String(e);
@@ -104,6 +153,11 @@ export function useRightLookup() {
     } finally {
       loading.value = false;
     }
+  }
+
+  function removeRecentRight(rightId: number) {
+    deleteRecentRight(rightId);
+    recentRights.value = loadRecentRights();
   }
 
   async function selectAssociate(assoc: RightAssociate) {
@@ -170,6 +224,7 @@ export function useRightLookup() {
     associateRights,
     error,
     loading,
+    recentRights,
     loadConnections,
     loadRights,
     reset,
@@ -177,6 +232,7 @@ export function useRightLookup() {
     selectRight,
     selectAssociate,
     deleteCustomConnection,
+    removeRecentRight,
     goBack,
   };
 }
