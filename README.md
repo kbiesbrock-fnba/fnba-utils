@@ -69,16 +69,36 @@ See [`app/README.md`](./app/README.md) for the user manual (requirements, hotkey
 
 ## Releases
 
-Pre-built portable zips live in [`releases/`](./releases/). Each is named `fnba-utils-portable-<version>.zip` and contains the unsigned exe, the user `README.md`, `RELEASE_NOTES.md`, and an `example.assumeIdentity.json` template.
+Built portable zips live on the repo's GitHub Releases page:
 
-To cut a new release on a machine with the Windows Rust toolchain:
+**https://github.com/kbiesbrock-fnba/fnba-utils/releases** (the **Latest** tag is always the most recent stable build)
+
+Each release contains a `fnba-utils-portable-<version>.zip` with the unsigned exe, the user `README.md`, `RELEASE_NOTES.md`, and an `example.assumeIdentity.json` template.
+
+### Cutting a new release
+
+The flow is tag-driven — push a `v*` tag and CI builds the zip + publishes the release automatically.
 
 ```bash
-cd app
-npm run package
+# 1. Bump app/package.json, app/src-tauri/Cargo.toml, app/src-tauri/tauri.conf.json
+# 2. Update app/RELEASE_NOTES.md with the new entry
+# 3. Commit the bump + notes together
+# 4. Tag and push:
+git tag -a v1.2.3 -m "FNBA Utils v1.2.3"
+git push origin v1.2.3
 ```
 
-That builds the release binary, stages everything into `app/dist-portable/`, then writes the final zip to `releases/`. Commit the zip alongside any code changes in the same PR so distribution stays in lockstep with the version.
+The `.github/workflows/release.yml` workflow picks up the tag, builds on `windows-latest` (Rust + Node + Tauri CLI), runs `npm run package`, and creates the GitHub Release with `app/RELEASE_NOTES.md` as the body. Takes ~10 min cold, ~3 min with the cargo cache warm.
+
+### Local testing
+
+To produce a zip locally without publishing (useful for sanity-checking before tagging):
+
+```bash
+cd app && npm run package
+```
+
+That writes `releases/fnba-utils-portable-<version>.zip` in the repo root. The folder is gitignored — don't commit the zip; let CI handle distribution.
 
 ## Optional tools
 

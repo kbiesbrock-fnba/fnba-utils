@@ -12,3 +12,7 @@ app/dist-portable/
 app/src-tauri/target/
 
 app/*.tsbuildinfo
+
+# Distribution artifacts -- GitHub Releases is canonical; the local `releases/`
+# folder is the package-portable.mjs output dir but is not committed.
+releases/

@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build.rs and vite.config.ts both call `git rev-list --count HEAD`
+          # to compute the +<count> version suffix; a shallow clone breaks it.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
+      - name: Install app deps
+        working-directory: app
+        run: npm ci
+
+      - name: Build portable zip
+        working-directory: app
+        run: npm run package
+
+      # Bind the tag name to an env var (never inline `${{ ... }}` in `run:`
+      # commands -- a malicious tag name could be parsed as shell syntax).
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          gh release create "$TAG" releases/*.zip \
+            --title "$TAG" \
+            --notes-file app/RELEASE_NOTES.md

@@ -9,7 +9,10 @@
 //   inline example config -> bundled as example.assumeIdentity.json
 //
 // Output: <repo-root>/releases/fnba-utils-portable-<version>.zip
-// Staging: app/dist-portable/<name>/  (gitignored)
+//   - gitignored; never commit the zip
+//   - locally for sanity checks, or uploaded as a release asset by
+//     `.github/workflows/release.yml` when a `v*` tag is pushed
+// Staging: app/dist-portable/<name>/  (also gitignored)
 import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
