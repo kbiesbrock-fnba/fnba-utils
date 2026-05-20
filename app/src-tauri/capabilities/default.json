@@ -18,9 +18,16 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-current-monitor",
+    "core:window:allow-start-resize-dragging",
     "core:event:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered"
+    "global-shortcut:allow-is-registered",
+    "dialog:allow-open",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "notification:allow-notify",
+    "notification:allow-request-permission",
+    "notification:allow-is-permission-granted"
   ]
 }

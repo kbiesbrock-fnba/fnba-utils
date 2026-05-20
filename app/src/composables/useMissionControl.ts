@@ -18,6 +18,14 @@ import {
   type PinnedPanel,
   type SqlPanelPayload,
 } from "@/lib/panelStorage";
+import {
+  PANEL_DEFAULTS,
+  panelKeyFor,
+  panelLabelFor,
+  panelUrlFor,
+  payloadOf,
+} from "@/lib/panels";
+import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
@@ -26,80 +34,6 @@ const POLL_INTERVAL = 3000;
 const CONNECTIONS_POLL_INTERVAL = 30000;
 const BLUR_SUPPRESS_MS = 300;
 
-const PANEL_DEFAULTS: Record<PanelKind, Record<string, unknown>> = {
-  "sql-query": {
-    width: 700,
-    height: 520,
-    minWidth: 400,
-    minHeight: 300,
-    resizable: false,
-    decorations: false,
-    shadow: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    visible: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: "SQL Query",
-  },
-  "session-detail": {
-    width: 440,
-    height: 640,
-    minWidth: 360,
-    minHeight: 400,
-    resizable: true,
-    decorations: false,
-    shadow: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    visible: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: "Session Detail",
-  },
-};
-
-function hashStr(s: string): string {
-  // Combined djb2 + FNV-1a 32-bit → ~64-bit effective hash. djb2 alone collides
-  // around 65k items; doubling makes the birthday threshold 2^32 — out of reach
-  // for the small set of sessions/connections we ever label.
-  let h1 = 0;
-  let h2 = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 = ((h1 << 5) - h1 + c) | 0;
-    h2 = Math.imul(h2 ^ c, 16777619);
-  }
-  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
-}
-
-function panelKeyFor(kind: PanelKind, payload: SqlPanelPayload | DetailPanelPayload): string {
-  return kind === "sql-query"
-    ? (payload as SqlPanelPayload).server
-    : (payload as DetailPanelPayload).sessionId;
-}
-
-function panelLabelFor(kind: PanelKind, key: string): string {
-  return `${kind}:${hashStr(key)}`;
-}
-
-function panelUrlFor(
-  kind: PanelKind,
-  payload: SqlPanelPayload | DetailPanelPayload,
-): string {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(payload)) {
-    params.set(k, String(v));
-  }
-  return `index.html#${kind}?${params.toString()}`;
-}
-
-function payloadOf(panel: PinnedPanel): SqlPanelPayload | DetailPanelPayload {
-  if (panel.kind === "sql-query") {
-    return { server: panel.server, label: panel.label };
-  }
-  return { sessionId: panel.sessionId, cwd: panel.cwd, pid: panel.pid };
-}
 
 const pinned = ref(readBool(PINNED_KEY));
 const sessions = ref<ClaudeSession[]>([]);
@@ -118,14 +52,49 @@ let connectionsPollTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
 let suppressBlur = false;
 
+/**
+ * Last observed status per session, used to detect Busy → Idle transitions
+ * for ambient notifications. Lives outside `sessions.value` so mutating it
+ * doesn't trigger Vue re-renders.
+ */
+const lastStatus = new Map<string, string>();
+
 async function fetchSessions() {
   try {
-    sessions.value = await getClaudeSessions();
+    const next = await getClaudeSessions();
+    notifyIdleTransitions(next);
+    sessions.value = next;
     error.value = null;
   } catch (e) {
     error.value = String(e);
   } finally {
     loading.value = false;
+  }
+}
+
+function notifyIdleTransitions(next: ClaudeSession[]) {
+  const liveIds = new Set<string>();
+  for (const s of next) {
+    liveIds.add(s.sessionId);
+    const prev = lastStatus.get(s.sessionId);
+    lastStatus.set(s.sessionId, s.status);
+    // First observation: nothing to compare; just record.
+    if (prev === undefined) continue;
+    if (prev === "busy" && s.status === "idle") {
+      const label = s.label ?? s.name ?? s.sessionId.slice(0, 8);
+      isAnyMcWindowFocused().then((focused) => {
+        if (!focused) {
+          notify({
+            title: `Claude finished: ${label}`,
+            body: s.cwd,
+          });
+        }
+      });
+    }
+  }
+  // Drop dead-session entries so the map doesn't grow unbounded.
+  for (const sid of [...lastStatus.keys()]) {
+    if (!liveIds.has(sid)) lastStatus.delete(sid);
   }
 }
 
@@ -263,8 +232,18 @@ async function openOrFocusPanel(
 
 async function hideAllSidePanels() {
   if (!isTauri) return;
+  // Honor each panel's own pin state — pinned session-detail / sql-query
+  // panels survive MC's blur-hide. The explicit Win+Shift+C dismiss path
+  // (in lib.rs) bypasses this and hides everything regardless of pin.
+  const pinnedLabels = new Set(
+    readPinnedPanels().map((p) =>
+      panelLabelFor(p.kind, p.kind === "sql-query" ? p.server : p.sessionId),
+    ),
+  );
   const panels = await listSidePanels();
-  await Promise.all(panels.map((w) => w.hide()));
+  await Promise.all(
+    panels.filter((w) => !pinnedLabels.has(w.label)).map((w) => w.hide()),
+  );
 }
 
 async function restorePinnedSidePanels() {
@@ -350,7 +329,29 @@ export function useMissionControl() {
         listen("mc-shown", () => {
           restorePinnedSidePanels();
         });
+        // MRU hotkey (Super+Shift+N) → backend looks up most-recent project
+        // and emits this. We do the actual spawn + window opening here so
+        // existing launcher logic (start_new_claude_session +
+        // openOrFocusPanel) is reused untouched.
+        listen<{ cwd: string; displayName: string }>("mc-mru-launch", async (e) => {
+          await launchMru(e.payload.cwd);
+        });
       });
+    }
+  }
+
+  async function launchMru(cwd: string) {
+    try {
+      const { startNewClaudeSession } = await import("@/lib/tauri");
+      const info = await startNewClaudeSession(cwd, null, false);
+      await openOrFocusPanel("session-detail", {
+        sessionId: info.sessionId,
+        cwd: info.cwd,
+        pid: info.pid,
+      });
+      fetchSessions();
+    } catch (e) {
+      console.error("[mc] MRU launch failed", e);
     }
   }
 

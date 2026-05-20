@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod models;
+mod state;
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem},
@@ -13,8 +14,12 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(models::mission_control::ClaudeIoState::new())
         .manage(models::mission_control::SqlQueryState::new())
+        .manage(state::owned_sessions::OwnedSessionsState::load())
+        .manage(state::projects::ProjectsState::load())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
@@ -72,6 +77,74 @@ pub fn run() {
                                 let _ = w.set_focus();
                             }
                         }
+                    }
+                },
+            )?;
+
+            // --- Global Shortcut: Win+Shift+N (launch into MRU project) ---
+            // Looks up the most-recently-used project from ProjectsState and
+            // emits `mc-mru-launch` with its cwd + displayName. The Mission
+            // Control window's frontend listens and calls the same
+            // start_new_claude_session pipeline the palette uses.
+            //
+            // No-op (silently) if the registry is empty; user can use
+            // Win+Shift+F → "new claude" to seed the registry.
+            app.global_shortcut().on_shortcut(
+                "Super+Shift+N",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let Some(projects) = app.try_state::<state::projects::ProjectsState>() else {
+                        return;
+                    };
+                    if let Some(p) = projects.most_recent_used() {
+                        let _ = app.emit(
+                            "mc-mru-launch",
+                            serde_json::json!({
+                                "cwd": p.cwd,
+                                "displayName": p.display_name,
+                            }),
+                        );
+                        // Make sure Mission Control is showing so its listener
+                        // is awake and the new session-detail window has a
+                        // place to anchor to.
+                        if let Some(w) = app.get_webview_window("mission-control") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                },
+            )?;
+
+            // --- Global Shortcut: Ctrl+Shift+Tab (cycle session-detail windows) ---
+            // When you're juggling multiple session-detail panels, this is the
+            // fast path to "focus the next one." Order = label asc, which is
+            // stable per session_id hash.
+            app.global_shortcut().on_shortcut(
+                "Control+Shift+Tab",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let mut panels: Vec<(String, tauri::WebviewWindow)> = app
+                        .webview_windows()
+                        .into_iter()
+                        .filter(|(label, _)| label.starts_with("session-detail:"))
+                        .collect();
+                    if panels.is_empty() {
+                        return;
+                    }
+                    panels.sort_by(|a, b| a.0.cmp(&b.0));
+                    // Find the currently-focused panel, focus the next in order
+                    // (or the first if none focused / focused isn't a panel).
+                    let current = panels
+                        .iter()
+                        .position(|(_, w)| w.is_focused().unwrap_or(false));
+                    let next_idx = current.map(|i| (i + 1) % panels.len()).unwrap_or(0);
+                    if let Some((_, w)) = panels.get(next_idx) {
+                        let _ = w.show();
+                        let _ = w.set_focus();
                     }
                 },
             )?;
@@ -136,10 +209,26 @@ pub fn run() {
             commands::mission_control::kill_sql_query,
             commands::mission_control::get_session_detail,
             commands::mission_control::kill_session,
-            commands::mission_control::start_claude_session,
-            commands::mission_control::send_claude_message,
-            commands::mission_control::stop_claude_session,
             commands::mission_control::open_in_explorer,
+            commands::claude_io::start_new_claude_session,
+            commands::claude_io::start_claude_session,
+            commands::claude_io::send_claude_message,
+            commands::claude_io::write_session_pty,
+            commands::claude_io::resize_session_pty,
+            commands::claude_io::stop_claude_session,
+            commands::claude_io::disconnect_session,
+            commands::claude_io::interrupt_claude_session,
+            commands::claude_io::update_session_label,
+            commands::claude_io::pick_directory,
+            commands::claude_io::open_path_in_editor,
+            commands::claude_io::list_session_history,
+            commands::claude_io::forget_session_history,
+            commands::claude_io::resume_owned_session,
+            commands::projects::list_projects,
+            commands::projects::add_project,
+            commands::projects::update_project,
+            commands::projects::remove_project,
+            commands::projects::record_project_used,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
