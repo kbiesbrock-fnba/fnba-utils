@@ -1,52 +1,28 @@
 # Release Notes
 
-## v1.7.5 — 2026-05-20
-
-- **Default collapsed: Description + Specification.** Click the header to expand either section in the full-task panel.
-- **Keyboard accessible toggles.** The Checklist toggle in the standup panel and the Description / Specification toggles in the full-task panel are now real `<button>` elements with `aria-expanded` and visible focus rings. Tab to focus, Enter/Space to toggle.
-
-## v1.7.4 — 2026-05-20
-
-- **Description and Specification headers now default collapsed** in the full-task panel. (Superseded by v1.7.5.)
-
-## v1.7.3 — 2026-05-20
-
-- **Specification section also toggleable** in the full-task panel, same pattern as Description (chevron rotates).
-
-## v1.7.2 — 2026-05-20
-
-- **Description section is now toggleable in the full-task panel.** Default expanded; clicking the "Description" header collapses the body. Chevron rotates 90° when open, mirroring the panel's checklist-toggle behavior so the two interaction patterns feel consistent.
-
-## v1.7.1 — 2026-05-20
-
-- **Checklists collapsed by default behind a toggle row.** Some issues have huge checklists; auto-rendering 30+ sub-rows under one issue made the panel unusable. Now any issue with `hasChecklist` shows a single 24px sub-row labelled "Toggle Smart Checklist" with a `done/total` count pill. Clicking expands the items inline (same sub-row markup as before); clicking again collapses. State lives in `expandedChecklists: Set<string>` on the panel — per-issue, in-memory.
-
 ## v1.7.0 — 2026-05-20
 
-### Panel: 2× width, drag handle column, checklist sub-rows
+### Standup panel: wider rows, sub-rows for checklist items, polish
 
-Bigger restructure of the row layout and a major content addition:
-
-- **Default panel width 600 → 1200**. Min width raised to 480.
-- **Drag handle gets its own column** at the far right. It no longer drifts left when an issue has no priority or due date pill. The column reserves a fixed 20px regardless of row content.
-- **Issue type column reserves space whether or not the pill renders.** "Task" is still suppressed; other types (Bug, Story, Sub-task, Epic, Incident) show.
-- **Smart Checklist icon column** added between type pill and summary. 16px reserved on every row; the icon renders only when the issue's `cf[13097]` field is non-empty.
-- **Smart Checklist items appear as sub-rows** under their parent issue. Each item is a 22px row in the same subgrid, with a tree-glyph (`└`) indent, an indicator/checkbox showing the item's checked state from Jira, and the item text. Header lines (Smart Checklist `>` or `#` prefixes) render in uppercase with no checkbox. Sub-rows respect the parent's status-stripe color (dimmer) and inherit the strikethrough + dim when the parent task is checked off.
-- **Field-extraction debug fallback retained** from v1.6.1: if a checklist field returns something parsing can't structure, the IssueDetail window's "Checklist (raw)" block shows the raw text.
+- **Panel width 600 → 1200**, min width 480.
+- **Row layout rebuilt** on CSS subgrid: `[checkbox] [KEY+badge] [type pill] [checklist-icon] [summary…] [priority+due] [drag-handle]`. Drag handle owns its own rightmost column and no longer drifts left when other meta is absent.
+- **Story points badge** replaces `KEY (N)` parens. Each integer value gets its own hand-picked color, alternating between deep and bright tones so adjacent numbers differ in lightness as well as hue (royal blue, bright cyan, deep teal, bright green, deep lime, bright yellow, deep amber, bright orange, deep red, bright pink, deep fuchsia, bright lavender, deep indigo for the Fibonacci scale + neighbors). Text color flips light/dark per chip so contrast holds.
+- **Smart Checklist sub-rows.** Any issue with content in `cf[13097]` shows a collapsible "Toggle Smart Checklist" row with a `done/total` count pill. Expanded, each item is a 22px sub-row in the same subgrid with a tree-glyph indent and the checkbox state from Jira; headers render in uppercase. Sub-rows inherit the parent's status-stripe color (dimmer) and the parent's strikethrough/dim when checked off.
+- **Full-task panel sections (Description, Specification) are collapsible buttons** with rotating chevrons. Default collapsed. Real `<button>` elements with `aria-expanded` + visible focus rings — tab to focus, Enter/Space to toggle. Same accessibility pattern applied to the panel's checklist toggle.
 
 ### Pipeline
 
-The Smart Checklist field is now fetched in the **initial** JQL query (the panel pull), not just the per-issue detail fetch. That means:
+The Smart Checklist field is now fetched in the initial JQL query (the panel pull), not just the per-issue detail fetch:
 
 - `fetch_issues` includes `customfield_13097` in `fields`.
-- The text is unwrapped via the new `extract_checklist_text` helper (handles bare strings, `{ "v": "..." }` envelopes, `{ "text": "..." }`, ADF documents, and raw JSON fallback).
-- Parsed items + raw text are persisted into `run_snapshot.checklist_text` (new column, with best-effort `ALTER TABLE` migration).
-- `report_from_snapshot` reparses the stored text on read so the panel can render sub-rows for past runs too.
-- `ChecklistItem` + `parse_checklist` moved from `commands/standup.rs` to `models/standup.rs` since both layers need them.
+- New `extract_checklist_text` helper unwraps bare strings, `{ "v": "..." }` envelopes, `{ "text": "..." }`, ADF documents, and falls back to a raw-JSON dump for diagnostics.
+- Parsed items + raw text persist into `run_snapshot.checklist_text` (new column, best-effort `ALTER TABLE` migration).
+- `report_from_snapshot` reparses the stored text on read so historical runs render sub-rows too.
+- `ChecklistItem` + `parse_checklist` moved from `commands/standup.rs` to `models/standup.rs` so both layers share.
 
 ### Refactor
 
-- New `StandupTaskRow.vue` extracted from the duplicated bug/task row markup in `StandupPanelApp.vue`. The parent template now passes a single `<StandupTaskRow>` per issue and the component emits drag/click/check events. Same component renders both main row and N checklist sub-rows.
+- New `StandupTaskRow.vue` extracted from the duplicated bug/task row markup in `StandupPanelApp.vue`. One component renders both the main row and N checklist sub-rows.
 
 ## v1.6.1 — 2026-05-20
 

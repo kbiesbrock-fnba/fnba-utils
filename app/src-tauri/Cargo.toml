@@ -1,6 +1,6 @@
 [package]
 name = "fnba-utils"
-version = "1.7.5"
+version = "1.7.0"
 description = "FNBA Utils command palette"
 authors = ["kbiesbrock"]
 edition = "2021"

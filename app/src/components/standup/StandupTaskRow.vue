@@ -32,10 +32,51 @@ const checklistCount = computed(() => {
   return { total, done };
 });
 
-function keyWithPoints(key: string, pts: number | null): string {
-  if (pts === null || pts === undefined) return key;
-  const p = Number.isInteger(pts) ? `${pts}` : pts.toFixed(1);
-  return `${key} (${p})`;
+function formatPoints(pts: number | null): string {
+  if (pts === null || pts === undefined) return "";
+  return Number.isInteger(pts) ? `${pts}` : pts.toFixed(1);
+}
+
+/**
+ * Per-value palette. Hand-picked vivid colors that are perceptually distinct
+ * even for adjacent values — no smooth hue ramp. Lower values use cooler
+ * tones, higher values rotate through warm → magenta to signal magnitude.
+ * Solid background + light text makes each badge a recognizable chip.
+ */
+// Adjacent values alternate between DEEP (saturated, dark) and BRIGHT (vivid, light)
+// so neighbors differ in lightness AND hue, not just hue. Solves the "2 and 3 look
+// the same" problem from the previous flat 500-level palette.
+const POINT_PALETTE: Record<number, { bg: string; fg: string }> = {
+  0:  { bg: "#475569", fg: "#e2e8f0" }, // slate-600
+  1:  { bg: "#94a3b8", fg: "#0f172a" }, // slate-400  (bright muted)
+  2:  { bg: "#1d4ed8", fg: "#ffffff" }, // blue-700   (deep royal)
+  3:  { bg: "#22d3ee", fg: "#083344" }, // cyan-400   (bright aqua)
+  4:  { bg: "#0d9488", fg: "#ffffff" }, // teal-600   (deep teal)
+  5:  { bg: "#4ade80", fg: "#052e16" }, // green-400  (bright green)
+  6:  { bg: "#65a30d", fg: "#f7fee7" }, // lime-600   (deep lime)
+  7:  { bg: "#facc15", fg: "#1a1503" }, // yellow-400 (bright yellow)
+  8:  { bg: "#b45309", fg: "#fff7ed" }, // amber-700  (deep amber/brown)
+  9:  { bg: "#fb923c", fg: "#1c0901" }, // orange-400 (bright orange)
+  10: { bg: "#b91c1c", fg: "#ffffff" }, // red-700    (deep red)
+  11: { bg: "#f472b6", fg: "#500724" }, // pink-400   (bright pink)
+  12: { bg: "#a21caf", fg: "#ffffff" }, // fuchsia-700 (deep magenta)
+  13: { bg: "#c084fc", fg: "#2e1065" }, // purple-400 (bright lavender)
+  21: { bg: "#4338ca", fg: "#ffffff" }, // indigo-700 (deep indigo)
+};
+
+function pointsStyle(pts: number | null): Record<string, string> {
+  if (pts === null || pts === undefined) return {};
+  const rounded = Math.round(pts);
+  const entry =
+    POINT_PALETTE[rounded] ??
+    (rounded > 21
+      ? { bg: "#7c3aed", fg: "#ffffff" } // violet-600 for anything beyond
+      : POINT_PALETTE[1]);
+  return {
+    color: entry.fg,
+    background: entry.bg,
+    borderColor: entry.bg,
+  };
 }
 
 function shortType(t: string): string {
@@ -114,7 +155,15 @@ function dueClass(iso: string | null): string {
       @change="emit('toggleCompleted', issue.key, completed)"
       @click.stop
     />
-    <span class="cell-key">{{ keyWithPoints(issue.key, issue.storyPoints) }}</span>
+    <span class="cell-key">
+      <span class="key-text">{{ issue.key }}</span>
+      <span
+        v-if="issue.storyPoints !== null && issue.storyPoints !== undefined"
+        class="points-badge"
+        :style="pointsStyle(issue.storyPoints)"
+        :title="`${formatPoints(issue.storyPoints)} story point${issue.storyPoints === 1 ? '' : 's'}`"
+      >{{ formatPoints(issue.storyPoints) }}</span>
+    </span>
     <span class="cell-type">
       <span
         v-if="showTypePill(issue.issueType)"
@@ -281,12 +330,37 @@ function dueClass(iso: string | null): string {
 }
 
 .cell-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.key-text {
   font-family: var(--font-mono);
   font-weight: 600;
   color: #93c5fd;
-  white-space: nowrap;
   font-size: 11px;
 }
+
+/* Points badge — colored by tier; higher points = hotter color. */
+.points-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  line-height: 1;
+}
+
+/* Per-value coloring is applied via inline style from pointsStyle(). */
 
 .cell-type {
   display: inline-flex;
