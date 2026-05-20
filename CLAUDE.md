@@ -60,6 +60,7 @@ A separate `Win+Shift+C` window tracks Claude Code sessions launched **from** th
   - `Win+Shift+F` — command palette
   - `Win+Shift+C` — Mission Control panel
   - `Win+Shift+N` — launch a session in the most-recently-used project (emits `mc-mru-launch`, handled in `useMissionControl.ts`)
+  - `Ctrl+Shift+Tab` — cycle focus through open `session-detail:*` windows (pure Rust, sorts by label hash for stable order)
 
 ### Data sources
 - `data/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`

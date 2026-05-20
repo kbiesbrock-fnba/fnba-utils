@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.5.1 — 2026-05-20
+
+`Ctrl+Shift+Tab` cycles focus through open session-detail panels. Stable order (by panel label hash). For juggling 3+ live sessions without reaching for the mouse.
+
 ## v1.5.0 — 2026-05-20
 
 **Notifications: never miss a stuck claude again.**

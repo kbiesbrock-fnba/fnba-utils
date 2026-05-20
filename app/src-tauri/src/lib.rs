@@ -117,6 +117,38 @@ pub fn run() {
                 },
             )?;
 
+            // --- Global Shortcut: Ctrl+Shift+Tab (cycle session-detail windows) ---
+            // When you're juggling multiple session-detail panels, this is the
+            // fast path to "focus the next one." Order = label asc, which is
+            // stable per session_id hash.
+            app.global_shortcut().on_shortcut(
+                "Control+Shift+Tab",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let mut panels: Vec<(String, tauri::WebviewWindow)> = app
+                        .webview_windows()
+                        .into_iter()
+                        .filter(|(label, _)| label.starts_with("session-detail:"))
+                        .collect();
+                    if panels.is_empty() {
+                        return;
+                    }
+                    panels.sort_by(|a, b| a.0.cmp(&b.0));
+                    // Find the currently-focused panel, focus the next in order
+                    // (or the first if none focused / focused isn't a panel).
+                    let current = panels
+                        .iter()
+                        .position(|(_, w)| w.is_focused().unwrap_or(false));
+                    let next_idx = current.map(|i| (i + 1) % panels.len()).unwrap_or(0);
+                    if let Some((_, w)) = panels.get(next_idx) {
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                },
+            )?;
+
             // --- Global Shortcut: Win+Shift+C (Mission Control) ---
             app.global_shortcut().on_shortcut(
                 "Super+Shift+C",

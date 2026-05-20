@@ -18,6 +18,7 @@ For what's new per version, see `RELEASE_NOTES.md` next to this file.
    - **`Win+Shift+F`** — open the command palette (Assume Identity, Right Lookup, New Claude Session).
    - **`Win+Shift+C`** — open Mission Control.
    - **`Win+Shift+N`** — launch a Claude session in your most-recently-used project (zero clicks).
+   - **`Ctrl+Shift+Tab`** — cycle focus through open session-detail panels.
 4. To launch on every login, drop a shortcut to `fnba-utils.exe` into:
 
    ```
