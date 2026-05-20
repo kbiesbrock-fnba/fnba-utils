@@ -8,11 +8,21 @@ import {
   writeSessionPty,
   resizeSessionPty,
   interruptClaudeSession,
+  openPathInEditor,
   onClaudeEvent,
   onClaudeSessionClosed,
   type ClaudeEventEnvelope,
 } from "@/lib/tauri";
 import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
+
+/**
+ * Regex matching file paths claude commonly emits. Conservative — requires
+ * either an absolute prefix (`/`, `~/`, `./`, `../`, `<drive>:\`, `<drive>:/`)
+ * or starts inside `/mnt/<drive>/`, so prose words with slashes (HTTP-less)
+ * don't match. Optional `:LINE` or `:LINE:COL` suffix for editor jumps.
+ */
+const PATH_REGEX =
+  /(?:\/mnt\/[a-zA-Z]\/[\w./\-]+|\/(?:home|usr|opt|var|tmp|root|etc)\/[\w./\-]+|~\/[\w./\-]+|\.{1,2}\/[\w./\-]+|[A-Za-z]:[\\/][\w.\\/\-]+)(?::\d+(?::\d+)?)?/g;
 
 /**
  * Lifecycle wrapper around an xterm.js terminal hooked up to a tmux-backed
@@ -172,6 +182,44 @@ export function useTerminal(opts: UseTerminalOptions) {
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(el);
+
+    // File-path link provider: scan each line for path-like tokens; on click
+    // hand the matched text to the backend, which translates WSL→Windows and
+    // launches IntelliJ (or Explorer fallback).
+    term.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        if (!term) return callback(undefined);
+        const lineBuf = term.buffer.active.getLine(bufferLineNumber - 1);
+        if (!lineBuf) return callback(undefined);
+        const lineText = lineBuf.translateToString(true);
+        if (!lineText) return callback(undefined);
+
+        const links: Array<{
+          range: { start: { x: number; y: number }; end: { x: number; y: number } };
+          text: string;
+          activate: (e: MouseEvent, text: string) => void;
+        }> = [];
+        PATH_REGEX.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = PATH_REGEX.exec(lineText)) !== null) {
+          const start = match.index + 1;
+          const end = start + match[0].length - 1;
+          links.push({
+            range: {
+              start: { x: start, y: bufferLineNumber },
+              end: { x: end, y: bufferLineNumber },
+            },
+            text: match[0],
+            activate: (_e, text) => {
+              openPathInEditor(text).catch((err) =>
+                console.warn("[terminal] open path failed", err),
+              );
+            },
+          });
+        }
+        callback(links);
+      },
+    });
 
     term.onData((data) => {
       writeSessionPty(opts.sessionId, data).catch((e) =>

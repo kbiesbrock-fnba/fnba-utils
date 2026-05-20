@@ -1,5 +1,11 @@
 # Release Notes
 
+## v1.7.0 — 2026-05-20
+
+**Click any file path in the terminal to open it in IntelliJ.**
+
+The terminal now recognizes file-path tokens claude prints (`/mnt/c/...`, `~/...`, `./relative`, `C:\...`, with optional `:LINE:COL` suffix) and underlines them on hover. Click → opens in IntelliJ if `idea64.exe` is on PATH, otherwise hands off to `explorer.exe` for the default app. WSL paths are translated to Windows form before launching.
+
 ## v1.6.7 — 2026-05-20
 
 Internal refactor: pulled xterm.js + PTY lifecycle out of `ChatPane.vue` into a `useTerminal` composable. The component is now ~100 lines of template + styles; everything else (terminal construction, resize observer, claude-event subscription, startup watchdog, disconnect-on-unmount) lives in `app/src/composables/useTerminal.ts`. No behavior change.

@@ -737,6 +737,11 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "open_path_in_editor": {
+      console.log("[mock] open_path_in_editor", args);
+      return undefined as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -874,6 +879,11 @@ export function updateSessionLabel(
 /** Open the native directory picker; returns a WSL path or null if cancelled. */
 export function pickDirectory(): Promise<string | null> {
   return invoke<string | null>("pick_directory");
+}
+
+/** Open a file path (WSL or Windows form) in IntelliJ if available, Explorer otherwise. */
+export function openPathInEditor(path: string): Promise<void> {
+  return invoke<void>("open_path_in_editor", { path });
 }
 
 /** Wave 2: project registry CRUD. */

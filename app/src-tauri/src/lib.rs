@@ -220,6 +220,7 @@ pub fn run() {
             commands::claude_io::interrupt_claude_session,
             commands::claude_io::update_session_label,
             commands::claude_io::pick_directory,
+            commands::claude_io::open_path_in_editor,
             commands::projects::list_projects,
             commands::projects::add_project,
             commands::projects::update_project,

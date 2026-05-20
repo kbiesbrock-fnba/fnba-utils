@@ -1164,6 +1164,83 @@ pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, Str
     Ok(picked.map(|p| windows_path_to_wsl(&p)))
 }
 
+/// Open a file path in the user's editor of choice (IntelliJ if available,
+/// Explorer fallback). Accepts WSL paths (`/mnt/c/...`) and translates to
+/// Windows form so the editor understands. Optional `:LINE[:COL]` suffix is
+/// stripped before opening (IntelliJ's CLI doesn't accept it inline).
+#[tauri::command]
+pub async fn open_path_in_editor(path: String) -> Result<(), String> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Err("Empty path".into());
+    }
+    // Strip a trailing `:NUM` or `:NUM:NUM` (line/col hints) the link
+    // provider may have included.
+    let stripped = strip_line_suffix(raw);
+    let windows = wsl_path_to_windows(stripped);
+
+    // Try IntelliJ first.
+    if std::process::Command::new("idea64.exe")
+        .arg(&windows)
+        .spawn()
+        .is_ok()
+    {
+        return Ok(());
+    }
+    // Fall back to the OS default (explorer.exe opens with the registered
+    // app for the file type, or just the parent folder for directories).
+    std::process::Command::new("explorer.exe")
+        .arg(&windows)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open path: {e}"))
+}
+
+fn strip_line_suffix(s: &str) -> &str {
+    // Match trailing ":N" or ":N:N" where N is digits.
+    let bytes = s.as_bytes();
+    let mut end = s.len();
+    let mut colons = 0;
+    while colons < 2 {
+        // Walk back over digits
+        let digit_end = end;
+        while end > 0 && bytes[end - 1].is_ascii_digit() {
+            end -= 1;
+        }
+        if end == digit_end || end == 0 || bytes[end - 1] != b':' {
+            // No digits found or no preceding colon — undo this attempt.
+            return if colons == 0 { s } else { &s[..digit_end + colons - 1] };
+        }
+        end -= 1;
+        colons += 1;
+    }
+    &s[..end]
+}
+
+/// Translate a WSL path like `/mnt/c/dev/foo.ts` to `C:\dev\foo.ts`. Pure
+/// Linux paths (e.g. `/home/<u>/...`) become UNC (`\\wsl.localhost\Ubuntu\...`).
+/// Already-Windows paths pass through unchanged.
+fn wsl_path_to_windows(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("/mnt/") {
+        if let Some((drive, tail)) = rest.split_once('/') {
+            if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
+                return format!(
+                    "{}:\\{}",
+                    drive.to_uppercase(),
+                    tail.replace('/', "\\"),
+                );
+            }
+        } else if rest.len() == 1 {
+            return format!("{}:\\", rest.to_uppercase());
+        }
+    }
+    if path.starts_with('/') {
+        return format!(r"\\wsl.localhost\Ubuntu{}", path.replace('/', "\\"));
+    }
+    // Looks like a Windows path already, or relative — pass through.
+    path.to_string()
+}
+
 /// Translate a Windows path like `C:\dev\fnba-utils` to `/mnt/c/dev/fnba-utils`.
 /// UNC paths under `\\wsl.localhost\Ubuntu\...` become `/...`. Already-Linux
 /// paths pass through unchanged.
