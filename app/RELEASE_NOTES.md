@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.6.7 — 2026-05-20
+
+Internal refactor: pulled xterm.js + PTY lifecycle out of `ChatPane.vue` into a `useTerminal` composable. The component is now ~100 lines of template + styles; everything else (terminal construction, resize observer, claude-event subscription, startup watchdog, disconnect-on-unmount) lives in `app/src/composables/useTerminal.ts`. No behavior change.
+
 ## v1.6.6 — 2026-05-20
 
 Internal cleanup: pulled `PANEL_DEFAULTS` and the panel-window helpers (`panelLabelFor`, `panelUrlFor`, `payloadOf`, `panelKeyFor`) into a new `lib/panels.ts`. Both `useMissionControl` and `NewSessionCommand` now import from there so the launcher and Mission Control can't drift on default sizes again.
