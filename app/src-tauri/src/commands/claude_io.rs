@@ -1030,6 +1030,136 @@ pub async fn interrupt_claude_session(
     run_tmux(&["send-keys", "-t", &owned.tmux_session, "C-c"])
 }
 
+/// Read a list of historical (dead) sessions, newest-first. Wave 4 history view.
+#[tauri::command]
+pub async fn list_session_history(
+    limit: Option<usize>,
+    owned_state: tauri::State<'_, OwnedSessionsState>,
+) -> Result<Vec<OwnedSession>, String> {
+    Ok(owned_state.list_history(limit.unwrap_or(200)))
+}
+
+/// Permanently drop a session from history.
+#[tauri::command]
+pub async fn forget_session_history(
+    session_id: String,
+    owned_state: tauri::State<'_, OwnedSessionsState>,
+) -> Result<bool, String> {
+    owned_state.forget_history(&session_id)
+}
+
+/// Resume a historical session: re-spawn `claude --resume <sid>` in the
+/// original cwd and move the entry from history back to live entries with a
+/// fresh pid + tmux session. The original session_id is preserved so the
+/// JSONL transcript continues.
+#[tauri::command]
+pub async fn resume_owned_session(
+    app: tauri::AppHandle,
+    session_id: String,
+    io_state: tauri::State<'_, ClaudeIoState>,
+    owned_state: tauri::State<'_, OwnedSessionsState>,
+) -> Result<NewSessionInfo, String> {
+    let historical = owned_state
+        .pop_history(&session_id)
+        .map_err(|e| format!("history lookup failed: {e}"))?
+        .ok_or_else(|| format!("Session {session_id} not in history"))?;
+
+    let cwd = historical.cwd.clone();
+    // Re-trust the workspace — the project may have moved or been mass-edited
+    // since it was last open.
+    let trust = ensure_workspace_trust(&cwd);
+    if trust == TrustState::WriteFailed {
+        let _ = app.emit(
+            "claude-event",
+            serde_json::json!({
+                "sessionId": session_id,
+                "event": {
+                    "type": "system",
+                    "subtype": "trust-warning",
+                    "text": "Could not pre-accept workspace trust on resume.",
+                },
+            }),
+        );
+    }
+
+    let (jsonl_path, claude_home) = resolve_jsonl_path(&cwd, &session_id)?;
+    let baseline_offset = std::fs::metadata(&jsonl_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    if std::process::Command::new("wsl.exe")
+        .args(["-e", "which", "tmux"])
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        return Err(
+            "tmux is not installed in WSL. Install it with: sudo apt-get install -y tmux".into(),
+        );
+    }
+
+    let bash_cmd = build_tmux_claude_cmd(&cwd, &session_id, "--resume");
+    let (writer, master, reader, pid) = spawn_in_pty(&cwd, &bash_cmd)?;
+    let pid = pid.unwrap_or(0);
+
+    let (tail_stop_tx, tail_stop_rx) = std::sync::mpsc::channel::<()>();
+    let pty_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(PTY_BUFFER_CAP)));
+    let generation = next_generation();
+    io_state
+        .sessions
+        .lock()
+        .map_err(|e| format!("State lock poisoned: {e}"))?
+        .insert(
+            session_id.clone(),
+            ClaudeIoSession {
+                writer,
+                _master: master,
+                _tail_stop: tail_stop_tx,
+                pty_buffer: pty_buffer.clone(),
+                generation,
+            },
+        );
+
+    let started_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() * 1000)
+        .unwrap_or(0);
+
+    // Re-register in live entries with the new pid + started_at; preserve
+    // label / worktree_path from the historical record.
+    owned_state.insert(OwnedSession {
+        session_id: session_id.clone(),
+        cwd: cwd.clone(),
+        pid,
+        started_at,
+        label: historical.label.clone(),
+        claude_home: claude_home.to_string_lossy().into_owned(),
+        worktree_path: historical.worktree_path.clone(),
+        tmux_session: tmux_session_name(&session_id),
+        ended_at: None,
+    })?;
+
+    start_workers(
+        app,
+        session_id.clone(),
+        jsonl_path.clone(),
+        baseline_offset,
+        reader,
+        tail_stop_rx,
+        pty_buffer,
+        generation,
+    );
+
+    Ok(NewSessionInfo {
+        session_id,
+        pid,
+        jsonl_path: jsonl_path.to_string_lossy().into_owned(),
+        started_at,
+        cwd,
+        worktree_path: historical.worktree_path,
+    })
+}
+
 /// **Disconnect** our PTY from a session WITHOUT killing it. Closes our
 /// tmux client; the tmux session and claude inside it keep running, so the
 /// user can resume from the panel later (or from any external `tmux attach`).

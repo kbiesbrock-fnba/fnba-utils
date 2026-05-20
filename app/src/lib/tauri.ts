@@ -143,6 +143,19 @@ export interface Project {
   notes: string | null;
 }
 
+/** Historical session row (Wave 4 #26) — a session that has ended. */
+export interface HistoricalSession {
+  sessionId: string;
+  cwd: string;
+  pid: number;
+  startedAt: number;
+  endedAt: number | null;
+  label: string | null;
+  claudeHome: string;
+  worktreePath: string | null;
+  tmuxSession: string;
+}
+
 export interface ConnectionStatus {
   label: string;
   server: string;
@@ -742,6 +755,43 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "list_session_history": {
+      await delay(60);
+      const now = Date.now();
+      return [
+        {
+          sessionId: "old-abc-123",
+          cwd: "/mnt/c/dev/fnba-utils",
+          pid: 0,
+          startedAt: now - 86_400_000,
+          endedAt: now - 3_600_000,
+          label: "yesterday's refactor",
+          claudeHome: "/home/user/.claude",
+          worktreePath: null,
+          tmuxSession: "claude-old-abc-123",
+        },
+      ] as T;
+    }
+
+    case "forget_session_history": {
+      console.log("[mock] forget_session_history", args);
+      return true as T;
+    }
+
+    case "resume_owned_session": {
+      await delay(300);
+      console.log("[mock] resume_owned_session", args);
+      const sid = (args?.sessionId as string) ?? "mock";
+      return {
+        sessionId: sid,
+        pid: 50000 + Math.floor(Math.random() * 1000),
+        jsonlPath: `/mock/${sid}.jsonl`,
+        startedAt: Date.now(),
+        cwd: "/mnt/c/dev/mock-project",
+        worktreePath: null,
+      } as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -915,6 +965,19 @@ export function removeProject(cwd: string): Promise<boolean> {
 
 export function recordProjectUsed(cwd: string): Promise<void> {
   return invoke<void>("record_project_used", { cwd });
+}
+
+/** Wave 4 session history. */
+export function listSessionHistory(limit?: number): Promise<HistoricalSession[]> {
+  return invoke<HistoricalSession[]>("list_session_history", { limit: limit ?? null });
+}
+
+export function forgetSessionHistory(sessionId: string): Promise<boolean> {
+  return invoke<boolean>("forget_session_history", { sessionId });
+}
+
+export function resumeOwnedSession(sessionId: string): Promise<NewSessionInfo> {
+  return invoke<NewSessionInfo>("resume_owned_session", { sessionId });
 }
 
 export function killSession(pid: number): Promise<void> {

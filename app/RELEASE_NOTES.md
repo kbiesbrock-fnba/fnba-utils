@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.8.0 — 2026-05-20
+
+**Persistent session history + Resume.**
+
+- Dead sessions now archive to a `history` list in `~/.claude/fnba-mc/owned-sessions.json` (capped at 200, newest first) instead of being silently dropped from state. Detected via the existing tmux-liveness sweep.
+- Mission Control gets a collapsible **History** section below the live sessions. Each row shows label / session-id / cwd / "ended N ago" plus two actions:
+  - **Resume** — re-spawns `claude --resume <id>` in the original cwd, registers a new live entry (same `session_id`, fresh pid + tmux), and opens its session-detail panel.
+  - **Forget** — drops the entry from history permanently.
+- New Tauri commands: `list_session_history`, `forget_session_history`, `resume_owned_session`.
+- New composable `useSessionHistory` + reuses the existing `build_tmux_claude_cmd(cwd, sid, "--resume")` flag path.
+
 ## v1.7.0 — 2026-05-20
 
 **Click any file path in the terminal to open it in IntelliJ.**
