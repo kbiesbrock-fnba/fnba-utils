@@ -1,5 +1,27 @@
 # Release Notes
 
+## v1.3.2 — 2026-05-20
+
+Bug-fix pass from code-review + simplify:
+
+- **Worktree sessions: empty stats / dead reattach.** `OwnedSession.cwd` now stores the worktree path (the cwd claude actually runs in) so `get_session_detail` and the reattach path hash to the right project bucket and find the JSONL.
+- **Worktree directory leaked on Kill.** `stop_claude_session` no longer pre-empts the drain thread's worktree cleanup; it captures the OwnedSession entry and runs `git worktree remove` itself.
+- **Recents dropdown errored on blur.** The inline `setTimeout` in the launcher template was undefined in Vue's compiled context — moved to a `<script setup>` function.
+- **Disconnect → reattach race.** Each `ClaudeIoSession` now carries a monotonic generation tag; the drain thread's EOF cleanup only removes the entry if the live generation still matches, preventing a stale drain from evicting a freshly-attached session.
+
+Tightening:
+
+- Dropped dead code (`_pid_alive`, orphan `SessionDetailActivity.vue`, dead params on `fetchDetail`, empty blur listener).
+- `hashStr` extracted to `app/src/lib/hash.ts` and shared.
+- `build_spawn_cmd` + `build_resume_cmd` unified.
+- `tmux_session_alive` is now `pub(crate)`, reused by `get_session_detail`.
+- Tmux liveness probe (`list_live_tmux_sessions`) cached with a 2-second TTL — Mission Control's 3 s poll no longer forks a process every tick.
+- Patched a small `windows_path_to_wsl` fallthrough where a UNC path without a distro segment would incorrectly try the drive-letter branch.
+
+## v1.3.1 — 2026-05-20
+
+Bug-fix: `get_session_detail` was probing the captured (bash) PID for liveness, which dies the moment the panel closes. Now uses `tmux has-session`, matching the MC list. Restored sessions no longer render "Session has ended."
+
 ## v1.3.0 — 2026-05-20
 
 **Terminal is always on; closing the panel disconnects (doesn't kill).**

@@ -6,6 +6,7 @@ import StatusBar from "../StatusBar.vue";
 import LoadingView from "../LoadingView.vue";
 import ErrorView from "../ErrorView.vue";
 import { isTauri } from "@/lib/tauri";
+import { hashStr } from "@/lib/hash";
 
 const emit = defineEmits<{
   back: [];
@@ -17,6 +18,11 @@ const { step, cwd, initialPrompt, worktree, error, result, recents, reset, brows
 
 const cwdInput = ref<HTMLInputElement | null>(null);
 const showRecents = ref(false);
+
+function hideRecentsSoon() {
+  // Defer so a mousedown on a list item can fire selectRecent before we hide.
+  setTimeout(() => (showRecents.value = false), 150);
+}
 
 onMounted(async () => {
   reset();
@@ -72,18 +78,6 @@ async function openSessionDetail(sessionId: string, sessionCwd: string, pid: num
   });
 }
 
-function hashStr(s: string): string {
-  // Match useMissionControl's panel label hash so windows share identity.
-  let h1 = 0;
-  let h2 = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 = ((h1 << 5) - h1 + c) | 0;
-    h2 = Math.imul(h2 ^ c, 16777619);
-  }
-  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
-}
-
 async function onLaunch() {
   await launch();
   if (step.value === "done" && result.value) {
@@ -128,7 +122,7 @@ defineExpose({ step });
           spellcheck="false"
           autocomplete="off"
           @focus="showRecents = true"
-          @blur="setTimeout(() => (showRecents = false), 150)"
+          @blur="hideRecentsSoon"
         />
         <button class="nc-browse" type="button" @mousedown.prevent="browse">Browse…</button>
       </div>

@@ -155,7 +155,7 @@ onMounted(async () => {
   fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   term.open(termContainer.value);
-  fitAddon.fit();
+  // First fit + PTY size is done by pushSize() below, after listeners are wired.
 
   // Every keystroke (including Ctrl-C, arrow keys, paste, Enter) gets forwarded
   // as-is. xterm's onData already handles things like bracketed-paste wrapping

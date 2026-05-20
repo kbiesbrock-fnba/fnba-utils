@@ -18,6 +18,7 @@ import {
   type PinnedPanel,
   type SqlPanelPayload,
 } from "@/lib/panelStorage";
+import { hashStr } from "@/lib/hash";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
@@ -58,20 +59,6 @@ const PANEL_DEFAULTS: Record<PanelKind, Record<string, unknown>> = {
     title: "Session Detail",
   },
 };
-
-function hashStr(s: string): string {
-  // Combined djb2 + FNV-1a 32-bit → ~64-bit effective hash. djb2 alone collides
-  // around 65k items; doubling makes the birthday threshold 2^32 — out of reach
-  // for the small set of sessions/connections we ever label.
-  let h1 = 0;
-  let h2 = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 = ((h1 << 5) - h1 + c) | 0;
-    h2 = Math.imul(h2 ^ c, 16777619);
-  }
-  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36);
-}
 
 function panelKeyFor(kind: PanelKind, payload: SqlPanelPayload | DetailPanelPayload): string {
   return kind === "sql-query"

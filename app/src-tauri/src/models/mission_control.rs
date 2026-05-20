@@ -134,6 +134,13 @@ pub struct ClaudeIoSession {
     /// older bytes are evicted from the front. The drain thread writes here;
     /// `start_claude_session` reads + replays.
     pub pty_buffer: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+    /// Monotonic id distinguishing one attach-cycle from another for the same
+    /// `session_id`. A rapid disconnect → reattach inserts a new entry under
+    /// the same key; the OLD drain thread (still wrapping up its EOF) must
+    /// only remove its OWN entry on cleanup, not the new one. Each drain
+    /// thread captures the generation at spawn and verifies it before
+    /// touching the map.
+    pub generation: u64,
 }
 
 /// Max bytes retained in `ClaudeIoSession::pty_buffer`. ~256 KB comfortably

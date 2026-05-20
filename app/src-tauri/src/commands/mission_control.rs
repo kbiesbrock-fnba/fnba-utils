@@ -635,21 +635,12 @@ pub async fn get_session_detail(
     let hash = cwd_to_project_hash(&owned.cwd);
     let jsonl_path = projects_dir.join(&hash).join(format!("{session_id}.jsonl"));
 
-    // Probe the tmux session — NOT the stored PID. The PID we captured is the
-    // bash shell hosting `tmux attach`, which dies when the user closes the
-    // panel. The tmux session (and claude inside it) keeps running and is the
-    // true source of truth for "is this session alive."
-    let is_alive = {
-        let tmux_name = format!("claude-{}", &owned.session_id);
-        std::process::Command::new("wsl.exe")
-            .args(["-e", "tmux", "has-session", "-t", &tmux_name])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    };
+    // The PID we captured is the bash shell hosting `tmux attach`, which dies
+    // when the user closes the panel. Tmux is the source of truth for liveness.
+    let is_alive = crate::commands::claude_io::tmux_session_alive(&format!(
+        "claude-{}",
+        owned.session_id
+    ));
 
     let parsed = parse_conversation_cached(&jsonl_path, 20);
     let status = if parsed.mtime == SystemTime::UNIX_EPOCH {

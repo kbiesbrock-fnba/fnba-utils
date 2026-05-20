@@ -22,11 +22,24 @@ use crate::models::mission_control::{
     ClaudeIoSession, ClaudeIoState, NewSessionInfo, PTY_BUFFER_CAP,
 };
 use crate::state::owned_sessions::{OwnedSession, OwnedSessionsState};
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tauri::{Emitter, Manager};
+
+/// Shared type for the per-session PTY ring buffer.
+pub(crate) type PtyBuffer = Arc<Mutex<VecDeque<u8>>>;
+
+/// Monotonic counter for ClaudeIoSession.generation. See its docstring for
+/// why we need it (disconnect → reattach race).
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Phase-1 pre-approved tool set. Pre-accepting these means the spawned claude
 /// won't block on a permission prompt for the common operations. Phase 2 will
@@ -181,7 +194,7 @@ fn tmux_session_name(session_id: &str) -> String {
 
 /// Probe whether a tmux session is still alive. `tmux has-session -t <name>`
 /// exits 0 when the session exists, non-zero otherwise.
-fn tmux_session_alive(name: &str) -> bool {
+pub(crate) fn tmux_session_alive(name: &str) -> bool {
     std::process::Command::new("wsl.exe")
         .args(["-e", "tmux", "has-session", "-t", name])
         .stdin(Stdio::null())
@@ -302,7 +315,10 @@ fn resolve_jsonl_path(cwd: &str, session_id: &str) -> Result<(PathBuf, PathBuf),
 
 /// Start the JSONL tail thread + PTY drain thread for a session. Caller has
 /// already inserted the `ClaudeIoSession` entry into state and passes the
-/// session's buffer Arc so the drain thread can populate it.
+/// session's buffer Arc so the drain thread can populate it. The `generation`
+/// matches the just-inserted ClaudeIoSession; the drain thread's EOF cleanup
+/// only touches the state map if the live entry's generation still matches —
+/// preventing a stale drain thread from evicting a newer attach.
 fn start_workers(
     app: tauri::AppHandle,
     session_id: String,
@@ -310,7 +326,8 @@ fn start_workers(
     baseline_offset: u64,
     reader: Box<dyn std::io::Read + Send>,
     tail_stop_rx: std::sync::mpsc::Receiver<()>,
-    pty_buffer: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+    pty_buffer: PtyBuffer,
+    generation: u64,
 ) {
     // PTY drain: surface as debug `pty` events AND append to the ring buffer
     // so a late-subscribing frontend can replay. EOF = claude exited.
@@ -357,25 +374,7 @@ fn start_workers(
                 if let Some(state) = app.try_state::<OwnedSessionsState>() {
                     if let Ok(Some(entry)) = state.remove(&sid) {
                         if let Some(wt) = &entry.worktree_path {
-                            let cleaned = std::process::Command::new("wsl.exe")
-                                .args(["-e", "git", "worktree", "remove", wt])
-                                .output();
-                            if let Ok(out) = cleaned {
-                                if !out.status.success() {
-                                    let _ = app.emit(
-                                        "claude-event",
-                                        serde_json::json!({
-                                            "sessionId": sid,
-                                            "event": {
-                                                "type": "system",
-                                                "subtype": "worktree-cleanup-failed",
-                                                "worktreePath": wt,
-                                                "stderr": String::from_utf8_lossy(&out.stderr).trim(),
-                                            },
-                                        }),
-                                    );
-                                }
-                            }
+                            remove_worktree_best_effort(&app, &sid, wt);
                         }
                     }
                 }
@@ -384,10 +383,20 @@ fn start_workers(
                     serde_json::json!({ "sessionId": sid, "exitCode": 0 }),
                 );
             }
-            // Always release the ClaudeIoState entry — the PTY is gone either way.
+            // Release the ClaudeIoState entry — but ONLY if the live entry's
+            // generation still matches ours. If a rapid disconnect → reattach
+            // inserted a new entry under the same session_id while we were
+            // wrapping up, that entry is owned by a different drain thread
+            // and must not be touched.
             if let Some(io_state) = app.try_state::<ClaudeIoState>() {
                 if let Ok(mut sessions) = io_state.sessions.lock() {
-                    sessions.remove(&sid);
+                    let same_gen = sessions
+                        .get(&sid)
+                        .map(|s| s.generation == generation)
+                        .unwrap_or(false);
+                    if same_gen {
+                        sessions.remove(&sid);
+                    }
                 }
             }
         });
@@ -541,32 +550,21 @@ fn spawn_in_pty(
     Ok((writer, pair.master, reader, pid))
 }
 
-/// Build the `bash -ilc` command for spawning a fresh session via tmux+claude.
+/// Build the `bash -ilc` command for spawning a session via tmux+claude.
+/// `claude_flag` is either `"--session-id"` (fresh spawn) or `"--resume"`
+/// (resume an existing JSONL).
+///
 /// Both `cd '<cwd>' &&` AND the wsl.exe `--cd` are required: bash -i runs the
-/// user's interactive bashrc, which can chdir away (some snippets start in
-/// $HOME). Claude resolves its session by hashing process.cwd() — if it
-/// doesn't match the original, claude silently starts a new session.
-fn build_spawn_cmd(cwd: &str, session_id: &str) -> String {
+/// user's interactive bashrc, which can chdir away. Claude resolves its
+/// session by hashing process.cwd() — if it doesn't match the original,
+/// claude silently starts a new session.
+fn build_tmux_claude_cmd(cwd: &str, session_id: &str, claude_flag: &str) -> String {
     let cwd_esc = shell_quote(cwd);
     let sid_esc = shell_quote(session_id);
     let tmux = shell_quote(&tmux_session_name(session_id));
     format!(
         "cd {cwd_esc} && tmux new-session -d -x 220 -y 50 -s {tmux} \
-         'claude --session-id {sid_esc} --permission-mode acceptEdits --allowedTools {tools}' && \
-         tmux set-option -t {tmux} -g aggressive-resize on >/dev/null 2>&1; \
-         tmux attach -t {tmux}",
-        tools = PRE_APPROVED_TOOLS,
-    )
-}
-
-/// Build the resume command (Wave 4 #27 hook — same shape, plus `--resume`).
-fn build_resume_cmd(cwd: &str, session_id: &str) -> String {
-    let cwd_esc = shell_quote(cwd);
-    let sid_esc = shell_quote(session_id);
-    let tmux = shell_quote(&tmux_session_name(session_id));
-    format!(
-        "cd {cwd_esc} && tmux new-session -d -x 220 -y 50 -s {tmux} \
-         'claude --resume {sid_esc} --permission-mode acceptEdits --allowedTools {tools}' && \
+         'claude {claude_flag} {sid_esc} --permission-mode acceptEdits --allowedTools {tools}' && \
          tmux set-option -t {tmux} -g aggressive-resize on >/dev/null 2>&1; \
          tmux attach -t {tmux}",
         tools = PRE_APPROVED_TOOLS,
@@ -670,14 +668,13 @@ pub async fn start_new_claude_session(
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let bash_cmd = build_spawn_cmd(&effective_cwd, &session_id);
+    let bash_cmd = build_tmux_claude_cmd(&effective_cwd, &session_id, "--session-id");
     let (writer, master, reader, pid) = spawn_in_pty(&effective_cwd, &bash_cmd)?;
     let pid = pid.unwrap_or(0);
 
     let (tail_stop_tx, tail_stop_rx) = std::sync::mpsc::channel::<()>();
-    let pty_buffer = std::sync::Arc::new(std::sync::Mutex::new(
-        std::collections::VecDeque::with_capacity(PTY_BUFFER_CAP),
-    ));
+    let pty_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(PTY_BUFFER_CAP)));
+    let generation = next_generation();
     io_state
         .sessions
         .lock()
@@ -689,6 +686,7 @@ pub async fn start_new_claude_session(
                 _master: master,
                 _tail_stop: tail_stop_tx,
                 pty_buffer: pty_buffer.clone(),
+                generation,
             },
         );
 
@@ -697,9 +695,13 @@ pub async fn start_new_claude_session(
         .map(|d| d.as_secs() * 1000)
         .unwrap_or(0);
 
+    // Store effective_cwd (the worktree path if in worktree mode, else the
+    // original cwd). Claude hashes its process.cwd() to locate the JSONL, so
+    // downstream consumers (get_session_detail, the reattach path) MUST hash
+    // the same value or they'd watch a non-existent path.
     owned_state.insert(OwnedSession {
         session_id: session_id.clone(),
-        cwd: cwd.clone(),
+        cwd: effective_cwd.clone(),
         pid,
         started_at,
         label: None,
@@ -716,6 +718,7 @@ pub async fn start_new_claude_session(
         reader,
         tail_stop_rx,
         pty_buffer,
+        generation,
     );
 
     // Initial prompt: send once claude is actually accepting input. The first
@@ -749,7 +752,7 @@ pub async fn start_new_claude_session(
         pid,
         jsonl_path: jsonl_path.to_string_lossy().into_owned(),
         started_at,
-        cwd,
+        cwd: effective_cwd,
         worktree_path,
     })
 }
@@ -799,9 +802,8 @@ pub async fn start_claude_session(
     );
     let (writer, master, reader, _pid) = spawn_in_pty(&cwd, &bash_cmd)?;
     let (tail_stop_tx, tail_stop_rx) = std::sync::mpsc::channel::<()>();
-    let pty_buffer = std::sync::Arc::new(std::sync::Mutex::new(
-        std::collections::VecDeque::with_capacity(PTY_BUFFER_CAP),
-    ));
+    let pty_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(PTY_BUFFER_CAP)));
+    let generation = next_generation();
     io_state
         .sessions
         .lock()
@@ -813,6 +815,7 @@ pub async fn start_claude_session(
                 _master: master,
                 _tail_stop: tail_stop_tx,
                 pty_buffer: pty_buffer.clone(),
+                generation,
             },
         );
 
@@ -824,6 +827,7 @@ pub async fn start_claude_session(
         reader,
         tail_stop_rx,
         pty_buffer,
+        generation,
     );
     Ok(())
 }
@@ -833,7 +837,7 @@ pub async fn start_claude_session(
 fn replay_pty_buffer(
     app: &tauri::AppHandle,
     session_id: &str,
-    pty_buffer: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+    pty_buffer: &PtyBuffer,
 ) {
     let snapshot: Vec<u8> = match pty_buffer.lock() {
         Ok(buf) => buf.iter().copied().collect(),
@@ -968,18 +972,16 @@ pub async fn disconnect_session(
 }
 
 /// **Stop** a session: drop our PTY, kill the tmux session (which SIGHUPs
-/// claude), and clean up worktree + state. The drain thread's EOF path
-/// handles the same steps; we run them eagerly here so the caller's UI
-/// reflects the change immediately.
+/// claude), and clean up worktree + state. We own the teardown here because
+/// preemptively removing the OwnedSession entry would prevent the drain
+/// thread's EOF cleanup from seeing the worktree path — leaking the worktree.
 #[tauri::command]
 pub async fn stop_claude_session(
+    app: tauri::AppHandle,
     session_id: String,
     io_state: tauri::State<'_, ClaudeIoState>,
     owned_state: tauri::State<'_, OwnedSessionsState>,
 ) -> Result<(), String> {
-    // Kill the tmux session explicitly so claude exits even if no other tmux
-    // client attached. Do this BEFORE dropping our PTY so the drain thread's
-    // EOF cleanup observes tmux is dead and runs full state teardown.
     let owned = owned_state.get(&session_id);
     if let Some(s) = &owned {
         let _ = run_tmux(&["kill-session", "-t", &s.tmux_session]);
@@ -991,10 +993,41 @@ pub async fn stop_claude_session(
         .map_err(|e| format!("State lock poisoned: {e}"))?
         .remove(&session_id);
 
-    // Defensive removal from owned-sessions in case the drain thread hasn't
-    // observed the EOF yet (or never will because the PTY closed too fast).
-    let _ = owned_state.remove(&session_id);
+    // Remove from owned-sessions AND capture the entry so we can do worktree
+    // cleanup ourselves. The drain thread's EOF path will see Ok(None) here
+    // and skip its (now redundant) cleanup branch.
+    if let Ok(Some(entry)) = owned_state.remove(&session_id) {
+        if let Some(wt) = &entry.worktree_path {
+            remove_worktree_best_effort(&app, &session_id, wt);
+        }
+    }
     Ok(())
+}
+
+/// Run `git worktree remove <wt>`; on failure (typically because the worktree
+/// has uncommitted changes) emit a `worktree-cleanup-failed` system event so
+/// the UI can surface it. We do NOT force-remove — that would silently
+/// destroy uncommitted work.
+fn remove_worktree_best_effort(app: &tauri::AppHandle, session_id: &str, wt: &str) {
+    let out = std::process::Command::new("wsl.exe")
+        .args(["-e", "git", "worktree", "remove", wt])
+        .output();
+    if let Ok(out) = out {
+        if !out.status.success() {
+            let _ = app.emit(
+                "claude-event",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "event": {
+                        "type": "system",
+                        "subtype": "worktree-cleanup-failed",
+                        "worktreePath": wt,
+                        "stderr": String::from_utf8_lossy(&out.stderr).trim(),
+                    },
+                }),
+            );
+        }
+    }
 }
 
 /// Update a session's friendly label (Feature #20).
@@ -1055,10 +1088,11 @@ pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, Str
 fn windows_path_to_wsl(path: &Path) -> String {
     let s = path.to_string_lossy().replace('\\', "/");
     if let Some(rest) = s.strip_prefix("//wsl.localhost/") {
-        // //wsl.localhost/<distro>/<rest> → /<rest>
-        if let Some((_distro, tail)) = rest.split_once('/') {
-            return format!("/{tail}");
-        }
+        // //wsl.localhost/<distro>/<rest> → /<rest>. If no rest, return root.
+        return match rest.split_once('/') {
+            Some((_distro, tail)) => format!("/{tail}"),
+            None => "/".to_string(),
+        };
     }
     // Detect "X:/..." drive prefix.
     if let Some((drive, rest)) = s.split_once(":/") {

@@ -9,9 +9,10 @@
 //! restart; sessions whose PIDs are no longer alive are dropped on load.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// On-disk + in-memory representation of one MC-launched Claude session.
 #[derive(Clone, Serialize, Deserialize)]
@@ -178,12 +179,29 @@ fn resolve_store_path() -> PathBuf {
 }
 
 /// Snapshot of all currently-running tmux sessions visible to `wsl.exe -e tmux
-/// list-sessions`. Used as the liveness indicator for owned sessions because
-/// our captured PID is the bash shell that hosts the `tmux attach`, which
-/// exits when the user closes the chat panel — but the tmux session (and
-/// claude inside it) keeps running. Returns empty set if tmux isn't installed
-/// or no server is running.
-fn list_live_tmux_sessions() -> std::collections::HashSet<String> {
+/// list-sessions`, with a short TTL cache so the 3s Mission Control poll
+/// doesn't fork+exec a process every tick. Tmux is the liveness source of
+/// truth: our captured PID is the bash shell hosting `tmux attach` and dies
+/// when the panel closes, but the tmux session keeps running.
+fn list_live_tmux_sessions() -> HashSet<String> {
+    const TTL: Duration = Duration::from_millis(2000);
+    static CACHE: OnceLock<Mutex<Option<(HashSet<String>, Instant)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((ref names, when)) = *guard {
+            if when.elapsed() < TTL {
+                return names.clone();
+            }
+        }
+    }
+    let fresh = fetch_live_tmux_sessions();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((fresh.clone(), Instant::now()));
+    }
+    fresh
+}
+
+fn fetch_live_tmux_sessions() -> HashSet<String> {
     let output = match std::process::Command::new("wsl.exe")
         .args(["-e", "tmux", "list-sessions", "-F", "#{session_name}"])
         .stdin(std::process::Stdio::null())
@@ -192,10 +210,10 @@ fn list_live_tmux_sessions() -> std::collections::HashSet<String> {
         .output()
     {
         Ok(o) => o,
-        Err(_) => return std::collections::HashSet::new(),
+        Err(_) => return HashSet::new(),
     };
     if !output.status.success() {
-        return std::collections::HashSet::new();
+        return HashSet::new();
     }
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -204,16 +222,3 @@ fn list_live_tmux_sessions() -> std::collections::HashSet<String> {
         .collect()
 }
 
-// PathBuf import is no longer needed at function scope; keep `use` for the
-// store_path field.
-#[allow(dead_code)]
-fn _pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    let unc = PathBuf::from(format!(r"\\wsl.localhost\Ubuntu\proc\{pid}"));
-    if unc.exists() {
-        return true;
-    }
-    Path::new(&format!("/proc/{pid}")).exists()
-}

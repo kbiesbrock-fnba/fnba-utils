@@ -56,16 +56,8 @@ async function startListening() {
       rememberWindowFocus(getCurrentWindow().label);
     }
 
-    window.addEventListener("blur", async () => {
-      // Terminal is always live in the panel now — never auto-hide on blur
-      // (the user clicking into another window shouldn't disconnect them
-      // from claude). Pin still has its original semantic (sticky panel)
-      // but blur-hide is gone.
-      if (!pinned.value) {
-        // Intentionally no-op. Keep the block in case we want to add
-        // conditional hide later (e.g. only when claude is idle).
-      }
-    });
+    // Terminal is always live in the panel; we don't auto-hide on blur
+    // anymore. Pin still has its original sticky-panel semantic.
   }
 
   if (hasInitial && !detail.value) {
@@ -73,7 +65,7 @@ async function startListening() {
   }
 }
 
-async function fetchDetail(sessionId: string, _cwd?: string, _pid?: number) {
+async function fetchDetail(sessionId: string) {
   loading.value = true;
   error.value = null;
   try {
