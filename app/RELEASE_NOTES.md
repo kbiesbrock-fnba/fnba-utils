@@ -1,5 +1,12 @@
 # Release Notes
 
+## v1.6.1 — 2026-05-20
+
+Resize handles fix-up:
+- **Actually functional now.** `startResizeDragging` was called after dynamic imports, which broke Tauri's mousedown → drag hand-off (it must happen in the same task). Imports are now static so the call lands inside the original event tick.
+- **Bigger grab zones** — edges 10 px (was 4), corners 20×20 (was 12). Easier to find with the mouse without overshooting.
+- **No visual overlay.** The tinted hover state went away; the OS cursor changing to a resize arrow is the only affordance now.
+
 ## v1.6.0 — 2026-05-20
 
 **Roomier defaults + hoverable resize handles.**

@@ -1,51 +1,45 @@
 <script setup lang="ts">
+import { getCurrentWindow, ResizeDirection } from "@tauri-apps/api/window";
 import { isTauri } from "@/lib/tauri";
 
 /**
  * Eight invisible resize zones (4 edges + 4 corners) overlaid on the window
- * viewport. Each one calls Tauri's `startResizeDragging` with the matching
- * direction on mousedown, so frameless windows still get drag-to-resize even
- * without OS decorations.
+ * viewport. Each one calls Tauri's `startResizeDragging` synchronously on
+ * mousedown so frameless windows can be resized.
  *
- * Subtle by default (transparent); the edge zones brighten + thicken on hover
- * so the resize affordance is discoverable. Use `position: fixed; inset: 0`
- * so the overlay doesn't depend on the parent being positioned.
+ * Notes:
+ *   - `getCurrentWindow()` and `ResizeDirection` are imported STATICALLY so
+ *     the resize call happens in the same task as the mousedown — Tauri
+ *     requires that to hand the drag off to the OS window manager.
+ *   - Handles are visually invisible (no background, no border). The OS
+ *     cursor changing to a resize arrow is the only affordance; the user
+ *     said the previous tinted overlay added noise without helping.
+ *   - Sizes are deliberately generous (10 px edges, 20 px corners) so the
+ *     grab targets are easy to hit. The window border + decorations are
+ *     hidden, so blocking a few pixels of inner UI at the extreme edge is
+ *     acceptable — keep meaningful interactive controls inset accordingly.
  */
 
-type Direction =
-  | "North"
-  | "South"
-  | "East"
-  | "West"
-  | "NorthEast"
-  | "NorthWest"
-  | "SouthEast"
-  | "SouthWest";
-
-async function startResize(direction: Direction, e: MouseEvent) {
+function startResize(direction: ResizeDirection, e: MouseEvent) {
   if (!isTauri) return;
   e.preventDefault();
   e.stopPropagation();
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const { ResizeDirection } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().startResizeDragging(ResizeDirection[direction]);
-  } catch (err) {
-    console.warn("[resize] startResizeDragging failed", err);
-  }
+  getCurrentWindow()
+    .startResizeDragging(direction)
+    .catch((err) => console.warn("[resize] startResizeDragging failed", err));
 }
 </script>
 
 <template>
   <div class="rh-overlay">
-    <div class="rh rh-n" @mousedown="(e) => startResize('North', e)" />
-    <div class="rh rh-s" @mousedown="(e) => startResize('South', e)" />
-    <div class="rh rh-e" @mousedown="(e) => startResize('East', e)" />
-    <div class="rh rh-w" @mousedown="(e) => startResize('West', e)" />
-    <div class="rh rh-ne" @mousedown="(e) => startResize('NorthEast', e)" />
-    <div class="rh rh-nw" @mousedown="(e) => startResize('NorthWest', e)" />
-    <div class="rh rh-se" @mousedown="(e) => startResize('SouthEast', e)" />
-    <div class="rh rh-sw" @mousedown="(e) => startResize('SouthWest', e)" />
+    <div class="rh rh-n" @mousedown="(e) => startResize(ResizeDirection.North, e)" />
+    <div class="rh rh-s" @mousedown="(e) => startResize(ResizeDirection.South, e)" />
+    <div class="rh rh-e" @mousedown="(e) => startResize(ResizeDirection.East, e)" />
+    <div class="rh rh-w" @mousedown="(e) => startResize(ResizeDirection.West, e)" />
+    <div class="rh rh-ne" @mousedown="(e) => startResize(ResizeDirection.NorthEast, e)" />
+    <div class="rh rh-nw" @mousedown="(e) => startResize(ResizeDirection.NorthWest, e)" />
+    <div class="rh rh-se" @mousedown="(e) => startResize(ResizeDirection.SouthEast, e)" />
+    <div class="rh rh-sw" @mousedown="(e) => startResize(ResizeDirection.SouthWest, e)" />
   </div>
 </template>
 
@@ -61,88 +55,66 @@ async function startResize(direction: Direction, e: MouseEvent) {
   position: absolute;
   pointer-events: auto;
   background: transparent;
-  transition: background-color 0.12s ease, width 0.12s ease, height 0.12s ease;
 }
 
-.rh:hover {
-  background: rgba(96, 165, 250, 0.28);
-}
-
-/* Edges — thin, span between the corner squares so corner cursors win at the
-   four extremes. Hover bumps the visible thickness for clearer affordance. */
+/* Edges — 10 px thick, span between corners so the corner cursors win at
+   the extremes. */
 .rh-n {
   top: 0;
-  left: 10px;
-  right: 10px;
-  height: 4px;
+  left: 20px;
+  right: 20px;
+  height: 10px;
   cursor: ns-resize;
 }
 .rh-s {
   bottom: 0;
-  left: 10px;
-  right: 10px;
-  height: 4px;
+  left: 20px;
+  right: 20px;
+  height: 10px;
   cursor: ns-resize;
 }
 .rh-e {
-  top: 10px;
-  bottom: 10px;
+  top: 20px;
+  bottom: 20px;
   right: 0;
-  width: 4px;
+  width: 10px;
   cursor: ew-resize;
 }
 .rh-w {
-  top: 10px;
-  bottom: 10px;
+  top: 20px;
+  bottom: 20px;
   left: 0;
-  width: 4px;
+  width: 10px;
   cursor: ew-resize;
 }
 
-.rh-n:hover,
-.rh-s:hover {
-  height: 8px;
-}
-.rh-e:hover,
-.rh-w:hover {
-  width: 8px;
-}
-
-/* Corners — 12px squares; cursor flips correctly for each diagonal. */
+/* Corners — 20×20 squares, diagonal cursors. */
 .rh-ne {
   top: 0;
   right: 0;
-  width: 12px;
-  height: 12px;
+  width: 20px;
+  height: 20px;
   cursor: nesw-resize;
 }
 .rh-nw {
   top: 0;
   left: 0;
-  width: 12px;
-  height: 12px;
+  width: 20px;
+  height: 20px;
   cursor: nwse-resize;
 }
 .rh-se {
   bottom: 0;
   right: 0;
-  width: 12px;
-  height: 12px;
+  width: 20px;
+  height: 20px;
   cursor: nwse-resize;
 }
 .rh-sw {
   bottom: 0;
   left: 0;
-  width: 12px;
-  height: 12px;
+  width: 20px;
+  height: 20px;
   cursor: nesw-resize;
-}
-
-.rh-ne:hover,
-.rh-nw:hover,
-.rh-se:hover,
-.rh-sw:hover {
-  width: 16px;
-  height: 16px;
 }
 </style>
