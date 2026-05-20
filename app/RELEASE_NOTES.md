@@ -1,163 +1,228 @@
 # Release Notes
 
-## v1.7.0 — 2026-05-20
+## v1.9.0 — 2026-05-20
 
-### Standup panel: wider rows, sub-rows for checklist items, polish
+### Standup feature: Jira fetch, Teams post, always-on-top panel
 
-- **Panel width 600 → 1200**, min width 480.
-- **Row layout rebuilt** on CSS subgrid: `[checkbox] [KEY+badge] [type pill] [checklist-icon] [summary…] [priority+due] [drag-handle]`. Drag handle owns its own rightmost column and no longer drifts left when other meta is absent.
-- **Story points badge** replaces `KEY (N)` parens. Each integer value gets its own hand-picked color, alternating between deep and bright tones so adjacent numbers differ in lightness as well as hue (royal blue, bright cyan, deep teal, bright green, deep lime, bright yellow, deep amber, bright orange, deep red, bright pink, deep fuchsia, bright lavender, deep indigo for the Fibonacci scale + neighbors). Text color flips light/dark per chip so contrast holds.
-- **Smart Checklist sub-rows.** Any issue with content in `cf[13097]` shows a collapsible "Toggle Smart Checklist" row with a `done/total` count pill. Expanded, each item is a 22px sub-row in the same subgrid with a tree-glyph indent and the checkbox state from Jira; headers render in uppercase. Sub-rows inherit the parent's status-stripe color (dimmer) and the parent's strikethrough/dim when checked off.
-- **Full-task panel sections (Description, Specification) are collapsible buttons** with rotating chevrons. Default collapsed. Real `<button>` elements with `aria-expanded` + visible focus rings — tab to focus, Enter/Space to toggle. Same accessibility pattern applied to the panel's checklist toggle.
+Opt-in via `~/.fnba-utils/config.yaml` (no file or `standup.enabled: false` keeps the feature invisible). New palette command **Standup** pulls Jira issues and posts a redesigned Adaptive Card to Teams; **Win+Shift+D** opens a persistent always-on-top panel with the live work list. Double-clicking a row opens a full-task window that lazy-fetches description, specification, and Smart Checklist.
 
-### Pipeline
+### Panel
 
-The Smart Checklist field is now fetched in the initial JQL query (the panel pull), not just the per-issue detail fetch:
+- Wide-grid layout (1200×960 default, resizable) on CSS subgrid: `[checkbox] [KEY+badge] [type pill] [checklist-icon] [summary…] [priority+due] [drag-handle]`. Every row 32px; drag handle pinned to the rightmost column.
+- **Story points badge** with per-value coloring — alternating deep / bright tones so adjacent point values are unmistakable.
+- **Bugs section** at top; everything else below in a single ordered list (status → priority → due date), reorderable by drag.
+- **Checkboxes mark items done** (line-through, dimmed); "show completed" toggle in header surfaces them back.
+- **Smart Checklist sub-rows** behind a "Toggle Smart Checklist" row with a done/total count pill. Headers, markdown task syntax, and Railsware/Titanium legacy bullets all parsed. Reads from `cf[13097]`.
 
-- `fetch_issues` includes `customfield_13097` in `fields`.
-- New `extract_checklist_text` helper unwraps bare strings, `{ "v": "..." }` envelopes, `{ "text": "..." }`, ADF documents, and falls back to a raw-JSON dump for diagnostics.
-- Parsed items + raw text persist into `run_snapshot.checklist_text` (new column, best-effort `ALTER TABLE` migration).
-- `report_from_snapshot` reparses the stored text on read so historical runs render sub-rows too.
-- `ChecklistItem` + `parse_checklist` moved from `commands/standup.rs` to `models/standup.rs` so both layers share.
+### Full-task window
 
-### Refactor
-
-- New `StandupTaskRow.vue` extracted from the duplicated bug/task row markup in `StandupPanelApp.vue`. One component renders both the main row and N checklist sub-rows.
-
-## v1.6.1 — 2026-05-20
-
-- **Standup panel default size** bumped from 360×640 to **600×960** (~2.5× area). Min size set to 360×480 so you can shrink it back if needed.
-- **Resize handles wired** on all four edges and corners. The frameless panel uses Tauri's `startResizeDragging` since `decorations: false` strips the native OS edge hit zones. 6px edge zones, 12×12 corner zones.
-- **Checklist diagnostic fallback.** `IssueDetail` now also returns `checklistRaw` (the raw field content from Jira before our parser touches it). When parsing yields zero items but the field had content, the full-task view shows a "Checklist (raw)" block with the literal text — so we can see the exact format Smart Checklist sends and fix the parser instead of guessing.
-- **Parser broadened** to handle Railsware-style `*x` / `*X` / `*~` prefixes, `#`-style headers, and bare bullets with no space — in addition to the previously-supported markdown task syntax and `*` / `+` / `-` legacy bullets.
-
-## v1.6.0 — 2026-05-20
-
-### Standup panel polish + Smart Checklist support
-
-Tighter panel, longer labels, and full-task view now mirrors what's in Jira:
-
-- **Row height locked at 32px** (min/max/height all 32px). Rows stay the same size whether the panel is short or stretched tall.
-- **Priority pill shows the full label** ("High", "Medium", "Lowest") instead of a single letter. Subgrid sizing absorbs the wider pill without disrupting alignment.
-- **Spec block removed from the inline expansion.** Hitting the row now shows description only. The full-task window (double-click) still surfaces specification + checklist.
-- **Smart Checklist** (Titanium plugin) is read from custom field `cf[13097]` (hard-coded — that's the FNBA-internal field ID) and rendered in the full-task window as a read-only checkbox list with a `checked/total` progress count. Supports header lines (`>`), markdown task syntax (`- [ ]` / `- [x]`), and legacy `*` / `+` / `-` prefixes.
-
-### Config
-
-The spec field is still resolved by display name (`spec_field_name`, default `"Specification Details"`) and cached per session.
-
-## v1.5.0 — 2026-05-20
-
-### Standup panel fixes + lazy description/spec
-
-Quality-of-life pass on the panel row interactions and detail content:
-
-- **"Open in Jira" now actually opens Jira.** WebView2 silently ignored `<a target="_blank">`; added `tauri-plugin-shell` and route external clicks through `shell.open()`. The capability is scoped to `*.atlassian.net` / `*.atlassian.com` so it can't be used to open arbitrary URLs.
-- **"View full task" double-click is now reliable.** First-paint race fixed via a localStorage handoff: the panel writes the requested key to `fnba-utils:issue-detail-pending`, shows the window, then emits. The detail window reads the pending key on mount and listens for the event for subsequent updates.
-- **Drag handle is visible by default** (0.55 opacity, full color, accent blue on hover) instead of only appearing on row hover.
-- **More breathing room around the checkbox** (24px column, 10px column gap).
-- **"Task" pill suppressed.** The default-everything-else type is uninformative, so the pill only renders for Bug / Story / Sub-task / Epic / Incident / etc. Grid subgrid still aligns rows.
-- **Inline expanded view now shows description and specification.** On row expand, the panel lazy-fetches the full issue via `get_issue_detail` and caches per-key in memory so re-expanding the same row is instant. Both blocks live in a new `IssueRowDetail.vue` component (extracted from the duplicated markup that had grown between v1.4 sections).
-
-### Spec field lookup
-
-The "Specification" block reads from a custom Jira field whose name is configurable in `~/.fnba-utils/config.yaml`:
-
-```yaml
-standup:
-  spec_field_name: "Specification Details"   # default
-```
-
-The Rust side resolves the display name → custom-field ID once per session by hitting `/rest/api/3/field`, caches the ID, and includes it in subsequent `get_issue_detail` requests. Set to empty/null to disable. The block renders ADF-flattened plain text just like description.
-
-## v1.4.0 — 2026-05-20
-
-### Standup row redesign
-
-The panel row is now built on CSS subgrid so every row's columns line up across the list, regardless of which decorations are present:
-
-- **Layout**: `[checkbox] [KEY (pts)] [type pill] [summary…] [priority · due · drag]`. Story points moved into parentheses next to the key — the dedicated points column on the far right is gone.
-- **Issue type pill** colored by type — bug red, story green, task blue, epic purple — even though bugs already live in their own section, the pill stays for consistency and quick scanning.
-- **Drag handle moved to the right edge** (`⋮⋮`), opacity 0 until you hover the row, then fades to ~60%. Hovering the handle itself goes to 100%.
-- **Summary** stretches into the leftover space and ellipses cleanly; a `title` attribute exposes the full text on hover.
-- **Status stripe** on the left edge of each row, colored by the issue's status group, replaces the implicit "no headings means no status indicator" gap from v1.3.
-
-### Click + double-click
-
-- **Single click on a row** expands an inline detail block underneath with status name, priority name, type, absolute due date, points, and two action links (open in Jira / view full task).
-- **Double click on a row** opens a new always-on-top window with the full Jira task — assignee, reporter, labels, created/updated timestamps, and the full description (Atlassian Document Format flattened to plain text on the Rust side). The window reuses one instance: each double-click swaps the contents via the `issue-detail-open` event.
-
-### Under the hood
-
-- New Rust command `get_issue_detail(key)` hits `/rest/api/3/issue/{key}` with `fields=summary,status,priority,duedate,issuetype,customfield_10028,description,assignee,reporter,labels,created,updated`. Description is parsed from ADF on the Rust side so the frontend renders plain text inside the existing CSP.
-- New Tauri window `issue-detail` (560×720, centered, resizable, not always-on-top so you can drag it off your work surface).
-- Panel and inline detail share helpers for due-date / priority / type formatting.
-
-## v1.3.0 — 2026-05-20
-
-### Standup panel redesign
-
-The panel is now structured around how you actually work the list, not how Jira groups statuses.
-
-- **Bugs section at the top** with a single "🐞 Bugs" heading. Everything else flows below as one unheaded list.
-- **Default sort** is status (In Progress → Review → To Do → Attention → Done), then priority (Highest → Lowest), then earliest due date.
-- **Drag-and-drop reorder** within each section. Grab the `⋮⋮` handle on the left of any row. Manual order persists in SQLite — a reset button in the header throws it away if you want to fall back to the default sort.
-- **Checkboxes replace the X**: items behave like a todo list. Check an item and the whole row gets a line-through; uncheck to bring it back. The "show completed" toggle in the header reveals items you've checked off.
-
-### Jira fields
-
-The fetch now pulls `priority`, `duedate`, and `issuetype` in addition to the existing fields. Each row shows:
-
-- A priority pill (`H` / `M` / `L`) colored by tier.
-- A due-date pill — "today", "tomorrow", "2d late", or a `5/22` short date — colored if soon or overdue.
-- Story points right-aligned (unchanged from v1.2).
+- Issue metadata (status, priority, due, assignee, reporter, labels, dates).
+- **Description** + **Specification** sections collapsible behind real `<button>` toggles with rotating chevrons; tabbable with visible focus rings, Enter/Space to expand.
+- Smart Checklist rendered with progress pill (`done/total`).
+- Specification field resolves by display name (`spec_field_name`, default `"Specification Details"`) via `/rest/api/3/field`, cached per session.
 
 ### Storage
 
-- `issue_state` gains a `manual_order INTEGER NULL` column.
-- `run_snapshot` gains `priority`, `priority_rank`, `due_date`, `issue_type`, `is_bug` columns.
-- Best-effort `ALTER TABLE` migrations run on startup, so existing v1.2 databases pick up the new schema without losing history.
+All state is local to the install: SQLite at `<exe-dir>/resources/standup.db` captures every run, snapshot, hidden-state, manual-order, and checklist text. Migrations are best-effort `ALTER TABLE`s so existing DBs upgrade in place.
 
-The Teams card still groups by status — that's the public artifact and didn't need this kind of personal customization.
-
-## v1.2.0 — 2026-05-20
-
-### Standup panel (opt-in)
-
-Adds an always-on-top **Standup** panel, toggled with **`Win+Shift+D`**. Shows the most recent Jira fetch (grouped by status, with story points + a per-group total), with a refresh button that re-pulls from Jira without posting to Teams.
-
-Each issue row has a hide button; dismissed items disappear from the panel but are preserved in SQLite. A toggle in the header reveals them again, and a counter shows how many are currently hidden.
-
-The panel also exposes a **history drawer** — every `run_standup` invocation is recorded with its issue snapshot, so you can scroll back through past runs. Future versions will add "view this past snapshot inline."
-
-The pin button (top-right) keeps the panel open when focus leaves; unpinned, it hides on blur like Mission Control.
-
-State storage is local to the installation: `<exe-dir>/resources/standup.db` (SQLite) and `<exe-dir>/resources/standup-last-run.json`. The portable exe remains self-contained — copy the exe and its `resources/` sibling directory together to move installs.
-
-Same opt-in gate as v1.1: `standup.enabled: true` in `~/.fnba-utils/config.yaml`. Without it, the panel window is never created and `Win+Shift+D` is a no-op.
-
-## v1.1.0 — 2026-05-20
-
-### Standup (opt-in)
-
-New palette command **Standup** that pulls your assigned Jira issues and posts a redesigned Adaptive Card to a Teams channel. Two actions: **Fetch & Post to Teams** (full standup workflow) and **Fetch & Preview Only** (inline preview, no Teams post). The palette entry shows the last successful run time so you don't accidentally double-post.
-
-The Teams card is grouped by status (In Progress / In Review / To Do / Done This Week), with per-issue rows that show the status emoji, key, summary, status name, and story points right-aligned. Each group header shows the issue count and total points.
-
-**This feature is opt-in.** It is hidden from the palette entirely unless you create `~/.fnba-utils/config.yaml` with:
+### Config
 
 ```yaml
 standup:
   enabled: true
-  jira_email: your.email@fnba.com
-  jira_api_token: "..."          # https://id.atlassian.com/manage-profile/security/api-tokens
+  jira_email: kevin.biesbrock@fnba.com
+  jira_api_token: "..."
   jira_domain: fnba.atlassian.net
-  teams_webhook_url: "..."       # optional; without it, Teams post is skipped
+  teams_webhook_url: "..."
+  spec_field_name: "Specification Details"
 ```
 
-Credentials live in the YAML in plain text (same security posture as the original standup repo's `.env`). If the config file is absent or `enabled` is `false`, no Standup command appears and no credentials are read.
+## v1.8.1 — 2026-05-20
 
-A persistent always-on-top "Today" panel — Jira tasks plus locally hidden/shown items, with history — is planned as a follow-up. For now, the command's inline preview is the only UI.
+Fix: v1.8.0 didn't compile. Added `ended_at` to `OwnedSession` but missed the existing constructor in `start_new_claude_session` — the new `resume_owned_session` had it but the original spawn path didn't.
+
+## v1.8.0 — 2026-05-20
+
+**Persistent session history + Resume.**
+
+- Dead sessions now archive to a `history` list in `~/.claude/fnba-mc/owned-sessions.json` (capped at 200, newest first) instead of being silently dropped from state. Detected via the existing tmux-liveness sweep.
+- Mission Control gets a collapsible **History** section below the live sessions. Each row shows label / session-id / cwd / "ended N ago" plus two actions:
+  - **Resume** — re-spawns `claude --resume <id>` in the original cwd, registers a new live entry (same `session_id`, fresh pid + tmux), and opens its session-detail panel.
+  - **Forget** — drops the entry from history permanently.
+- New Tauri commands: `list_session_history`, `forget_session_history`, `resume_owned_session`.
+- New composable `useSessionHistory` + reuses the existing `build_tmux_claude_cmd(cwd, sid, "--resume")` flag path.
+
+## v1.7.0 — 2026-05-20
+
+**Click any file path in the terminal to open it in IntelliJ.**
+
+The terminal now recognizes file-path tokens claude prints (`/mnt/c/...`, `~/...`, `./relative`, `C:\...`, with optional `:LINE:COL` suffix) and underlines them on hover. Click → opens in IntelliJ if `idea64.exe` is on PATH, otherwise hands off to `explorer.exe` for the default app. WSL paths are translated to Windows form before launching.
+
+## v1.6.7 — 2026-05-20
+
+Internal refactor: pulled xterm.js + PTY lifecycle out of `ChatPane.vue` into a `useTerminal` composable. The component is now ~100 lines of template + styles; everything else (terminal construction, resize observer, claude-event subscription, startup watchdog, disconnect-on-unmount) lives in `app/src/composables/useTerminal.ts`. No behavior change.
+
+## v1.6.6 — 2026-05-20
+
+Internal cleanup: pulled `PANEL_DEFAULTS` and the panel-window helpers (`panelLabelFor`, `panelUrlFor`, `payloadOf`, `panelKeyFor`) into a new `lib/panels.ts`. Both `useMissionControl` and `NewSessionCommand` now import from there so the launcher and Mission Control can't drift on default sizes again.
+
+## v1.6.5 — 2026-05-20
+
+Fix: launching a session from the palette opened at the old 440×640 size — `NewSessionCommand.vue` had its own inline window-size defaults that weren't updated alongside the `PANEL_DEFAULTS` in `useMissionControl.ts`. Both paths now spawn at 880×760 to match.
+
+## v1.6.4 — 2026-05-20
+
+Fix: newly-launched sessions opened on "Select a session in Mission Control" instead of the terminal. The detail-window precondition required `pid > 0` in the URL params, but `portable_pty::Child::process_id` returns `None` on Windows often enough that we coerced to `0`. Only `sessionId` is actually needed for the lookup now; the precondition has been relaxed.
+
+## v1.6.3 — 2026-05-20
+
+Fix: freshly-launched sessions briefly rendered "Session has ended" because `get_session_detail` was probing `tmux has-session` before `bash -ilc` had finished sourcing the user's bashrc + running `tmux new-session`. Now trusts our own `ClaudeIoState` PTY ownership as proof-of-life first; tmux probe is the fallback path for sessions restored after a Tauri restart (where io_state is empty).
+
+## v1.6.2 — 2026-05-20
+
+Fix: 1.6.1 broke rendering. `ResizeDirection` in `@tauri-apps/api/window` v2 is a type-only string union, not a runtime enum — my `ResizeDirection.North` references evaluated to `undefined.North` and threw on handler bind, blanking the window. Now passes the string literals directly with a local type alias for strict typing.
+
+## v1.6.1 — 2026-05-20
+
+Resize handles fix-up:
+- **Actually functional now.** `startResizeDragging` was called after dynamic imports, which broke Tauri's mousedown → drag hand-off (it must happen in the same task). Imports are now static so the call lands inside the original event tick.
+- **Bigger grab zones** — edges 10 px (was 4), corners 20×20 (was 12). Easier to find with the mouse without overshooting.
+- **No visual overlay.** The tinted hover state went away; the OS cursor changing to a resize arrow is the only affordance now.
+
+## v1.6.0 — 2026-05-20
+
+**Roomier defaults + hoverable resize handles.**
+
+- Session-detail panels open at 880×760 (was 440×640) — a comfortable terminal-reading size.
+- Mission Control opens at 480 wide (was 320) and is now resizable; minimum 320×400.
+- New `ResizeHandles` overlay component renders 8 invisible drag zones around each frameless window (4 edges + 4 corners). They thicken + tint blue on hover so the resize affordance is finally discoverable. Powered by Tauri's `startResizeDragging`.
+
+## v1.5.4 — 2026-05-20
+
+Mission Control's blur-hide now respects per-panel pinning. Click the ⭐ on a session-detail panel and it'll stay visible when MC itself hides on blur. Win+Shift+C still hides everything regardless (explicit dismiss gesture); reopening MC restores pinned panels.
+
+## v1.5.3 — 2026-05-20
+
+Fix: the permission-prompt scanner's sliding window in `claude_io.rs` was `String::drain(..N)`-ing at a raw byte offset, which panics when the offset lands mid-codepoint. Claude's TUI uses multi-byte glyphs (e.g. "❯" is 3 bytes), so the panic was triggered by routine output. Now snaps to the next char boundary first.
+
+## v1.5.2 — 2026-05-20
+
+Fix-ups:
+- Added the missing `@tauri-apps/plugin-notification` npm dependency (the Rust crate landed in 1.5.0 but the JS counterpart didn't — vite errored on `import("@tauri-apps/plugin-notification")` in `useNotifications.ts`). Run `npm install` after pulling.
+- `get_session_detail` now returns `SessionStatus::Dead` when tmux reports the session is gone (was always Unknown/Idle/Busy before, never Dead — which left the Rust enum variant unused and warned at build).
+
+## v1.5.1 — 2026-05-20
+
+`Ctrl+Shift+Tab` cycles focus through open session-detail panels. Stable order (by panel label hash). For juggling 3+ live sessions without reaching for the mouse.
+
+## v1.5.0 — 2026-05-20
+
+**Notifications: never miss a stuck claude again.**
+
+Two new system toasts (Windows notification surface):
+
+- **Permission-prompt detected.** Backend scans the live PTY output for known prompt patterns ("Do you want to allow...", "❯ 1. Yes", etc.) and fires a "Claude is waiting" toast when one appears AND no MC window is focused. Especially valuable for plan-mode + acceptEdits work where claude silently sits at a decision.
+- **Busy → Idle.** Mission Control's polling tracks per-session status; on a Busy→Idle transition with no MC window focused, fires "Claude finished: <label>". Catches the case of "I started a long task and walked away."
+
+Both notifications are suppressed when any MC window has focus — assumed you're already watching. Pattern list lives in `app/src-tauri/src/commands/claude_io.rs::PERMISSION_PROMPT_PATTERNS`; revisit when claude's wording changes.
+
+## v1.4.0 — 2026-05-20
+
+**Project registry + zero-keystroke launch.**
+
+### Win+Shift+N — launch into your most-recent project
+
+The new global shortcut spawns a Claude session in whatever project you last launched, with no prompt and no clicks. Mission Control surfaces showing the new session-detail panel attached to it.
+
+### Pinned + MRU project list
+
+The launcher's autocomplete is now backed by a persistent registry (`~/.claude/fnba-mc/projects.json`) instead of localStorage. Every launch records the project; pinned ones stick at the top of the list. Click the star next to any recent entry to pin/unpin. Pinned entries sort alphabetically; unpinned by recency.
+
+### Plumbing
+
+- New `state/projects.rs` (Project struct + ProjectsState) and `commands/projects.rs` (list / add / update / remove / record_project_used).
+- `start_new_claude_session` records every successful spawn server-side, so the registry stays accurate across Tauri restarts.
+- `useProjects` composable on the frontend; `useNewClaudeSession` replaces its localStorage MRU with the registry.
+
+## v1.3.2 — 2026-05-20
+
+Bug-fix pass from code-review + simplify:
+
+- **Worktree sessions: empty stats / dead reattach.** `OwnedSession.cwd` now stores the worktree path (the cwd claude actually runs in) so `get_session_detail` and the reattach path hash to the right project bucket and find the JSONL.
+- **Worktree directory leaked on Kill.** `stop_claude_session` no longer pre-empts the drain thread's worktree cleanup; it captures the OwnedSession entry and runs `git worktree remove` itself.
+- **Recents dropdown errored on blur.** The inline `setTimeout` in the launcher template was undefined in Vue's compiled context — moved to a `<script setup>` function.
+- **Disconnect → reattach race.** Each `ClaudeIoSession` now carries a monotonic generation tag; the drain thread's EOF cleanup only removes the entry if the live generation still matches, preventing a stale drain from evicting a freshly-attached session.
+
+Tightening:
+
+- Dropped dead code (`_pid_alive`, orphan `SessionDetailActivity.vue`, dead params on `fetchDetail`, empty blur listener).
+- `hashStr` extracted to `app/src/lib/hash.ts` and shared.
+- `build_spawn_cmd` + `build_resume_cmd` unified.
+- `tmux_session_alive` is now `pub(crate)`, reused by `get_session_detail`.
+- Tmux liveness probe (`list_live_tmux_sessions`) cached with a 2-second TTL — Mission Control's 3 s poll no longer forks a process every tick.
+- Patched a small `windows_path_to_wsl` fallthrough where a UNC path without a distro segment would incorrectly try the drive-letter branch.
+
+## v1.3.1 — 2026-05-20
+
+Bug-fix: `get_session_detail` was probing the captured (bash) PID for liveness, which dies the moment the panel closes. Now uses `tmux has-session`, matching the MC list. Restored sessions no longer render "Session has ended."
+
+## v1.3.0 — 2026-05-20
+
+**Terminal is always on; closing the panel disconnects (doesn't kill).**
+
+The "Open Chat" / "Close" toggle is gone. The session-detail panel now always renders Header → Stats → Terminal → Actions for any alive session. Open a session, you're already in it.
+
+Closing the window (X, or Win+Shift+C to hide the whole MC group) now **disconnects** our PTY but leaves the tmux session and claude inside it running — so reopening the panel attaches you right back where you were. The only way to end a session is the explicit Kill action in the panel actions row (or `/exit` from inside claude).
+
+Under the hood: new `disconnect_session` Tauri command (drops PTY without killing tmux), and the PTY drain's EOF cleanup now probes `tmux has-session` to distinguish "claude actually died" from "we disconnected on purpose."
+
+## v1.2.0 — 2026-05-20
+
+**Chat panel is now a real terminal.**
+
+The bubble-rendering UI is gone. The chat panel embeds an `xterm.js` terminal that mirrors the underlying tmux session byte-for-byte. Permission prompts, slash-command menus, the live cursor — everything claude shows is visible, and your keystrokes go straight to the PTY. Multi-line paste, special characters, arrow keys, Ctrl-C all behave exactly like a real terminal because they ARE going through one.
+
+Side effect: this fixes the silent-send bug (the `tmux paste-buffer` path didn't reliably submit some content) and the invisible-prompt bug (claude waiting on a `UserAsk` was hidden because it wasn't in the JSONL). The Stop button now sends Ctrl-C via tmux for the same reason it always did.
+
+Stats (tokens, cost, message count) still come from the JSONL tail and remain visible in the session-detail info view.
+
+## v1.1.0 — 2026-05-19
+
+**Mission Control: launch and manage your own Claude sessions.**
+
+### New: Launch a Claude session from the palette
+
+`Win+Shift+F` → "New Claude Session". Pick a working directory (with autocomplete of recent projects), optionally seed an initial prompt, and you're in chat — no terminal hop, no `cd ...`, no typing `claude`. Sessions launch inside a tmux session named `claude-<id>` so you can attach from anywhere else in WSL to follow along (see the new "tmux attach" button in the session header — one click copies the attach command).
+
+### Mission Control is now exclusive to MC-launched sessions
+
+Previously Mission Control scanned every WSL `.claude` dir and showed every running session it could find. That was noisy, and the "control existing sessions" goal it implied isn't deliverable until Anthropic ships an attach API. The new model: **MC tracks only what MC launched.** External claude processes (IntelliJ plugin, plain WSL terminals) no longer appear.
+
+This also unblocks state we own — sessions persist across Tauri restart, can be re-labeled, and will eventually have history + resume.
+
+### Chat panel upgrades
+
+- **Stop button** while a turn is running (sends Ctrl-C without killing the process).
+- **Up/Down arrow** in the input recalls prior prompts from the current session.
+- **Editable session label** — click the title in the session-detail header to rename.
+- **Token + estimated cost** display in stats (USD estimate at Sonnet rates; pricing table in `lib/pricing.ts`).
+- **Trust-warning banner** when `~/.claude.json` couldn't be pre-accepted (no more silently-dropped first messages).
+- **5-second startup watchdog** with a Retry button if Claude doesn't emit anything.
+- **Worktree mode**: optional checkbox to launch into a fresh `git worktree add` under `.worktrees/<short>`. Cleaned up on close (best-effort; surfaces a warning if the worktree is dirty).
+
+### Plumbing
+
+- Backend `send_claude_message` now drives Claude via `tmux load-buffer | paste-buffer`, which delivers multi-line input atomically and is visible to every attached tmux client.
+- Removed the parallel-resume + bracketed-paste pipeline (and ~430 lines of related dead code) since MC owns its sessions outright now.
+- New `OwnedSessionsState` persists to `~/.claude/fnba-mc/owned-sessions.json` and dedupes via PID liveness on load.
+
+### Coming soon
+
+- One-keystroke launch into the last-used project (global hotkey).
+- A project registry / picker (currently MRU-only).
+- `@`-autocomplete and clickable file paths in the chat panel.
+- Notifications when a session goes idle or is waiting on a permission prompt.
+- Persistent session history with resume.
 
 ## v1.0.0 — 2026-05-19
 

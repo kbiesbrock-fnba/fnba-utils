@@ -43,7 +43,12 @@ cp bashrc.d/startup-files/.env.example bashrc.d/startup-files/.env
 
 ## Desktop App
 
-`app/` is a Tauri v2 + Vue 3 command palette that opens via `Win+Shift+F`. It provides a Raycast/Spotlight-style launcher for FNBA utilities.
+`app/` is a Tauri v2 + Vue 3 command palette. Three global hotkeys:
+
+- `Win+Shift+F` — command palette (Assume Identity, Right Lookup, New Claude Session)
+- `Win+Shift+C` — Mission Control (tracked Claude sessions + live terminal)
+- `Win+Shift+N` — launch a Claude session in the most-recently-used project
+- `Ctrl+Shift+Tab` — cycle focus through open session-detail panels
 
 ### Dev (UI only — no Rust required)
 

@@ -1,15 +1,15 @@
 use crate::commands::assume_identity::load_all_connections;
 use crate::db;
 use crate::models::mission_control::{
-    ClaudeIoSession, ClaudeIoState, ClaudeSession, ConnectionStatus, ConversationMessage,
-    QueryResult, SessionDetail, SessionStats, SessionStatus, SqlQueryState, SubagentInfo,
+    ClaudeSession, ConnectionStatus, ConversationMessage, QueryResult, SessionDetail,
+    SessionStats, SessionStatus, SqlQueryState, SubagentInfo,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, Write};
+use crate::state::owned_sessions::{OwnedSession, OwnedSessionsState};
+use std::collections::{HashMap, VecDeque};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
-use tauri::{Emitter, Manager};
 use tokio::time::timeout;
 
 // --- Shared helpers ---
@@ -33,7 +33,7 @@ fn derive_status(last_role: &str, is_stale: bool) -> SessionStatus {
     }
 }
 
-fn cwd_to_project_hash(cwd: &str) -> String {
+pub(crate) fn cwd_to_project_hash(cwd: &str) -> String {
     // Claude encodes the cwd by replacing every non-alphanumeric (including `.`, `+`,
     // `_`, etc.) with `-`. Hyphens are preserved. The leading `/` becomes a leading `-`.
     let mut out = String::with_capacity(cwd.len() + 1);
@@ -81,51 +81,6 @@ fn read_subagents(projects_dir: &Path, cwd: &str, session_id: &str) -> Vec<Subag
         }
     }
     agents
-}
-
-fn parse_session(val: &serde_json::Value) -> Option<(u32, ClaudeSession)> {
-    let pid = val.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-    if pid == 0 {
-        return None;
-    }
-
-    let session_id = val
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let cwd = val
-        .get("cwd")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Some((
-        pid,
-        ClaudeSession {
-            pid,
-            session_id,
-            cwd,
-            started_at: val.get("startedAt").and_then(|v| v.as_u64()).unwrap_or(0),
-            kind: val
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            name: val
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            entrypoint: val
-                .get("entrypoint")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            is_alive: true,
-            subagent_count: 0,
-            subagents: Vec::new(),
-            status: SessionStatus::Unknown,
-            last_message_at: None,
-        },
-    ))
 }
 
 // --- Lightweight JSONL tail for session status ---
@@ -259,7 +214,7 @@ fn conversation_parse_cache() -> &'static Mutex<HashMap<String, ConversationPars
 
 /// Find all WSL `.claude` directories by scanning `\\wsl.localhost\<distro>\home\*\.claude\sessions`.
 /// Returns `(claude_dir, proc_root)` pairs. Pure file I/O — no process spawn.
-fn wsl_claude_dirs() -> Vec<(PathBuf, PathBuf)> {
+pub(crate) fn wsl_claude_dirs() -> Vec<(PathBuf, PathBuf)> {
     let root = PathBuf::from(r"\\wsl.localhost\Ubuntu");
     let proc_root = root.join("proc");
     let home_dir = root.join("home");
@@ -279,101 +234,49 @@ fn wsl_claude_dirs() -> Vec<(PathBuf, PathBuf)> {
     results
 }
 
-/// Discover sessions under a given `.claude` root, using `proc_root` (if provided)
-/// to check whether WSL PIDs are alive via `/proc/<pid>`.
-fn discover_sessions(
-    claude_dir: &Path,
-    proc_root: Option<&Path>,
-    seen_jsonls: &mut HashSet<String>,
-) -> Result<Vec<ClaudeSession>, String> {
-    let sessions_dir = claude_dir.join("sessions");
-    let projects_dir = claude_dir.join("projects");
-
-    let entries = match std::fs::read_dir(&sessions_dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(Vec::new()),
-    };
-
-    let mut sessions = Vec::new();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let val: serde_json::Value = match serde_json::from_str(&contents) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let (pid, mut session) = match parse_session(&val) {
-            Some(s) => s,
-            None => continue,
-        };
-
-        // PID-alive check: use /proc via UNC if available, otherwise skip
-        let alive = match proc_root {
-            Some(root) => root.join(pid.to_string()).exists(),
-            None => Path::new(&format!("/proc/{pid}")).exists(),
-        };
-        session.is_alive = alive;
-
-        if alive {
-            let subagents = read_subagents(&projects_dir, &session.cwd, &session.session_id);
-            session.subagent_count = subagents.len() as u32;
-            session.subagents = subagents;
-        }
-
-        // Lightweight tail of JSONL for status + last message time
-        let hash = cwd_to_project_hash(&session.cwd);
-        let jsonl_path = projects_dir.join(&hash).join(format!("{}.jsonl", &session.session_id));
-        seen_jsonls.insert(jsonl_path.to_string_lossy().into_owned());
-        let info = tail_conversation_info(&jsonl_path);
-        session.status = if !alive {
-            SessionStatus::Dead
-        } else {
-            derive_status(&info.last_role, is_stale_at(info.mtime))
-        };
-        session.last_message_at = info.last_ts;
-
-        sessions.push(session);
-    }
-
-    Ok(sessions)
-}
-
+/// Mission Control now exclusively shows sessions launched from MC. Reads the
+/// `OwnedSessionsState` registry, filters to alive PIDs, and enriches with
+/// status + recent activity from the JSONL tail. External claude processes
+/// (IntelliJ plugin, plain WSL terminals) are deliberately not surfaced.
 #[tauri::command]
-pub async fn get_claude_sessions() -> Result<Vec<ClaudeSession>, String> {
-    let mut all_sessions = Vec::new();
-    let mut seen_jsonls: HashSet<String> = HashSet::new();
+pub async fn get_claude_sessions(
+    owned_state: tauri::State<'_, OwnedSessionsState>,
+) -> Result<Vec<ClaudeSession>, String> {
+    let owned = owned_state.list_alive();
+    let mut sessions = Vec::with_capacity(owned.len());
+    let mut seen_jsonls: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // WSL sessions: read via \\wsl.localhost\ UNC paths (pure file I/O, no process spawn)
-    for (claude_dir, proc_root) in wsl_claude_dirs() {
-        if let Ok(mut s) = discover_sessions(&claude_dir, Some(&proc_root), &mut seen_jsonls) {
-            all_sessions.append(&mut s);
-        }
+    for o in owned {
+        let claude_dir = PathBuf::from(&o.claude_home);
+        let projects_dir = claude_dir.join("projects");
+        let hash = cwd_to_project_hash(&o.cwd);
+        let jsonl_path = projects_dir.join(&hash).join(format!("{}.jsonl", &o.session_id));
+        seen_jsonls.insert(jsonl_path.to_string_lossy().into_owned());
+
+        let info = tail_conversation_info(&jsonl_path);
+        let status = derive_status(&info.last_role, is_stale_at(info.mtime));
+        let subagents = read_subagents(&projects_dir, &o.cwd, &o.session_id);
+
+        sessions.push(ClaudeSession {
+            pid: o.pid,
+            session_id: o.session_id,
+            cwd: o.cwd,
+            started_at: o.started_at,
+            kind: Some("interactive".to_string()),
+            name: o.label.clone(),
+            entrypoint: Some("mc".to_string()),
+            is_alive: true,
+            subagent_count: subagents.len() as u32,
+            subagents,
+            status,
+            last_message_at: info.last_ts,
+            label: o.label,
+            worktree_path: o.worktree_path,
+        });
     }
+    sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
 
-    // Native Windows sessions (if Claude Code is also installed natively)
-    if let Some(home) = dirs::home_dir() {
-        let claude = home.join(".claude");
-        if let Ok(mut s) = discover_sessions(&claude, None, &mut seen_jsonls) {
-            all_sessions.append(&mut s);
-        }
-    }
-
-    // Filter out dead sessions — only show alive ones
-    all_sessions.retain(|s| s.is_alive);
-    all_sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
-
-    // Prune cache entries for JSONLs we no longer see — caches are otherwise
-    // unbounded and grow forever as historical sessions accumulate.
+    // Prune caches for JSONLs we no longer track.
     if let Ok(mut cache) = jsonl_tail_cache().lock() {
         cache.retain(|k, _| seen_jsonls.contains(k));
     }
@@ -381,7 +284,7 @@ pub async fn get_claude_sessions() -> Result<Vec<ClaudeSession>, String> {
         cache.retain(|k, _| seen_jsonls.contains(k));
     }
 
-    Ok(all_sessions)
+    Ok(sessions)
 }
 
 // --- Connection statuses ---
@@ -718,70 +621,64 @@ fn parse_conversation_cached(
     entry
 }
 
-/// Find the claude_dir that contains a given session.
-fn find_claude_dir_for_session(pid: u32) -> Option<(PathBuf, Option<PathBuf>)> {
-    for (claude_dir, proc_root) in wsl_claude_dirs() {
-        if claude_dir.join("sessions").join(format!("{pid}.json")).exists() {
-            return Some((claude_dir, Some(proc_root)));
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        let claude = home.join(".claude");
-        if claude.join("sessions").join(format!("{pid}.json")).exists() {
-            return Some((claude, None));
-        }
-    }
-    None
-}
-
 #[tauri::command]
 pub async fn get_session_detail(
     session_id: String,
-    cwd: String,
-    pid: u32,
+    owned_state: tauri::State<'_, OwnedSessionsState>,
+    io_state: tauri::State<'_, crate::models::mission_control::ClaudeIoState>,
 ) -> Result<SessionDetail, String> {
-    let (claude_dir, proc_root) = find_claude_dir_for_session(pid)
-        .ok_or_else(|| format!("Session {pid} not found"))?;
+    let owned: OwnedSession = owned_state
+        .get(&session_id)
+        .ok_or_else(|| format!("Session {session_id} is not tracked by Mission Control"))?;
 
-    let session_path = claude_dir.join("sessions").join(format!("{pid}.json"));
-    let session_json = std::fs::read_to_string(&session_path)
-        .map_err(|e| format!("Cannot read session file: {e}"))?;
-    let val: serde_json::Value =
-        serde_json::from_str(&session_json).map_err(|e| format!("Invalid session JSON: {e}"))?;
-
-    let (_, session) = parse_session(&val).ok_or("Invalid session data")?;
-
-    let is_alive = match &proc_root {
-        Some(root) => root.join(pid.to_string()).exists(),
-        None => Path::new(&format!("/proc/{pid}")).exists(),
-    };
-
+    let claude_dir = PathBuf::from(&owned.claude_home);
     let projects_dir = claude_dir.join("projects");
-    let hash = cwd_to_project_hash(&cwd);
+    let hash = cwd_to_project_hash(&owned.cwd);
     let jsonl_path = projects_dir.join(&hash).join(format!("{session_id}.jsonl"));
+
+    // Liveness: trust our own ClaudeIoState first — if we're holding the PTY
+    // for this session, it's by definition alive even if `tmux has-session`
+    // hasn't caught up yet (there's a ~hundreds-of-ms gap between
+    // start_new_claude_session returning and bash -ilc actually running
+    // `tmux new-session`). Fall back to tmux probe for restored-after-restart
+    // sessions where io_state is empty.
+    let in_io_state = io_state
+        .sessions
+        .lock()
+        .map(|s| s.contains_key(&owned.session_id))
+        .unwrap_or(false);
+    let is_alive = in_io_state
+        || crate::commands::claude_io::tmux_session_alive(&format!(
+            "claude-{}",
+            owned.session_id
+        ));
+
     let parsed = parse_conversation_cached(&jsonl_path, 20);
-    let status = if parsed.mtime == SystemTime::UNIX_EPOCH {
+    let status = if !is_alive {
+        SessionStatus::Dead
+    } else if parsed.mtime == SystemTime::UNIX_EPOCH {
         SessionStatus::Unknown
     } else {
         derive_status(&parsed.last_role, is_stale_at(parsed.mtime))
     };
-
-    let subagents = read_subagents(&projects_dir, &cwd, &session_id);
+    let subagents = read_subagents(&projects_dir, &owned.cwd, &session_id);
 
     Ok(SessionDetail {
-        pid,
+        pid: owned.pid,
         session_id,
-        cwd,
-        started_at: session.started_at,
-        kind: session.kind,
-        name: session.name,
-        entrypoint: session.entrypoint,
+        cwd: owned.cwd,
+        started_at: owned.started_at,
+        kind: Some("interactive".to_string()),
+        name: owned.label.clone(),
+        entrypoint: Some("mc".to_string()),
         is_alive,
         git_branch: parsed.git_branch,
         status,
         stats: parsed.stats,
         recent_messages: parsed.recent,
         subagents,
+        label: owned.label,
+        worktree_path: owned.worktree_path,
     })
 }
 
@@ -803,413 +700,6 @@ pub async fn kill_session(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
-// --- Claude session I/O: parallel-resume + JSONL tail ---
-//
-// We spawn a *second* `claude --resume <id>` interactively (no --print) inside a PTY,
-// running in parallel with whatever already has the session open (e.g. IntelliJ's
-// claude plugin). Per the docs ("Same session in multiple terminals: both terminals
-// write to the same session file"), both processes append to the same JSONL transcript,
-// so anything we send is visible to the original session.
-//
-// User input goes in via PTY keystrokes wrapped in bracketed-paste escape sequences.
-// Output is rendered by *tailing the JSONL file*, not by parsing the TUI output —
-// JSONL records are already structured (user/assistant/tool_use/tool_result/usage)
-// and avoid the ANSI parsing nightmare of scraping the terminal.
-
-/// Phase 1: pre-approve the common interactive tool set so the parallel claude never
-/// blocks on a permission prompt. Phase 2 will swap this for a `--permission-prompt-tool`
-/// MCP bridge that surfaces approvals in the chat UI.
-const ALLOWED_TOOLS_PHASE1: &str =
-    "Read,Edit,Write,Bash,Glob,Grep,WebFetch,WebSearch,TodoWrite,NotebookEdit";
-
-/// Mark `cwd` as trusted in `~/.claude.json` so the spawned claude doesn't show the
-/// "Quick safety check: Is this a project you trust?" dialog at startup. Without this,
-/// the dialog blocks input — and when send_claude_message fires its bracketed-paste
-/// + Enter, the Enter accepts the dialog while the paste content is silently dropped.
-///
-/// The trust flag is per-cwd; setting it here is the same effect as the user clicking
-/// "Yes, I trust this folder" once. Best-effort: if we can't find or update the file,
-/// the dialog will appear and the first send will dismiss it (subsequent sends work).
-fn ensure_workspace_trust(cwd: &str) {
-    // Build candidate `.claude.json` paths. WSL homes are under \\wsl.localhost\Ubuntu\home\*;
-    // also probe the native Windows home as a fallback for natively-installed claude.
-    // When cwd is a WSL path like /home/<user>/..., scope to that user's home so we
-    // don't flip trust flags in another WSL user's config on multi-user hosts.
-    let wsl_user = cwd
-        .strip_prefix("/home/")
-        .and_then(|rest| rest.split('/').next())
-        .map(str::to_string);
-
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for (claude_dir, _) in wsl_claude_dirs() {
-        if let Some(home) = claude_dir.parent() {
-            if let Some(ref user) = wsl_user {
-                if home.file_name().and_then(|n| n.to_str()) != Some(user.as_str()) {
-                    continue;
-                }
-            }
-            candidates.push(home.join(".claude.json"));
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".claude.json"));
-    }
-
-    for path in candidates {
-        if !path.exists() {
-            continue;
-        }
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let mut config: serde_json::Value = match serde_json::from_str(&contents) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let projects = match config.get_mut("projects").and_then(|v| v.as_object_mut()) {
-            Some(p) => p,
-            None => continue,
-        };
-        let project = projects
-            .entry(cwd.to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        let already_trusted = project
-            .get("hasTrustDialogAccepted")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if already_trusted {
-            return;
-        }
-        if let Some(obj) = project.as_object_mut() {
-            obj.insert(
-                "hasTrustDialogAccepted".to_string(),
-                serde_json::Value::Bool(true),
-            );
-        }
-        if let Ok(new_contents) = serde_json::to_string_pretty(&config) {
-            let _ = std::fs::write(&path, new_contents);
-        }
-        return;
-    }
-}
-
-/// Convert a JSONL conversation record (the file format claude writes to disk) into
-/// the same envelope shape ChatPane.vue already consumes from the SDK stream-json
-/// path. Returns `None` for noise records (custom-title, agent-name, summary, etc.)
-/// that shouldn't surface in the chat.
-fn jsonl_to_event(record: &serde_json::Value) -> Option<serde_json::Value> {
-    let record_type = record.get("type").and_then(|v| v.as_str())?;
-    match record_type {
-        "user" => {
-            // Skip meta echoes (claude writes user records with isMeta=true for
-            // command/permission scaffolding that aren't real user turns).
-            if record
-                .get("isMeta")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                return None;
-            }
-            let message = record.get("message").cloned().unwrap_or(serde_json::Value::Null);
-            Some(serde_json::json!({ "type": "user", "message": message }))
-        }
-        "assistant" => {
-            let message = record.get("message").cloned().unwrap_or(serde_json::Value::Null);
-            Some(serde_json::json!({ "type": "assistant", "message": message }))
-        }
-        "system" => {
-            // JSONL system records carry their own subtype field; pass-through.
-            Some(record.clone())
-        }
-        // Noise records — file metadata, not user-facing chat events.
-        "summary" | "custom-title" | "agent-name" | "permission-mode" | "pr-link" => None,
-        _ => None,
-    }
-}
-
-#[tauri::command]
-pub async fn start_claude_session(
-    app: tauri::AppHandle,
-    session_id: String,
-    cwd: String,
-    state: tauri::State<'_, ClaudeIoState>,
-) -> Result<(), String> {
-    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-
-    if state
-        .sessions
-        .lock()
-        .map_err(|e| format!("State lock poisoned: {e}"))?
-        .contains_key(&session_id)
-    {
-        return Err("Claude session already open".into());
-    }
-
-    // Resolve JSONL transcript path. Tauri runs on Windows so `dirs::home_dir()` is
-    // useless here — WSL sessions live under `\\wsl.localhost\Ubuntu\home\...\.claude`.
-    // Scan the same set of claude dirs that discovery uses, then probe for the file.
-    let jsonl_path = {
-        let hash = cwd_to_project_hash(&cwd);
-        let filename = format!("{session_id}.jsonl");
-        let mut found = None;
-        for (claude_dir, _) in wsl_claude_dirs() {
-            let p = claude_dir.join("projects").join(&hash).join(&filename);
-            if p.exists() {
-                found = Some(p);
-                break;
-            }
-        }
-        if found.is_none() {
-            if let Some(home) = dirs::home_dir() {
-                let p = home.join(".claude").join("projects").join(&hash).join(&filename);
-                if p.exists() {
-                    found = Some(p);
-                }
-            }
-        }
-        found.ok_or_else(|| format!("Could not locate JSONL for session {session_id}"))?
-    };
-    // Tail starts from current size so we don't re-emit history (the panel already
-    // loaded that via get_session_detail).
-    let baseline_offset = std::fs::metadata(&jsonl_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    // Pre-accept the workspace trust dialog so it doesn't intercept our first input.
-    ensure_workspace_trust(&cwd);
-
-    // Spawn parallel claude in PTY. No --print, no stream-json flags — interactive
-    // resume is what avoids the sdk-cli fork. -ilc keeps NODE_EXTRA_CA_CERTS etc.
-    //
-    // Why `cd '...' &&` AND `wsl.exe --cd`: --cd alone isn't enough. `bash -i` runs
-    // the user's interactive bashrc, which can chdir away (e.g. some bashrc snippets
-    // start in $HOME). Claude resolves its session by hashing process.cwd() — if it
-    // doesn't match the original, claude can't find the JSONL and silently starts a
-    // brand-new session with the same name. The explicit `cd` runs after bashrc and
-    // pins us back to the right directory before claude starts.
-    let bash_cmd = format!(
-        "cd '{cwd_escaped}' && claude --resume '{sid}' --permission-mode acceptEdits --allowedTools {tools}",
-        cwd_escaped = cwd.replace('\'', "'\\''"),
-        sid = session_id.replace('\'', "'\\''"),
-        tools = ALLOWED_TOOLS_PHASE1,
-    );
-
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 50,
-            cols: 200,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("Failed to open PTY: {e}"))?;
-
-    let mut cmd = CommandBuilder::new("wsl.exe");
-    cmd.args(["--cd", &cwd, "-e", "bash", "-ilc", &bash_cmd]);
-
-    let _child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("Failed to spawn claude in PTY: {e}"))?;
-    drop(pair.slave);
-
-    // PTY output drain. We don't render the TUI in chat (the JSONL is the source of
-    // truth for actual conversation), but we need to drain to avoid backpressure AND
-    // we surface chunks as debug `pty` events so the Debug toggle in the chat panel
-    // can show what claude is actually doing — invaluable for diagnosing "no response"
-    // situations (rate limit, auth error, prompt-but-not-submitted, etc.).
-    // EOF = claude exited → emit session-closed and clean up state.
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("Failed to clone PTY reader: {e}"))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
-
-    // Channel for stopping the JSONL tail thread. Created up front so the sender can
-    // be moved into the state entry below (alongside writer/master) BEFORE either
-    // worker thread is spawned — otherwise a near-instant claude exit could fire the
-    // drain thread's cleanup before this fn even reaches the insert, leaving a phantom
-    // entry whose tail thread polls forever.
-    let (tail_stop_tx, tail_stop_rx) = std::sync::mpsc::channel::<()>();
-    state
-        .sessions
-        .lock()
-        .map_err(|e| format!("State lock poisoned: {e}"))?
-        .insert(
-            session_id.clone(),
-            ClaudeIoSession {
-                writer,
-                _master: pair.master,
-                _tail_stop: tail_stop_tx,
-            },
-        );
-
-    {
-        let app = app.clone();
-        let sid = session_id.clone();
-        std::thread::spawn(move || {
-            let mut sink = [0u8; 4096];
-            let mut r = reader;
-            loop {
-                match std::io::Read::read(&mut r, &mut sink) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        // Surface as a debug event. Lossy decode keeps non-UTF-8 bytes
-                        // visible (as U+FFFD) instead of dropping them.
-                        let text = String::from_utf8_lossy(&sink[..n]).into_owned();
-                        let _ = app.emit(
-                            "claude-event",
-                            serde_json::json!({
-                                "sessionId": sid,
-                                "event": { "type": "pty", "text": text },
-                            }),
-                        );
-                    }
-                }
-            }
-            let _ = app.emit(
-                "claude-session-closed",
-                serde_json::json!({ "sessionId": sid, "exitCode": 0 }),
-            );
-            if let Ok(mut sessions) = app.state::<ClaudeIoState>().sessions.lock() {
-                sessions.remove(&sid);
-            }
-        });
-    }
-
-    // JSONL tail thread.
-    {
-        let app = app.clone();
-        let sid = session_id.clone();
-        let path = jsonl_path.clone();
-        let mut offset = baseline_offset;
-        std::thread::spawn(move || {
-            // Carry-over for partial last lines between polls (rare but possible).
-            let mut carry = String::new();
-            loop {
-                if matches!(
-                    tail_stop_rx.recv_timeout(Duration::from_millis(200)),
-                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-                ) {
-                    break;
-                }
-                let len = match std::fs::metadata(&path) {
-                    Ok(m) => m.len(),
-                    Err(_) => continue, // file may not exist yet
-                };
-                if len <= offset {
-                    continue;
-                }
-                let mut file = match std::fs::File::open(&path) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                use std::io::{Read, Seek, SeekFrom};
-                if file.seek(SeekFrom::Start(offset)).is_err() {
-                    continue;
-                }
-                let mut buf = Vec::with_capacity((len - offset) as usize);
-                let read = match file.read_to_end(&mut buf) {
-                    Ok(n) => n,
-                    Err(_) => continue,
-                };
-                // Use bytes-actually-read, not metadata len — the file can grow between
-                // the metadata() call and read_to_end, so seeking to `len` next round
-                // would silently skip the new tail.
-                offset += read as u64;
-
-                let chunk = String::from_utf8_lossy(&buf);
-                let combined = format!("{carry}{chunk}");
-                carry.clear();
-
-                // split('\n') on "a\nb\n" yields ["a","b",""]; on "a\nb" yields ["a","b"].
-                // Either way, the last element is the carry-over (empty if the chunk ended
-                // on a newline, the partial line otherwise).
-                let mut lines: Vec<&str> = combined.split('\n').collect();
-                if let Some(tail) = lines.pop() {
-                    carry.push_str(tail);
-                }
-
-                for line in lines {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let record: serde_json::Value = match serde_json::from_str(trimmed) {
-                        Ok(v) => v,
-                        Err(_) => continue, // skip malformed lines (partial flush, etc.)
-                    };
-                    if let Some(event) = jsonl_to_event(&record) {
-                        let _ = app.emit(
-                            "claude-event",
-                            serde_json::json!({ "sessionId": sid, "event": event }),
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn send_claude_message(
-    session_id: String,
-    content: String,
-    state: tauri::State<'_, ClaudeIoState>,
-) -> Result<(), String> {
-    // Bracketed paste: prefix \x1b[200~ and suffix \x1b[201~, then submit with \r.
-    // Bracketed-paste mode is enabled at claude startup ([?2004h in the TUI init);
-    // wrapping like this is what xterms do when pasting and is the safest way to
-    // inject multi-line text without claude's input handler treating chord-like
-    // characters specially.
-    // Strip embedded paste-end markers — if the user's content contains \x1b[201~
-    // claude's TUI would exit paste mode mid-message and treat the remainder as raw
-    // keystrokes. Removing the marker is safe (it never carries meaningful payload).
-    let safe_content = content.replace("\x1b[201~", "");
-
-    let mut payload = String::with_capacity(safe_content.len() + 16);
-    payload.push_str("\x1b[200~");
-    payload.push_str(&safe_content);
-    payload.push_str("\x1b[201~");
-    payload.push('\r');
-
-    let mut sessions = state
-        .sessions
-        .lock()
-        .map_err(|e| format!("State lock poisoned: {e}"))?;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or("No active Claude session")?;
-    session
-        .writer
-        .write_all(payload.as_bytes())
-        .map_err(|e| format!("Write failed: {e}"))?;
-    session
-        .writer
-        .flush()
-        .map_err(|e| format!("Flush failed: {e}"))?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn stop_claude_session(
-    session_id: String,
-    state: tauri::State<'_, ClaudeIoState>,
-) -> Result<(), String> {
-    // Dropping the entry drops `_master` (PTY slave closes → claude exits via SIGHUP)
-    // and `_tail_stop` (tail thread sees Disconnected on its recv → exits).
-    state
-        .sessions
-        .lock()
-        .map_err(|e| format!("State lock poisoned: {e}"))?
-        .remove(&session_id);
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn open_in_explorer(cwd: String) -> Result<(), String> {

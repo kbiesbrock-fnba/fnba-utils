@@ -47,10 +47,27 @@ Each command (e.g., Assume Identity) follows this pattern:
 ### Assume Identity flow
 The primary command. Steps: user picker -> connection picker -> confirm -> executing -> result/error. The composable (`useAssumeIdentity.ts`) manages step transitions and state. The Rust backend connects to SQL Server via `tiberius` with Windows SSPI auth and executes a single consolidated SQL batch that checks current state, conditionally runs the `logincheck.fnba.assumeIdentity` stored proc, and returns before/after snapshots.
 
+### Mission Control + Claude session model
+A separate `Win+Shift+C` window tracks Claude Code sessions launched **from** this app. External claude processes (IntelliJ plugin, plain WSL terminals) are not surfaced — MC is intentionally scoped to its own sessions.
+
+- **Spawn shape**: `wsl.exe --cd <cwd> -e bash -ilc "cd <cwd> && tmux new-session -d -s claude-<uuid> 'claude --session-id <uuid> ...' && tmux attach -t claude-<uuid>"` inside a `portable_pty` PTY. tmux is required (see `app/src-tauri/src/commands/claude_io.rs`); the wrapper lets external terminals `tmux attach -t claude-<id>` to co-drive the session.
+- **Terminal UI**: `ChatPane.vue` embeds `xterm.js`. Keystrokes → `write_session_pty`; PTY drain bytes → `pty` events → `xterm.write`. No bubble UI; no JSONL→DOM translation. Stats panel still reads JSONL for token/cost counts.
+- **Disconnect vs Kill**: closing the panel calls `disconnect_session` (drops PTY, keeps tmux alive — session resumable). Explicit Kill calls `stop_claude_session` (kill tmux, remove from state, remove worktree). Drain-thread EOF cleanup probes `tmux has-session` to distinguish the two cases. Each `ClaudeIoSession` carries a generation tag so a stale drain can't evict a newer attach.
+- **Persistent state** in `app/src-tauri/src/state/`:
+  - `owned_sessions.rs` — `OwnedSession { session_id, cwd, pid, label, claude_home, worktree_path, tmux_session, generation }`, persisted to `~/.claude/fnba-mc/owned-sessions.json`. Liveness derived from `tmux list-sessions` (cached 2 s).
+  - `projects.rs` — `Project { cwd, displayName, pinned, lastUsedAt, notes }`, persisted to `~/.claude/fnba-mc/projects.json`. Drives the launcher's pinned+MRU autocomplete and the `Win+Shift+N` MRU hotkey. `start_new_claude_session` calls `record_project_used` on every successful spawn.
+- **Global shortcuts** (registered in `lib.rs`):
+  - `Win+Shift+F` — command palette
+  - `Win+Shift+C` — Mission Control panel
+  - `Win+Shift+N` — launch a session in the most-recently-used project (emits `mc-mru-launch`, handled in `useMissionControl.ts`)
+  - `Ctrl+Shift+Tab` — cycle focus through open `session-detail:*` windows (pure Rust, sorts by label hash for stable order)
+
 ### Data sources
 - `data/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`
 - `~/.assumeIdentity.json` -- user-added custom entries, merged at runtime
-- `localStorage` -- recent user tracking (frontend only)
+- `~/.claude/fnba-mc/owned-sessions.json` -- MC's persisted Claude session registry
+- `~/.claude/fnba-mc/projects.json` -- MC's project registry (pinned + MRU)
+- `localStorage` -- a few small UI prefs (chat debug toggle, panel pin state). Recent projects moved to the backend registry above.
 
 ### Shell extensions
 `bashrc.d/` contains shell functions sourced via the root `.bashrc`. These are standalone bash scripts, not part of the Tauri app.

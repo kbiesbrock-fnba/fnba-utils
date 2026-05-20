@@ -20,7 +20,11 @@ const initialSessionId = params.get("sessionId") ?? "";
 const initialCwd = params.get("cwd") ?? "";
 const parsedPid = Number.parseInt(params.get("pid") ?? "", 10);
 const initialPid = Number.isFinite(parsedPid) && parsedPid > 0 ? parsedPid : 0;
-const hasInitial = !!initialSessionId && !!initialCwd && initialPid > 0;
+// sessionId is the only required param; pid/cwd are nice-to-have hints for
+// pin restoration and the legacy kill flow. `portable_pty::Child::process_id`
+// returns Option<u32> and is often None on Windows, so we'd otherwise reject
+// freshly-launched sessions whose URL carries pid=0.
+const hasInitial = !!initialSessionId;
 
 const detail = ref<SessionDetail | null>(null);
 const loading = ref(false);
@@ -36,9 +40,6 @@ function ownPanel(): PinnedPanel {
 }
 
 const pinned = ref(hasInitial ? isPanelPinned(ownPanel()) : false);
-
-/** Whether the chat pane is open (Claude SDK side-car running). */
-const chatActive = ref(false);
 
 let listening = false;
 
@@ -59,27 +60,20 @@ async function startListening() {
       rememberWindowFocus(getCurrentWindow().label);
     }
 
-    window.addEventListener("blur", async () => {
-      // Don't auto-hide when chat is active — user is interacting
-      if (!pinned.value && !chatActive.value) {
-        if (isTauri) {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
-          await getCurrentWindow().hide();
-        }
-      }
-    });
+    // Terminal is always live in the panel; we don't auto-hide on blur
+    // anymore. Pin still has its original sticky-panel semantic.
   }
 
   if (hasInitial && !detail.value) {
-    fetchDetail(initialSessionId, initialCwd, initialPid);
+    await fetchDetail(initialSessionId);
   }
 }
 
-async function fetchDetail(sessionId: string, cwd: string, pid: number) {
+async function fetchDetail(sessionId: string) {
   loading.value = true;
   error.value = null;
   try {
-    detail.value = await getSessionDetail(sessionId, cwd, pid);
+    detail.value = await getSessionDetail(sessionId);
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -87,40 +81,26 @@ async function fetchDetail(sessionId: string, cwd: string, pid: number) {
   }
 }
 
-function openChat() {
-  if (!detail.value) return;
-  error.value = null;
-  chatActive.value = true;
-}
-
-async function closeChat() {
-  if (!detail.value) return;
-  await stopClaudeSession(detail.value.sessionId).catch(() => {});
-  chatActive.value = false;
-}
-
-function onChatClosed() {
-  chatActive.value = false;
+async function onChatClosed() {
   if (detail.value) {
-    fetchDetail(detail.value.sessionId, detail.value.cwd, detail.value.pid);
+    return fetchDetail(detail.value.sessionId);
   }
 }
 
 function onChatError(msg: string) {
   error.value = msg;
-  chatActive.value = false;
 }
 
 async function kill() {
   if (!detail.value) return;
   const pid = detail.value.pid;
+  const sid = detail.value.sessionId;
   try {
-    // Tear down the chat sidecar (and its PTY drain + tail threads) before the
-    // window is destroyed. Otherwise the window goes away mid-IPC and the
-    // ChatPane's onUnmounted cleanup races destroy() — leaking the sidecar.
-    if (chatActive.value) await closeChat();
-
-    await killSession(pid);
+    // Tear down the chat sidecar (PTY + tmux + state) BEFORE destroying the
+    // window. Otherwise the window goes away mid-IPC and the ChatPane's
+    // onUnmounted cleanup races destroy().
+    await stopClaudeSession(sid).catch(() => {});
+    await killSession(pid).catch(() => {});
 
     // PID is gone — drop the pinned descriptor since it would no longer
     // resolve to a real session on next restore.
@@ -168,14 +148,11 @@ export function useSessionDetail() {
     loading,
     error,
     pinned,
-    chatActive,
     kill,
     openCwd,
     copyInfo,
     fetchDetail,
     togglePin,
-    openChat,
-    closeChat,
     onChatClosed,
     onChatError,
   };

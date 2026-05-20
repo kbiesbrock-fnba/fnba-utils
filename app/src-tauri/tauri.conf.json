@@ -1,6 +1,6 @@
 {
   "productName": "FNBA Utils",
-  "version": "1.7.0",
+  "version": "1.9.0",
   "identifier": "com.fnba.utils",
   "build": {
     "devUrl": "http://localhost:5173",
@@ -29,11 +29,13 @@
         "label": "mission-control",
         "title": "Mission Control",
         "url": "index.html#mission-control",
-        "width": 320,
+        "width": 480,
         "height": 560,
+        "minWidth": 320,
+        "minHeight": 400,
         "x": 0,
         "y": 0,
-        "resizable": false,
+        "resizable": true,
         "decorations": false,
         "shadow": false,
         "transparent": true,
