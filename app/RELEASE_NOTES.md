@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.6.6 — 2026-05-20
+
+Internal cleanup: pulled `PANEL_DEFAULTS` and the panel-window helpers (`panelLabelFor`, `panelUrlFor`, `payloadOf`, `panelKeyFor`) into a new `lib/panels.ts`. Both `useMissionControl` and `NewSessionCommand` now import from there so the launcher and Mission Control can't drift on default sizes again.
+
 ## v1.6.5 — 2026-05-20
 
 Fix: launching a session from the palette opened at the old 440×640 size — `NewSessionCommand.vue` had its own inline window-size defaults that weren't updated alongside the `PANEL_DEFAULTS` in `useMissionControl.ts`. Both paths now spawn at 880×760 to match.

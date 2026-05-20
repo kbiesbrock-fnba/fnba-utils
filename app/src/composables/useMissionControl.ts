@@ -18,7 +18,13 @@ import {
   type PinnedPanel,
   type SqlPanelPayload,
 } from "@/lib/panelStorage";
-import { hashStr } from "@/lib/hash";
+import {
+  PANEL_DEFAULTS,
+  panelKeyFor,
+  panelLabelFor,
+  panelUrlFor,
+  payloadOf,
+} from "@/lib/panels";
 import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
@@ -28,66 +34,6 @@ const POLL_INTERVAL = 3000;
 const CONNECTIONS_POLL_INTERVAL = 30000;
 const BLUR_SUPPRESS_MS = 300;
 
-const PANEL_DEFAULTS: Record<PanelKind, Record<string, unknown>> = {
-  "sql-query": {
-    width: 700,
-    height: 520,
-    minWidth: 400,
-    minHeight: 300,
-    resizable: false,
-    decorations: false,
-    shadow: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    visible: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: "SQL Query",
-  },
-  "session-detail": {
-    width: 880,
-    height: 760,
-    minWidth: 360,
-    minHeight: 400,
-    resizable: true,
-    decorations: false,
-    shadow: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    visible: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: "Session Detail",
-  },
-};
-
-function panelKeyFor(kind: PanelKind, payload: SqlPanelPayload | DetailPanelPayload): string {
-  return kind === "sql-query"
-    ? (payload as SqlPanelPayload).server
-    : (payload as DetailPanelPayload).sessionId;
-}
-
-function panelLabelFor(kind: PanelKind, key: string): string {
-  return `${kind}:${hashStr(key)}`;
-}
-
-function panelUrlFor(
-  kind: PanelKind,
-  payload: SqlPanelPayload | DetailPanelPayload,
-): string {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(payload)) {
-    params.set(k, String(v));
-  }
-  return `index.html#${kind}?${params.toString()}`;
-}
-
-function payloadOf(panel: PinnedPanel): SqlPanelPayload | DetailPanelPayload {
-  if (panel.kind === "sql-query") {
-    return { server: panel.server, label: panel.label };
-  }
-  return { sessionId: panel.sessionId, cwd: panel.cwd, pid: panel.pid };
-}
 
 const pinned = ref(readBool(PINNED_KEY));
 const sessions = ref<ClaudeSession[]>([]);

@@ -6,7 +6,7 @@ import StatusBar from "../StatusBar.vue";
 import LoadingView from "../LoadingView.vue";
 import ErrorView from "../ErrorView.vue";
 import { isTauri } from "@/lib/tauri";
-import { hashStr } from "@/lib/hash";
+import { PANEL_DEFAULTS, panelLabelFor, panelUrlFor } from "@/lib/panels";
 
 const emit = defineEmits<{
   back: [];
@@ -42,39 +42,19 @@ const filteredProjects = computed(() => {
 
 async function openSessionDetail(sessionId: string, sessionCwd: string, pid: number) {
   if (!isTauri) return;
-  // Mirror useMissionControl's openOrFocusPanel pattern, but we don't need the
-  // full positioning logic here — let Mission Control handle that on next focus.
+  // Same window-creation shape as MC's openOrFocusPanel, minus the
+  // positioning + cascade logic — MC handles that on next focus.
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-  const label = `session-detail:${hashStr(sessionId)}`;
+  const label = panelLabelFor("session-detail", sessionId);
   const existing = await WebviewWindow.getByLabel(label);
   if (existing) {
     await existing.show();
     await existing.setFocus();
     return;
   }
-  const params = new URLSearchParams({
-    sessionId,
-    cwd: sessionCwd,
-    pid: String(pid),
-  });
-  const url = `index.html#session-detail?${params.toString()}`;
-  // Keep these in sync with PANEL_DEFAULTS["session-detail"] in
-  // app/src/composables/useMissionControl.ts — both code paths create the
-  // same window type.
+  const url = panelUrlFor("session-detail", { sessionId, cwd: sessionCwd, pid });
   const win = new WebviewWindow(label, {
-    width: 880,
-    height: 760,
-    minWidth: 360,
-    minHeight: 400,
-    resizable: true,
-    decorations: false,
-    shadow: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    visible: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    title: "Session Detail",
+    ...PANEL_DEFAULTS["session-detail"],
     url,
   });
   await win.once("tauri://created", async () => {
