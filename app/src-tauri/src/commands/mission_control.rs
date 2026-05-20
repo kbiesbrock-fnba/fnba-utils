@@ -625,6 +625,7 @@ fn parse_conversation_cached(
 pub async fn get_session_detail(
     session_id: String,
     owned_state: tauri::State<'_, OwnedSessionsState>,
+    io_state: tauri::State<'_, crate::models::mission_control::ClaudeIoState>,
 ) -> Result<SessionDetail, String> {
     let owned: OwnedSession = owned_state
         .get(&session_id)
@@ -635,12 +636,22 @@ pub async fn get_session_detail(
     let hash = cwd_to_project_hash(&owned.cwd);
     let jsonl_path = projects_dir.join(&hash).join(format!("{session_id}.jsonl"));
 
-    // The PID we captured is the bash shell hosting `tmux attach`, which dies
-    // when the user closes the panel. Tmux is the source of truth for liveness.
-    let is_alive = crate::commands::claude_io::tmux_session_alive(&format!(
-        "claude-{}",
-        owned.session_id
-    ));
+    // Liveness: trust our own ClaudeIoState first — if we're holding the PTY
+    // for this session, it's by definition alive even if `tmux has-session`
+    // hasn't caught up yet (there's a ~hundreds-of-ms gap between
+    // start_new_claude_session returning and bash -ilc actually running
+    // `tmux new-session`). Fall back to tmux probe for restored-after-restart
+    // sessions where io_state is empty.
+    let in_io_state = io_state
+        .sessions
+        .lock()
+        .map(|s| s.contains_key(&owned.session_id))
+        .unwrap_or(false);
+    let is_alive = in_io_state
+        || crate::commands::claude_io::tmux_session_alive(&format!(
+            "claude-{}",
+            owned.session_id
+        ));
 
     let parsed = parse_conversation_cached(&jsonl_path, 20);
     let status = if !is_alive {

@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.6.3 — 2026-05-20
+
+Fix: freshly-launched sessions briefly rendered "Session has ended" because `get_session_detail` was probing `tmux has-session` before `bash -ilc` had finished sourcing the user's bashrc + running `tmux new-session`. Now trusts our own `ClaudeIoState` PTY ownership as proof-of-life first; tmux probe is the fallback path for sessions restored after a Tauri restart (where io_state is empty).
+
 ## v1.6.2 — 2026-05-20
 
 Fix: 1.6.1 broke rendering. `ResizeDirection` in `@tauri-apps/api/window` v2 is a type-only string union, not a runtime enum — my `ResizeDirection.North` references evaluated to `undefined.North` and threw on handler bind, blanking the window. Now passes the string literals directly with a local type alias for strict typing.
