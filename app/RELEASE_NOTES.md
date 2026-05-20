@@ -1,5 +1,11 @@
 # Release Notes
 
+## v1.5.2 — 2026-05-20
+
+Fix-ups:
+- Added the missing `@tauri-apps/plugin-notification` npm dependency (the Rust crate landed in 1.5.0 but the JS counterpart didn't — vite errored on `import("@tauri-apps/plugin-notification")` in `useNotifications.ts`). Run `npm install` after pulling.
+- `get_session_detail` now returns `SessionStatus::Dead` when tmux reports the session is gone (was always Unknown/Idle/Busy before, never Dead — which left the Rust enum variant unused and warned at build).
+
 ## v1.5.1 — 2026-05-20
 
 `Ctrl+Shift+Tab` cycles focus through open session-detail panels. Stable order (by panel label hash). For juggling 3+ live sessions without reaching for the mouse.

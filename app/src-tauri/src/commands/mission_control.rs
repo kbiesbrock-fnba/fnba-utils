@@ -643,7 +643,9 @@ pub async fn get_session_detail(
     ));
 
     let parsed = parse_conversation_cached(&jsonl_path, 20);
-    let status = if parsed.mtime == SystemTime::UNIX_EPOCH {
+    let status = if !is_alive {
+        SessionStatus::Dead
+    } else if parsed.mtime == SystemTime::UNIX_EPOCH {
         SessionStatus::Unknown
     } else {
         derive_status(&parsed.last_role, is_stale_at(parsed.mtime))
