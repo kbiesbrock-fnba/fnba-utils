@@ -385,7 +385,17 @@ fn start_workers(
                         // re-fires until claude redraws without it.
                         prompt_scan.push_str(&text);
                         if prompt_scan.len() > 8192 {
-                            let drain = prompt_scan.len() - 8192;
+                            // Snap to next char boundary — claude's TUI uses
+                            // multi-byte glyphs (e.g. "❯" is 3 bytes) and a
+                            // raw byte offset can land mid-codepoint, which
+                            // would panic `String::drain`. UTF-8 codepoints
+                            // are at most 4 bytes so this loops <= 3 times.
+                            let mut drain = prompt_scan.len() - 8192;
+                            while drain < prompt_scan.len()
+                                && !prompt_scan.is_char_boundary(drain)
+                            {
+                                drain += 1;
+                            }
                             prompt_scan.drain(..drain);
                         }
                         let now_prompting = contains_permission_prompt(&prompt_scan);

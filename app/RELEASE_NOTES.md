@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.5.3 — 2026-05-20
+
+Fix: the permission-prompt scanner's sliding window in `claude_io.rs` was `String::drain(..N)`-ing at a raw byte offset, which panics when the offset lands mid-codepoint. Claude's TUI uses multi-byte glyphs (e.g. "❯" is 3 bytes), so the panic was triggered by routine output. Now snaps to the next char boundary first.
+
 ## v1.5.2 — 2026-05-20
 
 Fix-ups:
