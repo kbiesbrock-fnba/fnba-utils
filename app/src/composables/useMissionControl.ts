@@ -286,8 +286,18 @@ async function openOrFocusPanel(
 
 async function hideAllSidePanels() {
   if (!isTauri) return;
+  // Honor each panel's own pin state — pinned session-detail / sql-query
+  // panels survive MC's blur-hide. The explicit Win+Shift+C dismiss path
+  // (in lib.rs) bypasses this and hides everything regardless of pin.
+  const pinnedLabels = new Set(
+    readPinnedPanels().map((p) =>
+      panelLabelFor(p.kind, p.kind === "sql-query" ? p.server : p.sessionId),
+    ),
+  );
   const panels = await listSidePanels();
-  await Promise.all(panels.map((w) => w.hide()));
+  await Promise.all(
+    panels.filter((w) => !pinnedLabels.has(w.label)).map((w) => w.hide()),
+  );
 }
 
 async function restorePinnedSidePanels() {
