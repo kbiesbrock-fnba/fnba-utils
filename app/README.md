@@ -15,8 +15,9 @@ For what's new per version, see `RELEASE_NOTES.md` next to this file.
 1. Unzip the portable folder anywhere (Desktop, Documents, `%LOCALAPPDATA%`, etc.). No installer, no admin rights needed.
 2. Double-click `fnba-utils.exe`. A window opens; you can close it — the app keeps running in the background.
 3. Global hotkeys (registered automatically while the app is running):
-   - **`Win+Shift+F`** — open the command palette (Assume Identity, Right Lookup).
-   - **`Win+Shift+C`** — open Mission Control _(experimental)_.
+   - **`Win+Shift+F`** — open the command palette (Assume Identity, Right Lookup, New Claude Session).
+   - **`Win+Shift+C`** — open Mission Control.
+   - **`Win+Shift+N`** — launch a Claude session in your most-recently-used project (zero clicks).
 4. To launch on every login, drop a shortcut to `fnba-utils.exe` into:
 
    ```
@@ -70,11 +71,34 @@ A ready-to-edit template ships next to this README: `example.assumeIdentity.json
 - Custom entries are flagged in the UI and can be deleted from the picker — that writes back to your `.assumeIdentity.json`.
 - Changes are picked up on next launch of the app.
 
-## Mission Control _(experimental)_
+## Mission Control
 
-`Win+Shift+C` opens a separate window that monitors active Claude Code sessions under `~/.claude/projects/` (both Windows and WSL homes). The chat panel spawns `claude --resume` via WSL, so this feature only works if you already have Claude Code installed inside WSL.
+`Win+Shift+C` opens a floating panel that lists the Claude Code sessions you've launched from this app. Selecting a session opens a detail window with a live terminal (xterm.js) attached to the underlying tmux session — claude's TUI renders directly, prompts and slash menus included.
 
-This feature is a work in progress; behavior and layout may change between builds. If you don't use Claude Code, just ignore this window — the rest of the app works fully on its own.
+### Launching sessions
+
+- `Win+Shift+F` → "New Claude Session" → pick a directory (or browse) → optional initial prompt → Launch.
+- `Win+Shift+N` → instantly launch into your most-recently-used project, no prompt, no clicks.
+- Optional checkbox creates a git worktree at `<cwd>/.worktrees/<short>` so claude operates in an isolated branch; the worktree is cleaned up on Kill.
+
+### What's tracked
+
+Mission Control only shows sessions it launched. External claude processes (the IntelliJ plugin, plain WSL terminals) are intentionally not surfaced. Sessions persist across Tauri app restart (the underlying tmux session keeps running) and can be re-attached by clicking them in MC.
+
+### Co-driving from another terminal
+
+The session header has a "tmux attach" button that copies the right command (`tmux attach -t claude-<id>`) to your clipboard. Paste into IntelliJ's WSL terminal or any other tmux client — both views show the same live TUI and either can type.
+
+### Closing vs Killing
+
+Closing the session-detail window disconnects but **does not** end the session — tmux + claude keep running and you can reopen the panel later to pick up where you left off. To actually end a session, use the explicit **Kill** action in the panel's actions row (or `/exit` from inside claude).
+
+### Requirements
+
+- `tmux` installed inside WSL (`sudo apt-get install -y tmux` if missing — the launcher will error with this hint if not found).
+- Claude Code installed inside WSL.
+
+The "New Claude Session" / Mission Control flow is optional; if you don't use Claude Code, just ignore those features — the rest of the app works fully on its own.
 
 ## Troubleshooting
 
