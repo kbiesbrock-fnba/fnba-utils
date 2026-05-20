@@ -1,6 +1,8 @@
 mod commands;
+mod config;
 mod db;
 mod models;
+mod standup_db;
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem},
@@ -13,6 +15,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_shell::init())
+        .manage(config::AppConfig::load())
         .manage(models::mission_control::ClaudeIoState::new())
         .manage(models::mission_control::SqlQueryState::new())
         .setup(|app| {
@@ -118,10 +122,60 @@ pub fn run() {
                 },
             )?;
 
+            // --- Global Shortcut: Win+Shift+D (Standup Panel) ---
+            // Registered unconditionally; the panel window only exists when the
+            // standup feature is enabled, so the shortcut is a no-op otherwise.
+            app.global_shortcut().on_shortcut(
+                "Super+Shift+D",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(w) = app.get_webview_window("standup-panel") {
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
+                            } else {
+                                // Position at bottom-right of the current monitor
+                                if let Ok(Some(monitor)) = w.current_monitor() {
+                                    let mon_size = monitor.size();
+                                    let mon_pos = monitor.position();
+                                    let win_size = w.outer_size().unwrap_or(
+                                        tauri::PhysicalSize::new(360, 640),
+                                    );
+                                    let margin = 16;
+                                    let x = mon_pos.x + mon_size.width as i32
+                                        - win_size.width as i32
+                                        - margin;
+                                    let y = mon_pos.y + mon_size.height as i32
+                                        - win_size.height as i32
+                                        - margin
+                                        - 48; // taskbar clearance
+                                    let _ = w.set_position(tauri::Position::Physical(
+                                        tauri::PhysicalPosition::new(x, y),
+                                    ));
+                                }
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                                let _ = app.emit("standup-panel-shown", ());
+                            }
+                        }
+                    }
+                },
+            )?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::hide_window,
+            config::get_app_config,
+            commands::standup::run_standup,
+            commands::standup::get_standup_report,
+            commands::standup::get_standup_last_run,
+            commands::standup::get_standup_panel_state,
+            commands::standup::set_issue_hidden,
+            commands::standup::clear_hidden_issues,
+            commands::standup::set_issue_order,
+            commands::standup::clear_manual_order,
+            commands::standup::get_run_snapshot,
+            commands::standup::get_issue_detail,
             commands::assume_identity::get_identity_data,
             commands::assume_identity::execute_assume_identity,
             commands::assume_identity::save_custom_entry,

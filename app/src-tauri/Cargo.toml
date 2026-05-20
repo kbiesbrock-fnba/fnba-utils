@@ -1,6 +1,6 @@
 [package]
 name = "fnba-utils"
-version = "1.0.0"
+version = "1.7.5"
 description = "FNBA Utils command palette"
 authors = ["kbiesbrock"]
 edition = "2021"
@@ -15,8 +15,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 dirs = "6"
 ctrlc = "3"
 tiberius = { version = "0.12", default-features = false, features = ["tds73", "winauth", "chrono"] }
@@ -24,3 +26,7 @@ tokio = { version = "1", features = ["net", "time", "rt", "process", "io-util", 
 tokio-util = { version = "0.7", features = ["compat"] }
 chrono = "0.4"
 portable-pty = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+arboard = "3"
+rusqlite = { version = "0.31", features = ["bundled"] }

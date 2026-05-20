@@ -3,6 +3,8 @@ import CommandPalette from "./components/CommandPalette.vue";
 import MissionControlApp from "./components/mission-control/MissionControlApp.vue";
 import SessionDetailApp from "./components/session-detail/SessionDetailApp.vue";
 import SqlQueryApp from "./components/sql-query/SqlQueryApp.vue";
+import StandupPanelApp from "./components/standup/StandupPanelApp.vue";
+import IssueDetailApp from "./components/standup/IssueDetailApp.vue";
 import { usePalette } from "./composables/usePalette";
 
 const { dismiss } = usePalette();
@@ -10,6 +12,8 @@ const { dismiss } = usePalette();
 const isMissionControl = window.location.hash.startsWith("#mission-control");
 const isSessionDetail = window.location.hash.startsWith("#session-detail");
 const isSqlQuery = window.location.hash.startsWith("#sql-query");
+const isStandupPanel = window.location.hash.startsWith("#standup-panel");
+const isIssueDetail = window.location.hash.startsWith("#issue-detail");
 
 function onBackdropClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains("backdrop")) {
@@ -22,6 +26,8 @@ function onBackdropClick(e: MouseEvent) {
   <SqlQueryApp v-if="isSqlQuery" />
   <SessionDetailApp v-else-if="isSessionDetail" />
   <MissionControlApp v-else-if="isMissionControl" />
+  <StandupPanelApp v-else-if="isStandupPanel" />
+  <IssueDetailApp v-else-if="isIssueDetail" />
   <div v-else class="backdrop" @mousedown="onBackdropClick">
     <CommandPalette />
   </div>

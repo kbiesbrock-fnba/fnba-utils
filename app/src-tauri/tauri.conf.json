@@ -1,6 +1,6 @@
 {
   "productName": "FNBA Utils",
-  "version": "1.0.0",
+  "version": "1.7.5",
   "identifier": "com.fnba.utils",
   "build": {
     "devUrl": "http://localhost:5173",
@@ -40,6 +40,41 @@
         "backgroundColor": "#00000000",
         "visible": false,
         "alwaysOnTop": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "standup-panel",
+        "title": "Standup",
+        "url": "index.html#standup-panel",
+        "width": 1200,
+        "height": 960,
+        "minWidth": 480,
+        "minHeight": 480,
+        "x": 0,
+        "y": 0,
+        "resizable": true,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "issue-detail",
+        "title": "Jira Issue",
+        "url": "index.html#issue-detail",
+        "width": 560,
+        "height": 720,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "visible": false,
+        "alwaysOnTop": false,
         "skipTaskbar": true
       }
     ],
