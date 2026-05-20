@@ -20,7 +20,11 @@ const initialSessionId = params.get("sessionId") ?? "";
 const initialCwd = params.get("cwd") ?? "";
 const parsedPid = Number.parseInt(params.get("pid") ?? "", 10);
 const initialPid = Number.isFinite(parsedPid) && parsedPid > 0 ? parsedPid : 0;
-const hasInitial = !!initialSessionId && !!initialCwd && initialPid > 0;
+// sessionId is the only required param; pid/cwd are nice-to-have hints for
+// pin restoration and the legacy kill flow. `portable_pty::Child::process_id`
+// returns Option<u32> and is often None on Windows, so we'd otherwise reject
+// freshly-launched sessions whose URL carries pid=0.
+const hasInitial = !!initialSessionId;
 
 const detail = ref<SessionDetail | null>(null);
 const loading = ref(false);

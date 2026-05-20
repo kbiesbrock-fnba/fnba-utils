@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.6.4 — 2026-05-20
+
+Fix: newly-launched sessions opened on "Select a session in Mission Control" instead of the terminal. The detail-window precondition required `pid > 0` in the URL params, but `portable_pty::Child::process_id` returns `None` on Windows often enough that we coerced to `0`. Only `sessionId` is actually needed for the lookup now; the precondition has been relaxed.
+
 ## v1.6.3 — 2026-05-20
 
 Fix: freshly-launched sessions briefly rendered "Session has ended" because `get_session_detail` was probing `tmux has-session` before `bash -ilc` had finished sourcing the user's bashrc + running `tmux new-session`. Now trusts our own `ClaudeIoState` PTY ownership as proof-of-life first; tmux probe is the fallback path for sessions restored after a Tauri restart (where io_state is empty).
