@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.6.2 — 2026-05-20
+
+Fix: 1.6.1 broke rendering. `ResizeDirection` in `@tauri-apps/api/window` v2 is a type-only string union, not a runtime enum — my `ResizeDirection.North` references evaluated to `undefined.North` and threw on handler bind, blanking the window. Now passes the string literals directly with a local type alias for strict typing.
+
 ## v1.6.1 — 2026-05-20
 
 Resize handles fix-up:

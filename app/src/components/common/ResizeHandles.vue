@@ -1,26 +1,29 @@
 <script setup lang="ts">
-import { getCurrentWindow, ResizeDirection } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@/lib/tauri";
 
 /**
- * Eight invisible resize zones (4 edges + 4 corners) overlaid on the window
- * viewport. Each one calls Tauri's `startResizeDragging` synchronously on
- * mousedown so frameless windows can be resized.
+ * Eight invisible resize zones (4 edges + 4 corners) overlaid on the window.
+ * Each one calls Tauri's `startResizeDragging` synchronously on mousedown so
+ * frameless windows can still be resized.
  *
- * Notes:
- *   - `getCurrentWindow()` and `ResizeDirection` are imported STATICALLY so
- *     the resize call happens in the same task as the mousedown — Tauri
- *     requires that to hand the drag off to the OS window manager.
- *   - Handles are visually invisible (no background, no border). The OS
- *     cursor changing to a resize arrow is the only affordance; the user
- *     said the previous tinted overlay added noise without helping.
- *   - Sizes are deliberately generous (10 px edges, 20 px corners) so the
- *     grab targets are easy to hit. The window border + decorations are
- *     hidden, so blocking a few pixels of inner UI at the extreme edge is
- *     acceptable — keep meaningful interactive controls inset accordingly.
+ * `ResizeDirection` in @tauri-apps/api/window v2 is a type-only string union,
+ * not a runtime enum — so we pass the string literals directly instead of
+ * importing the symbol. The component-local `ResizeDir` keeps strict typing
+ * at call sites.
  */
 
-function startResize(direction: ResizeDirection, e: MouseEvent) {
+type ResizeDir =
+  | "North"
+  | "South"
+  | "East"
+  | "West"
+  | "NorthEast"
+  | "NorthWest"
+  | "SouthEast"
+  | "SouthWest";
+
+function startResize(direction: ResizeDir, e: MouseEvent) {
   if (!isTauri) return;
   e.preventDefault();
   e.stopPropagation();
@@ -32,14 +35,14 @@ function startResize(direction: ResizeDirection, e: MouseEvent) {
 
 <template>
   <div class="rh-overlay">
-    <div class="rh rh-n" @mousedown="(e) => startResize(ResizeDirection.North, e)" />
-    <div class="rh rh-s" @mousedown="(e) => startResize(ResizeDirection.South, e)" />
-    <div class="rh rh-e" @mousedown="(e) => startResize(ResizeDirection.East, e)" />
-    <div class="rh rh-w" @mousedown="(e) => startResize(ResizeDirection.West, e)" />
-    <div class="rh rh-ne" @mousedown="(e) => startResize(ResizeDirection.NorthEast, e)" />
-    <div class="rh rh-nw" @mousedown="(e) => startResize(ResizeDirection.NorthWest, e)" />
-    <div class="rh rh-se" @mousedown="(e) => startResize(ResizeDirection.SouthEast, e)" />
-    <div class="rh rh-sw" @mousedown="(e) => startResize(ResizeDirection.SouthWest, e)" />
+    <div class="rh rh-n" @mousedown="(e) => startResize('North', e)" />
+    <div class="rh rh-s" @mousedown="(e) => startResize('South', e)" />
+    <div class="rh rh-e" @mousedown="(e) => startResize('East', e)" />
+    <div class="rh rh-w" @mousedown="(e) => startResize('West', e)" />
+    <div class="rh rh-ne" @mousedown="(e) => startResize('NorthEast', e)" />
+    <div class="rh rh-nw" @mousedown="(e) => startResize('NorthWest', e)" />
+    <div class="rh rh-se" @mousedown="(e) => startResize('SouthEast', e)" />
+    <div class="rh rh-sw" @mousedown="(e) => startResize('SouthWest', e)" />
   </div>
 </template>
 
@@ -57,8 +60,6 @@ function startResize(direction: ResizeDirection, e: MouseEvent) {
   background: transparent;
 }
 
-/* Edges — 10 px thick, span between corners so the corner cursors win at
-   the extremes. */
 .rh-n {
   top: 0;
   left: 20px;
@@ -88,7 +89,6 @@ function startResize(direction: ResizeDirection, e: MouseEvent) {
   cursor: ew-resize;
 }
 
-/* Corners — 20×20 squares, diagonal cursors. */
 .rh-ne {
   top: 0;
   right: 0;
