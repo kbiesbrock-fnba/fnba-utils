@@ -1,5 +1,13 @@
 # Release Notes
 
+## v1.6.0 — 2026-05-20
+
+**Roomier defaults + hoverable resize handles.**
+
+- Session-detail panels open at 880×760 (was 440×640) — a comfortable terminal-reading size.
+- Mission Control opens at 480 wide (was 320) and is now resizable; minimum 320×400.
+- New `ResizeHandles` overlay component renders 8 invisible drag zones around each frameless window (4 edges + 4 corners). They thicken + tint blue on hover so the resize affordance is finally discoverable. Powered by Tauri's `startResizeDragging`.
+
 ## v1.5.4 — 2026-05-20
 
 Mission Control's blur-hide now respects per-panel pinning. Click the ⭐ on a session-detail panel and it'll stay visible when MC itself hides on blur. Win+Shift+C still hides everything regardless (explicit dismiss gesture); reopening MC restores pinned panels.

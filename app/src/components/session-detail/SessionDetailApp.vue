@@ -4,12 +4,14 @@ import SessionDetailHeader from "./SessionDetailHeader.vue";
 import SessionDetailStats from "./SessionDetailStats.vue";
 import SessionDetailActions from "./SessionDetailActions.vue";
 import ChatPane from "./ChatPane.vue";
+import ResizeHandles from "@/components/common/ResizeHandles.vue";
 
 const { detail, loading, error, pinned, togglePin, onChatClosed, onChatError } = useSessionDetail();
 </script>
 
 <template>
   <div class="sd-app">
+    <ResizeHandles />
     <div v-if="!detail && !loading" class="sd-empty">
       Select a session in Mission Control
     </div>

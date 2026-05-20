@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useMissionControl } from "@/composables/useMissionControl";
 import PinButton from "@/components/common/PinButton.vue";
+import ResizeHandles from "@/components/common/ResizeHandles.vue";
 import ConnectionStatusPanel from "./ConnectionStatusPanel.vue";
 import SessionCard from "./SessionCard.vue";
 
@@ -25,6 +26,7 @@ const {
 
 <template>
   <div class="mc-app">
+    <ResizeHandles />
     <div class="mc-header">
       <div class="mc-title-group">
         <span class="mc-title">Mission Control</span>

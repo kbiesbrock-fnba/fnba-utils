@@ -45,8 +45,8 @@ const PANEL_DEFAULTS: Record<PanelKind, Record<string, unknown>> = {
     title: "SQL Query",
   },
   "session-detail": {
-    width: 440,
-    height: 640,
+    width: 880,
+    height: 760,
     minWidth: 360,
     minHeight: 400,
     resizable: true,
