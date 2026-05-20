@@ -133,6 +133,16 @@ export interface NewSessionInfo {
   worktreePath: string | null;
 }
 
+/** Entry in the persistent project registry (Wave 2). */
+export interface Project {
+  cwd: string;
+  displayName: string;
+  pinned: boolean;
+  /** Unix epoch ms of the most recent launch, or 0 if never launched. */
+  lastUsedAt: number;
+  notes: string | null;
+}
+
 export interface ConnectionStatus {
   label: string;
   server: string;
@@ -689,6 +699,44 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "list_projects": {
+      await delay(50);
+      return [
+        {
+          cwd: "/mnt/c/dev/fnba-utils",
+          displayName: "fnba-utils",
+          pinned: true,
+          lastUsedAt: Date.now() - 600000,
+          notes: null,
+        },
+        {
+          cwd: "/mnt/c/dev/other-project",
+          displayName: "other-project",
+          pinned: false,
+          lastUsedAt: Date.now() - 86_400_000,
+          notes: null,
+        },
+      ] as T;
+    }
+
+    case "add_project":
+    case "update_project": {
+      await delay(30);
+      console.log(`[mock] ${cmd}`, args);
+      return true as T;
+    }
+
+    case "remove_project": {
+      await delay(30);
+      console.log("[mock] remove_project", args);
+      return true as T;
+    }
+
+    case "record_project_used": {
+      await delay(20);
+      return undefined as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
@@ -826,6 +874,37 @@ export function updateSessionLabel(
 /** Open the native directory picker; returns a WSL path or null if cancelled. */
 export function pickDirectory(): Promise<string | null> {
   return invoke<string | null>("pick_directory");
+}
+
+/** Wave 2: project registry CRUD. */
+export function listProjects(): Promise<Project[]> {
+  return invoke<Project[]>("list_projects");
+}
+
+export function addProject(
+  cwd: string,
+  displayName: string | null,
+  pinned: boolean | null,
+  notes: string | null,
+): Promise<boolean> {
+  return invoke<boolean>("add_project", { cwd, displayName, pinned, notes });
+}
+
+export function updateProject(
+  cwd: string,
+  displayName: string | null,
+  pinned: boolean | null,
+  notes: string | null,
+): Promise<void> {
+  return invoke<void>("update_project", { cwd, displayName, pinned, notes });
+}
+
+export function removeProject(cwd: string): Promise<boolean> {
+  return invoke<boolean>("remove_project", { cwd });
+}
+
+export function recordProjectUsed(cwd: string): Promise<void> {
+  return invoke<void>("record_project_used", { cwd });
 }
 
 export function killSession(pid: number): Promise<void> {

@@ -5,35 +5,9 @@ import {
   isTauri,
   type NewSessionInfo,
 } from "@/lib/tauri";
-
-const RECENTS_KEY = "fnba-utils:mc-recent-projects";
-const RECENTS_LIMIT = 10;
+import { useProjects } from "@/composables/useProjects";
 
 export type LaunchStep = "form" | "launching" | "done" | "error";
-
-function readRecents(): string[] {
-  try {
-    const raw = window.localStorage.getItem(RECENTS_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((s): s is string => typeof s === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeRecents(list: string[]) {
-  try {
-    window.localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, RECENTS_LIMIT)));
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function bumpRecent(cwd: string) {
-  const next = [cwd, ...readRecents().filter((p) => p !== cwd)].slice(0, RECENTS_LIMIT);
-  writeRecents(next);
-}
 
 export function useNewClaudeSession() {
   const step = ref<LaunchStep>("form");
@@ -42,7 +16,11 @@ export function useNewClaudeSession() {
   const worktree = ref<boolean>(false);
   const error = ref<string | null>(null);
   const result = ref<NewSessionInfo | null>(null);
-  const recents = ref<string[]>(readRecents());
+
+  // Source of truth: the persistent project registry. `start_new_claude_session`
+  // calls `record_project_used` server-side on every successful spawn, so we
+  // only need to refresh after launch to see the freshened ordering.
+  const { projects, refresh: refreshProjects, pin } = useProjects();
 
   function reset() {
     step.value = "form";
@@ -51,7 +29,7 @@ export function useNewClaudeSession() {
     worktree.value = false;
     error.value = null;
     result.value = null;
-    recents.value = readRecents();
+    refreshProjects();
   }
 
   async function browse() {
@@ -59,13 +37,11 @@ export function useNewClaudeSession() {
       const picked = await pickDirectory();
       if (picked) cwd.value = picked;
     } catch (e) {
-      // Picker failures shouldn't block; surface inline only if persistent.
       console.warn("[new-session] pickDirectory failed", e);
     } finally {
       // The native picker steals focus on Windows, which can demote our
-      // alwaysOnTop frameless palette window behind the picker (the palette
-      // appears to "hide"). Force the palette back to front + focused after
-      // the picker resolves or is cancelled.
+      // alwaysOnTop frameless palette window behind the picker. Force the
+      // palette back to front + focused after the picker resolves.
       if (isTauri) {
         try {
           const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -94,9 +70,8 @@ export function useNewClaudeSession() {
         worktree.value,
       );
       result.value = info;
-      bumpRecent(target);
-      recents.value = readRecents();
       step.value = "done";
+      refreshProjects();
     } catch (e) {
       error.value = String(e);
       step.value = "error";
@@ -107,6 +82,10 @@ export function useNewClaudeSession() {
     cwd.value = path;
   }
 
+  async function togglePin(path: string, nextPinned: boolean) {
+    await pin(path, nextPinned);
+  }
+
   return {
     step,
     cwd,
@@ -114,10 +93,11 @@ export function useNewClaudeSession() {
     worktree,
     error,
     result,
-    recents,
+    projects,
     reset,
     browse,
     launch,
     selectRecent,
+    togglePin,
   };
 }

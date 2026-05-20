@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.4.0 — 2026-05-20
+
+**Project registry + zero-keystroke launch.**
+
+### Win+Shift+N — launch into your most-recent project
+
+The new global shortcut spawns a Claude session in whatever project you last launched, with no prompt and no clicks. Mission Control surfaces showing the new session-detail panel attached to it.
+
+### Pinned + MRU project list
+
+The launcher's autocomplete is now backed by a persistent registry (`~/.claude/fnba-mc/projects.json`) instead of localStorage. Every launch records the project; pinned ones stick at the top of the list. Click the star next to any recent entry to pin/unpin. Pinned entries sort alphabetically; unpinned by recency.
+
+### Plumbing
+
+- New `state/projects.rs` (Project struct + ProjectsState) and `commands/projects.rs` (list / add / update / remove / record_project_used).
+- `start_new_claude_session` records every successful spawn server-side, so the registry stays accurate across Tauri restarts.
+- `useProjects` composable on the frontend; `useNewClaudeSession` replaces its localStorage MRU with the registry.
+
 ## v1.3.2 — 2026-05-20
 
 Bug-fix pass from code-review + simplify:

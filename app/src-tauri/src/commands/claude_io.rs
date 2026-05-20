@@ -623,6 +623,7 @@ pub async fn start_new_claude_session(
     worktree: Option<bool>,
     io_state: tauri::State<'_, ClaudeIoState>,
     owned_state: tauri::State<'_, OwnedSessionsState>,
+    projects_state: tauri::State<'_, crate::state::projects::ProjectsState>,
 ) -> Result<NewSessionInfo, String> {
     let cwd = cwd.trim().to_string();
     if cwd.is_empty() {
@@ -746,6 +747,12 @@ pub async fn start_new_claude_session(
             }
         });
     }
+
+    // Record in the project registry under the original cwd (the user's
+    // semantic project root) — NOT effective_cwd, which would be the ephemeral
+    // worktree directory. Best-effort: registry failures don't block the
+    // spawn since claude is already running.
+    let _ = projects_state.record_used(&cwd);
 
     Ok(NewSessionInfo {
         session_id,

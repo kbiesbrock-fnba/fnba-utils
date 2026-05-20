@@ -18,6 +18,7 @@ pub fn run() {
         .manage(models::mission_control::ClaudeIoState::new())
         .manage(models::mission_control::SqlQueryState::new())
         .manage(state::owned_sessions::OwnedSessionsState::load())
+        .manage(state::projects::ProjectsState::load())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
@@ -74,6 +75,42 @@ pub fn run() {
                                 let _ = w.show();
                                 let _ = w.set_focus();
                             }
+                        }
+                    }
+                },
+            )?;
+
+            // --- Global Shortcut: Win+Shift+N (launch into MRU project) ---
+            // Looks up the most-recently-used project from ProjectsState and
+            // emits `mc-mru-launch` with its cwd + displayName. The Mission
+            // Control window's frontend listens and calls the same
+            // start_new_claude_session pipeline the palette uses.
+            //
+            // No-op (silently) if the registry is empty; user can use
+            // Win+Shift+F → "new claude" to seed the registry.
+            app.global_shortcut().on_shortcut(
+                "Super+Shift+N",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let Some(projects) = app.try_state::<state::projects::ProjectsState>() else {
+                        return;
+                    };
+                    if let Some(p) = projects.most_recent_used() {
+                        let _ = app.emit(
+                            "mc-mru-launch",
+                            serde_json::json!({
+                                "cwd": p.cwd,
+                                "displayName": p.display_name,
+                            }),
+                        );
+                        // Make sure Mission Control is showing so its listener
+                        // is awake and the new session-detail window has a
+                        // place to anchor to.
+                        if let Some(w) = app.get_webview_window("mission-control") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
                         }
                     }
                 },
@@ -150,6 +187,11 @@ pub fn run() {
             commands::claude_io::interrupt_claude_session,
             commands::claude_io::update_session_label,
             commands::claude_io::pick_directory,
+            commands::projects::list_projects,
+            commands::projects::add_project,
+            commands::projects::update_project,
+            commands::projects::remove_project,
+            commands::projects::record_project_used,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

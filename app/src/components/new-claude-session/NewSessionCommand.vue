@@ -13,7 +13,7 @@ const emit = defineEmits<{
   dismiss: [];
 }>();
 
-const { step, cwd, initialPrompt, worktree, error, result, recents, reset, browse, launch, selectRecent } =
+const { step, cwd, initialPrompt, worktree, error, result, projects, reset, browse, launch, selectRecent, togglePin } =
   useNewClaudeSession();
 
 const cwdInput = ref<HTMLInputElement | null>(null);
@@ -32,10 +32,12 @@ onMounted(async () => {
 
 onUnmounted(() => reset());
 
-const filteredRecents = computed(() => {
+const filteredProjects = computed(() => {
   const q = cwd.value.trim().toLowerCase();
-  if (!q) return recents.value;
-  return recents.value.filter((p) => p.toLowerCase().includes(q));
+  if (!q) return projects.value;
+  return projects.value.filter(
+    (p) => p.cwd.toLowerCase().includes(q) || p.displayName.toLowerCase().includes(q),
+  );
 });
 
 async function openSessionDetail(sessionId: string, sessionCwd: string, pid: number) {
@@ -126,14 +128,24 @@ defineExpose({ step });
         />
         <button class="nc-browse" type="button" @mousedown.prevent="browse">Browse…</button>
       </div>
-      <ul v-if="showRecents && filteredRecents.length" class="nc-recents">
+      <ul v-if="showRecents && filteredProjects.length" class="nc-recents">
         <li
-          v-for="path in filteredRecents"
-          :key="path"
+          v-for="p in filteredProjects"
+          :key="p.cwd"
           class="nc-recent-item"
-          @mousedown.prevent="selectRecent(path)"
         >
-          {{ path }}
+          <button
+            class="nc-pin"
+            :class="{ pinned: p.pinned }"
+            :title="p.pinned ? 'Unpin' : 'Pin'"
+            @mousedown.prevent="togglePin(p.cwd, !p.pinned)"
+          >
+            {{ p.pinned ? "★" : "☆" }}
+          </button>
+          <span class="nc-recent-pick" @mousedown.prevent="selectRecent(p.cwd)">
+            <span class="nc-recent-name">{{ p.displayName }}</span>
+            <span class="nc-recent-cwd">{{ p.cwd }}</span>
+          </span>
         </li>
       </ul>
 
@@ -245,14 +257,63 @@ defineExpose({ step });
 }
 
 .nc-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 4px 10px;
   color: var(--text-secondary);
-  cursor: pointer;
 }
 
 .nc-recent-item:hover {
-  background: rgba(96, 165, 250, 0.08);
+  background: rgba(96, 165, 250, 0.06);
+}
+
+.nc-recent-pick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.nc-recent-pick:hover .nc-recent-name {
   color: var(--text-primary);
+}
+
+.nc-recent-name {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-recent-cwd {
+  font-size: 10px;
+  color: var(--text-placeholder);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-pin {
+  flex-shrink: 0;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  color: var(--text-placeholder);
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.nc-pin:hover {
+  color: var(--accent-yellow, #fbbf24);
+}
+
+.nc-pin.pinned {
+  color: var(--accent-yellow, #fbbf24);
 }
 
 .nc-checkbox {

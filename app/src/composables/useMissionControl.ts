@@ -337,7 +337,29 @@ export function useMissionControl() {
         listen("mc-shown", () => {
           restorePinnedSidePanels();
         });
+        // MRU hotkey (Super+Shift+N) → backend looks up most-recent project
+        // and emits this. We do the actual spawn + window opening here so
+        // existing launcher logic (start_new_claude_session +
+        // openOrFocusPanel) is reused untouched.
+        listen<{ cwd: string; displayName: string }>("mc-mru-launch", async (e) => {
+          await launchMru(e.payload.cwd);
+        });
       });
+    }
+  }
+
+  async function launchMru(cwd: string) {
+    try {
+      const { startNewClaudeSession } = await import("@/lib/tauri");
+      const info = await startNewClaudeSession(cwd, null, false);
+      await openOrFocusPanel("session-detail", {
+        sessionId: info.sessionId,
+        cwd: info.cwd,
+        pid: info.pid,
+      });
+      fetchSessions();
+    } catch (e) {
+      console.error("[mc] MRU launch failed", e);
     }
   }
 
