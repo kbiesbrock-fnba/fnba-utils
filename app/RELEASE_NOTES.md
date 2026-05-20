@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.5.0 — 2026-05-20
+
+**Notifications: never miss a stuck claude again.**
+
+Two new system toasts (Windows notification surface):
+
+- **Permission-prompt detected.** Backend scans the live PTY output for known prompt patterns ("Do you want to allow...", "❯ 1. Yes", etc.) and fires a "Claude is waiting" toast when one appears AND no MC window is focused. Especially valuable for plan-mode + acceptEdits work where claude silently sits at a decision.
+- **Busy → Idle.** Mission Control's polling tracks per-session status; on a Busy→Idle transition with no MC window focused, fires "Claude finished: <label>". Catches the case of "I started a long task and walked away."
+
+Both notifications are suppressed when any MC window has focus — assumed you're already watching. Pattern list lives in `app/src-tauri/src/commands/claude_io.rs::PERMISSION_PROMPT_PATTERNS`; revisit when claude's wording changes.
+
 ## v1.4.0 — 2026-05-20
 
 **Project registry + zero-keystroke launch.**

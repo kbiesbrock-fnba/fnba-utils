@@ -192,6 +192,31 @@ fn tmux_session_name(session_id: &str) -> String {
     format!("claude-{session_id}")
 }
 
+/// Patterns that indicate claude's TUI is showing a decision prompt the user
+/// must respond to (permission requests, plan-mode commits, slash-command
+/// picks). Maintained by hand — update when claude's wording changes.
+///
+/// Strings here must be specific enough that they don't appear in normal
+/// assistant output. We deliberately key on the rendered TUI strings (with
+/// the "❯" arrow glyph and "1." prefix) rather than English phrasing alone,
+/// so we don't false-positive on assistant text that happens to mention
+/// "Do you want to" in a code snippet.
+const PERMISSION_PROMPT_PATTERNS: &[&str] = &[
+    "Do you want to make this edit",
+    "Do you want to allow",
+    "Do you want to proceed",
+    "Do you want me to ",
+    "Approve this change",
+    "❯ 1. Yes",
+    "❯ 1. Approve",
+];
+
+fn contains_permission_prompt(window: &str) -> bool {
+    PERMISSION_PROMPT_PATTERNS
+        .iter()
+        .any(|p| window.contains(p))
+}
+
 /// Probe whether a tmux session is still alive. `tmux has-session -t <name>`
 /// exits 0 when the session exists, non-zero otherwise.
 pub(crate) fn tmux_session_alive(name: &str) -> bool {
@@ -337,6 +362,11 @@ fn start_workers(
         std::thread::spawn(move || {
             let mut sink = [0u8; 4096];
             let mut r = reader;
+            // Sliding window over recent PTY text for permission-prompt detection.
+            // Capped at 8 KB — enough to span a multi-byte prompt rendered across
+            // separate read chunks, but short enough that we re-scan cheaply.
+            let mut prompt_scan = String::new();
+            let mut prompt_active = false;
             loop {
                 match std::io::Read::read(&mut r, &mut sink) {
                     Ok(0) | Err(_) => break,
@@ -349,6 +379,41 @@ fn start_workers(
                             }
                         }
                         let text = String::from_utf8_lossy(&sink[..n]).into_owned();
+                        // Pattern-scan a sliding window for permission prompts
+                        // and emit a debounced event when one appears. We only
+                        // fire the EDGE — once a prompt is active we suppress
+                        // re-fires until claude redraws without it.
+                        prompt_scan.push_str(&text);
+                        if prompt_scan.len() > 8192 {
+                            let drain = prompt_scan.len() - 8192;
+                            prompt_scan.drain(..drain);
+                        }
+                        let now_prompting = contains_permission_prompt(&prompt_scan);
+                        if now_prompting && !prompt_active {
+                            prompt_active = true;
+                            let _ = app.emit(
+                                "claude-event",
+                                serde_json::json!({
+                                    "sessionId": sid,
+                                    "event": {
+                                        "type": "system",
+                                        "subtype": "permission-prompt",
+                                    },
+                                }),
+                            );
+                        } else if !now_prompting && prompt_active {
+                            prompt_active = false;
+                            let _ = app.emit(
+                                "claude-event",
+                                serde_json::json!({
+                                    "sessionId": sid,
+                                    "event": {
+                                        "type": "system",
+                                        "subtype": "permission-prompt-cleared",
+                                    },
+                                }),
+                            );
+                        }
                         let _ = app.emit(
                             "claude-event",
                             serde_json::json!({

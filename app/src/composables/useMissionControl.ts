@@ -19,6 +19,7 @@ import {
   type SqlPanelPayload,
 } from "@/lib/panelStorage";
 import { hashStr } from "@/lib/hash";
+import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
@@ -105,14 +106,49 @@ let connectionsPollTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
 let suppressBlur = false;
 
+/**
+ * Last observed status per session, used to detect Busy → Idle transitions
+ * for ambient notifications. Lives outside `sessions.value` so mutating it
+ * doesn't trigger Vue re-renders.
+ */
+const lastStatus = new Map<string, string>();
+
 async function fetchSessions() {
   try {
-    sessions.value = await getClaudeSessions();
+    const next = await getClaudeSessions();
+    notifyIdleTransitions(next);
+    sessions.value = next;
     error.value = null;
   } catch (e) {
     error.value = String(e);
   } finally {
     loading.value = false;
+  }
+}
+
+function notifyIdleTransitions(next: ClaudeSession[]) {
+  const liveIds = new Set<string>();
+  for (const s of next) {
+    liveIds.add(s.sessionId);
+    const prev = lastStatus.get(s.sessionId);
+    lastStatus.set(s.sessionId, s.status);
+    // First observation: nothing to compare; just record.
+    if (prev === undefined) continue;
+    if (prev === "busy" && s.status === "idle") {
+      const label = s.label ?? s.name ?? s.sessionId.slice(0, 8);
+      isAnyMcWindowFocused().then((focused) => {
+        if (!focused) {
+          notify({
+            title: `Claude finished: ${label}`,
+            body: s.cwd,
+          });
+        }
+      });
+    }
+  }
+  // Drop dead-session entries so the map doesn't grow unbounded.
+  for (const sid of [...lastStatus.keys()]) {
+    if (!liveIds.has(sid)) lastStatus.delete(sid);
   }
 }
 

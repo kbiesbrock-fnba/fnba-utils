@@ -14,6 +14,7 @@ import {
   type ClaudeEvent,
   type ClaudeEventEnvelope,
 } from "@/lib/tauri";
+import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
 
 const props = defineProps<{ sessionId: string; cwd: string }>();
 const emit = defineEmits<{ closed: []; error: [msg: string] }>();
@@ -74,10 +75,23 @@ function handleEvent(envelope: ClaudeEventEnvelope) {
         trustWarning.value = String(
           (ev as { text?: string }).text ?? "Workspace trust not pre-accepted.",
         );
+      } else if (sub === "permission-prompt") {
+        // Claude is waiting on a decision (Yes/No/Always, edit approval, etc.).
+        // Fire a system toast IF the user isn't already looking at any MC
+        // window. The terminal still renders the prompt itself — this is the
+        // ambient nudge for "you walked away from this and it's stuck."
+        isAnyMcWindowFocused().then((focused) => {
+          if (!focused) {
+            notify({
+              title: "Claude is waiting",
+              body: "A decision prompt needs your attention.",
+            });
+          }
+        });
       }
       // Other system events (init, api_retry, worktree-cleanup-failed,
-      // send-failed) are intentionally swallowed — the terminal will show the
-      // user-relevant version of all of those.
+      // send-failed, permission-prompt-cleared) are intentionally swallowed —
+      // the terminal renders the user-relevant version of all of those.
       return;
     }
     // assistant / user / result events come from the JSONL tail and are
