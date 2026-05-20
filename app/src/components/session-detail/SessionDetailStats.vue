@@ -2,11 +2,22 @@
 import { computed } from "vue";
 import type { SessionStats } from "@/lib/tauri";
 import { formatTokens } from "@/lib/format";
+import { estimateCost, formatUSD, DEFAULT_PRICING } from "@/lib/pricing";
 
 const props = defineProps<{ stats: SessionStats; subagentCount: number }>();
 
 const inputTokens = computed(() => formatTokens(props.stats.totalInputTokens));
 const outputTokens = computed(() => formatTokens(props.stats.totalOutputTokens));
+// Cost estimate uses default (Sonnet) rates since we don't capture the model
+// into state today. Pricing table at lib/pricing.ts — update by hand when
+// rates change. Tooltip explains the estimate basis.
+const costEstimate = computed(() =>
+  formatUSD(estimateCost(props.stats.totalInputTokens, props.stats.totalOutputTokens)),
+);
+const costTooltip = computed(
+  () =>
+    `Est. cost at Sonnet rates ($${DEFAULT_PRICING.inputPerMTok}/MT in, $${DEFAULT_PRICING.outputPerMTok}/MT out). Adjust pricing in lib/pricing.ts.`,
+);
 </script>
 
 <template>
@@ -24,6 +35,11 @@ const outputTokens = computed(() => formatTokens(props.stats.totalOutputTokens))
     <div class="stat">
       <span class="stat-value">{{ outputTokens }}</span>
       <span class="stat-label">tokens out</span>
+    </div>
+    <div class="stat-sep" />
+    <div class="stat" :title="costTooltip">
+      <span class="stat-value cost">{{ costEstimate }}</span>
+      <span class="stat-label">est. cost</span>
     </div>
     <div v-if="subagentCount > 0" class="stat-sep" />
     <div v-if="subagentCount > 0" class="stat">
@@ -58,6 +74,10 @@ const outputTokens = computed(() => formatTokens(props.stats.totalOutputTokens))
 
 .stat-value.agents {
   color: var(--accent-green);
+}
+
+.stat-value.cost {
+  color: var(--accent-blue);
 }
 
 .stat-label {

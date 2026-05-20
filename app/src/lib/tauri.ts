@@ -84,6 +84,10 @@ export interface ClaudeSession {
   subagents: SubagentInfo[];
   status: SessionStatus;
   lastMessageAt: string | null;
+  /** User-assigned friendly name (Feature #20). */
+  label: string | null;
+  /** If launched into a git worktree (Feature #7), the worktree path. */
+  worktreePath: string | null;
 }
 
 export interface ConversationMessage {
@@ -115,6 +119,18 @@ export interface SessionDetail {
   stats: SessionStats;
   recentMessages: ConversationMessage[];
   subagents: SubagentInfo[];
+  label: string | null;
+  worktreePath: string | null;
+}
+
+/** Returned by `start_new_claude_session`. */
+export interface NewSessionInfo {
+  sessionId: string;
+  pid: number;
+  jsonlPath: string;
+  startedAt: number;
+  cwd: string;
+  worktreePath: string | null;
 }
 
 export interface ConnectionStatus {
@@ -345,7 +361,7 @@ async function mockInvoke<T>(
           startedAt: now - 3600000,
           kind: "interactive",
           name: null,
-          entrypoint: "cli",
+          entrypoint: "mc",
           isAlive: true,
           subagentCount: 3,
           subagents: [
@@ -355,6 +371,8 @@ async function mockInvoke<T>(
           ],
           status: "busy",
           lastMessageAt: new Date(now - 30000).toISOString(),
+          label: null,
+          worktreePath: null,
         },
         {
           pid: 67890,
@@ -363,7 +381,7 @@ async function mockInvoke<T>(
           startedAt: now - 900000,
           kind: "interactive",
           name: "refactor-auth",
-          entrypoint: "cli",
+          entrypoint: "mc",
           isAlive: true,
           subagentCount: 1,
           subagents: [
@@ -371,25 +389,9 @@ async function mockInvoke<T>(
           ],
           status: "idle",
           lastMessageAt: new Date(now - 120000).toISOString(),
+          label: "refactor-auth",
+          worktreePath: "/mnt/c/dev/other-project/.worktrees/abc12345",
         },
-        ...(Math.random() > 0.5
-          ? [
-              {
-                pid: 11111,
-                sessionId: "mno-789-pqr",
-                cwd: "/mnt/c/dev/docs",
-                startedAt: now - 120000,
-                kind: "interactive",
-                name: "update-readme",
-                entrypoint: "cli",
-                isAlive: true,
-                subagentCount: 0,
-                subagents: [],
-                status: "idle",
-                lastMessageAt: new Date(now - 600000).toISOString(),
-              } satisfies ClaudeSession,
-            ]
-          : []),
       ];
       return sessions as T;
     }
@@ -468,16 +470,18 @@ async function mockInvoke<T>(
       await delay(300);
       const now = Date.now();
       return {
-        pid: (args as Record<string, unknown>)?.pid ?? 12345,
+        pid: 12345,
         sessionId: (args as Record<string, unknown>)?.sessionId ?? "abc-123",
-        cwd: (args as Record<string, unknown>)?.cwd ?? "/mnt/c/dev/my-project",
+        cwd: "/mnt/c/dev/my-project",
         startedAt: now - 3600000,
         kind: "interactive",
         name: "refactor-auth",
-        entrypoint: "cli",
+        entrypoint: "mc",
         isAlive: true,
         gitBranch: "feature/auth-rework",
         status: "idle",
+        label: null,
+        worktreePath: null,
         stats: {
           messageCount: 47,
           userMessageCount: 22,
@@ -603,9 +607,85 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "disconnect_session": {
+      console.log("[mock] disconnect_session", args);
+      return undefined as T;
+    }
+
     case "open_in_explorer": {
       await delay(100);
       console.log("[mock] open_in_explorer", args);
+      return undefined as T;
+    }
+
+    case "start_new_claude_session": {
+      await delay(400);
+      console.log("[mock] start_new_claude_session", args);
+      const cwd = (args?.cwd as string) ?? "/mock/cwd";
+      const sid = `mock-${Math.random().toString(36).slice(2, 10)}`;
+      // Fire system:init then assistant on a short delay so the chat panel
+      // sees lifecycle events as if a real session started.
+      (async () => {
+        await delay(150);
+        window.dispatchEvent(
+          new CustomEvent("mock-claude-event", {
+            detail: {
+              sessionId: sid,
+              event: { type: "system", subtype: "init", session_id: sid, model: "claude-sonnet-4-6" },
+            },
+          }),
+        );
+      })();
+      return {
+        sessionId: sid,
+        pid: 50000 + Math.floor(Math.random() * 1000),
+        jsonlPath: `${cwd}/.claude/projects/mock/${sid}.jsonl`,
+        startedAt: Date.now(),
+        cwd,
+        worktreePath: args?.worktree ? `${cwd}/.worktrees/${Math.random().toString(36).slice(2, 10)}` : null,
+      } as T;
+    }
+
+    case "interrupt_claude_session": {
+      console.log("[mock] interrupt_claude_session", args);
+      const sid = (args?.sessionId as string) ?? "mock-session";
+      window.dispatchEvent(
+        new CustomEvent("mock-claude-event", {
+          detail: {
+            sessionId: sid,
+            event: { type: "result", subtype: "error_during_execution", duration_ms: 50 },
+          },
+        }),
+      );
+      return undefined as T;
+    }
+
+    case "update_session_label": {
+      await delay(50);
+      console.log("[mock] update_session_label", args);
+      return undefined as T;
+    }
+
+    case "pick_directory": {
+      await delay(150);
+      console.log("[mock] pick_directory");
+      return "/mnt/c/dev/mock-project" as T;
+    }
+
+    case "write_session_pty": {
+      // Echo input back as a pty event so xterm can render it locally during dev.
+      const sid = (args?.sessionId as string) ?? "mock-session";
+      const data = (args?.data as string) ?? "";
+      window.dispatchEvent(
+        new CustomEvent("mock-claude-event", {
+          detail: { sessionId: sid, event: { type: "pty", text: data } },
+        }),
+      );
+      return undefined as T;
+    }
+
+    case "resize_session_pty": {
+      console.log("[mock] resize_session_pty", args);
       return undefined as T;
     }
 
@@ -709,12 +789,43 @@ export function killSqlQuery(queryId: string): Promise<void> {
   return invoke<void>("kill_sql_query", { queryId });
 }
 
-export function getSessionDetail(
-  sessionId: string,
+export function getSessionDetail(sessionId: string): Promise<SessionDetail> {
+  return invoke<SessionDetail>("get_session_detail", { sessionId });
+}
+
+/**
+ * Launch a brand-new Claude session in the chosen cwd. Returns immediately
+ * with the assigned session_id; the chat panel subscribes to claude-event for
+ * output as the JSONL fills in.
+ */
+export function startNewClaudeSession(
   cwd: string,
-  pid: number,
-): Promise<SessionDetail> {
-  return invoke<SessionDetail>("get_session_detail", { sessionId, cwd, pid });
+  initialPrompt: string | null,
+  worktree: boolean,
+): Promise<NewSessionInfo> {
+  return invoke<NewSessionInfo>("start_new_claude_session", {
+    cwd,
+    initialPrompt,
+    worktree,
+  });
+}
+
+/** Send Ctrl-C to interrupt the current turn without killing the process (Feature #14). */
+export function interruptClaudeSession(sessionId: string): Promise<void> {
+  return invoke<void>("interrupt_claude_session", { sessionId });
+}
+
+/** Set or clear the user-assigned label for a session (Feature #20). */
+export function updateSessionLabel(
+  sessionId: string,
+  label: string | null,
+): Promise<void> {
+  return invoke<void>("update_session_label", { sessionId, label });
+}
+
+/** Open the native directory picker; returns a WSL path or null if cancelled. */
+export function pickDirectory(): Promise<string | null> {
+  return invoke<string | null>("pick_directory");
 }
 
 export function killSession(pid: number): Promise<void> {
@@ -726,14 +837,33 @@ export function startClaudeSession(sessionId: string, cwd: string): Promise<void
   return invoke<void>("start_claude_session", { sessionId, cwd });
 }
 
-/** Send a user message to a running Claude SDK session. */
+/** Send a user message to a running Claude SDK session (legacy; used for the initial-prompt path on spawn). */
 export function sendClaudeMessage(sessionId: string, content: string): Promise<void> {
   return invoke<void>("send_claude_message", { sessionId, content });
+}
+
+/** Write raw bytes directly to a session's PTY (the path the xterm terminal uses for every keystroke). */
+export function writeSessionPty(sessionId: string, data: string): Promise<void> {
+  return invoke<void>("write_session_pty", { sessionId, data });
+}
+
+/** Resize the PTY to match the xterm.js viewport. */
+export function resizeSessionPty(
+  sessionId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  return invoke<void>("resize_session_pty", { sessionId, cols, rows });
 }
 
 /** Terminate a running Claude SDK session. The original interactive Claude is unaffected. */
 export function stopClaudeSession(sessionId: string): Promise<void> {
   return invoke<void>("stop_claude_session", { sessionId });
+}
+
+/** Disconnect our PTY from a session without killing it (panel-close path). */
+export function disconnectSession(sessionId: string): Promise<void> {
+  return invoke<void>("disconnect_session", { sessionId });
 }
 
 /** Listen for stream-json events from any active Claude SDK session. Filter on sessionId yourself. */

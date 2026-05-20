@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod models;
+mod state;
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem},
@@ -13,8 +14,10 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(models::mission_control::ClaudeIoState::new())
         .manage(models::mission_control::SqlQueryState::new())
+        .manage(state::owned_sessions::OwnedSessionsState::load())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
@@ -136,10 +139,17 @@ pub fn run() {
             commands::mission_control::kill_sql_query,
             commands::mission_control::get_session_detail,
             commands::mission_control::kill_session,
-            commands::mission_control::start_claude_session,
-            commands::mission_control::send_claude_message,
-            commands::mission_control::stop_claude_session,
             commands::mission_control::open_in_explorer,
+            commands::claude_io::start_new_claude_session,
+            commands::claude_io::start_claude_session,
+            commands::claude_io::send_claude_message,
+            commands::claude_io::write_session_pty,
+            commands::claude_io::resize_session_pty,
+            commands::claude_io::stop_claude_session,
+            commands::claude_io::disconnect_session,
+            commands::claude_io::interrupt_claude_session,
+            commands::claude_io::update_session_label,
+            commands::claude_io::pick_directory,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

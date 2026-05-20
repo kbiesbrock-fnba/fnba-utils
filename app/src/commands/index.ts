@@ -1,8 +1,13 @@
 import type { PaletteCommand } from "./types";
 import { assumeIdentityCommand } from "./assume-identity";
 import { rightLookupCommand } from "./right-lookup";
+import { newClaudeSessionCommand } from "./new-claude-session";
 
-export const commands: PaletteCommand[] = [assumeIdentityCommand, rightLookupCommand];
+export const commands: PaletteCommand[] = [
+  assumeIdentityCommand,
+  rightLookupCommand,
+  newClaudeSessionCommand,
+];
 
 export function filterCommands(query: string): PaletteCommand[] {
   if (!query) return commands;

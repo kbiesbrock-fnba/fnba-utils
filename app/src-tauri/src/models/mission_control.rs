@@ -31,6 +31,10 @@ pub struct ClaudeSession {
     pub subagents: Vec<SubagentInfo>,
     pub status: SessionStatus,
     pub last_message_at: Option<String>,
+    /// User-assigned friendly label (Feature #20). None if unlabeled.
+    pub label: Option<String>,
+    /// If this session was launched into a git worktree (Feature #7), the worktree path.
+    pub worktree_path: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -68,6 +72,21 @@ pub struct SessionDetail {
     pub stats: SessionStats,
     pub recent_messages: Vec<ConversationMessage>,
     pub subagents: Vec<SubagentInfo>,
+    pub label: Option<String>,
+    pub worktree_path: Option<String>,
+}
+
+/// Returned from `start_new_claude_session` so the frontend can open the right session-detail
+/// window and have the JSONL path on hand for diagnostics.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NewSessionInfo {
+    pub session_id: String,
+    pub pid: u32,
+    pub jsonl_path: String,
+    pub started_at: u64,
+    pub cwd: String,
+    pub worktree_path: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -109,7 +128,17 @@ pub struct ClaudeIoSession {
     pub writer: Box<dyn std::io::Write + Send>,
     pub _master: Box<dyn portable_pty::MasterPty + Send>,
     pub _tail_stop: std::sync::mpsc::Sender<()>,
+    /// Ring buffer of recent PTY output so a late-subscribing frontend (e.g.
+    /// the chat panel mounting *after* the workers have already drained the
+    /// initial claude render) can be caught up. Capped at PTY_BUFFER_CAP bytes;
+    /// older bytes are evicted from the front. The drain thread writes here;
+    /// `start_claude_session` reads + replays.
+    pub pty_buffer: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
 }
+
+/// Max bytes retained in `ClaudeIoSession::pty_buffer`. ~256 KB comfortably
+/// holds a full screen render plus several screens of history.
+pub const PTY_BUFFER_CAP: usize = 256 * 1024;
 
 impl ClaudeIoState {
     pub fn new() -> Self {

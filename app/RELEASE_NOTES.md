@@ -1,5 +1,63 @@
 # Release Notes
 
+## v1.3.0 — 2026-05-20
+
+**Terminal is always on; closing the panel disconnects (doesn't kill).**
+
+The "Open Chat" / "Close" toggle is gone. The session-detail panel now always renders Header → Stats → Terminal → Actions for any alive session. Open a session, you're already in it.
+
+Closing the window (X, or Win+Shift+C to hide the whole MC group) now **disconnects** our PTY but leaves the tmux session and claude inside it running — so reopening the panel attaches you right back where you were. The only way to end a session is the explicit Kill action in the panel actions row (or `/exit` from inside claude).
+
+Under the hood: new `disconnect_session` Tauri command (drops PTY without killing tmux), and the PTY drain's EOF cleanup now probes `tmux has-session` to distinguish "claude actually died" from "we disconnected on purpose."
+
+## v1.2.0 — 2026-05-20
+
+**Chat panel is now a real terminal.**
+
+The bubble-rendering UI is gone. The chat panel embeds an `xterm.js` terminal that mirrors the underlying tmux session byte-for-byte. Permission prompts, slash-command menus, the live cursor — everything claude shows is visible, and your keystrokes go straight to the PTY. Multi-line paste, special characters, arrow keys, Ctrl-C all behave exactly like a real terminal because they ARE going through one.
+
+Side effect: this fixes the silent-send bug (the `tmux paste-buffer` path didn't reliably submit some content) and the invisible-prompt bug (claude waiting on a `UserAsk` was hidden because it wasn't in the JSONL). The Stop button now sends Ctrl-C via tmux for the same reason it always did.
+
+Stats (tokens, cost, message count) still come from the JSONL tail and remain visible in the session-detail info view.
+
+## v1.1.0 — 2026-05-19
+
+**Mission Control: launch and manage your own Claude sessions.**
+
+### New: Launch a Claude session from the palette
+
+`Win+Shift+F` → "New Claude Session". Pick a working directory (with autocomplete of recent projects), optionally seed an initial prompt, and you're in chat — no terminal hop, no `cd ...`, no typing `claude`. Sessions launch inside a tmux session named `claude-<id>` so you can attach from anywhere else in WSL to follow along (see the new "tmux attach" button in the session header — one click copies the attach command).
+
+### Mission Control is now exclusive to MC-launched sessions
+
+Previously Mission Control scanned every WSL `.claude` dir and showed every running session it could find. That was noisy, and the "control existing sessions" goal it implied isn't deliverable until Anthropic ships an attach API. The new model: **MC tracks only what MC launched.** External claude processes (IntelliJ plugin, plain WSL terminals) no longer appear.
+
+This also unblocks state we own — sessions persist across Tauri restart, can be re-labeled, and will eventually have history + resume.
+
+### Chat panel upgrades
+
+- **Stop button** while a turn is running (sends Ctrl-C without killing the process).
+- **Up/Down arrow** in the input recalls prior prompts from the current session.
+- **Editable session label** — click the title in the session-detail header to rename.
+- **Token + estimated cost** display in stats (USD estimate at Sonnet rates; pricing table in `lib/pricing.ts`).
+- **Trust-warning banner** when `~/.claude.json` couldn't be pre-accepted (no more silently-dropped first messages).
+- **5-second startup watchdog** with a Retry button if Claude doesn't emit anything.
+- **Worktree mode**: optional checkbox to launch into a fresh `git worktree add` under `.worktrees/<short>`. Cleaned up on close (best-effort; surfaces a warning if the worktree is dirty).
+
+### Plumbing
+
+- Backend `send_claude_message` now drives Claude via `tmux load-buffer | paste-buffer`, which delivers multi-line input atomically and is visible to every attached tmux client.
+- Removed the parallel-resume + bracketed-paste pipeline (and ~430 lines of related dead code) since MC owns its sessions outright now.
+- New `OwnedSessionsState` persists to `~/.claude/fnba-mc/owned-sessions.json` and dedupes via PID liveness on load.
+
+### Coming soon
+
+- One-keystroke launch into the last-used project (global hotkey).
+- A project registry / picker (currently MRU-only).
+- `@`-autocomplete and clickable file paths in the chat panel.
+- Notifications when a session goes idle or is waiting on a permission prompt.
+- Persistent session history with resume.
+
 ## v1.0.0 — 2026-05-19
 
 The first formal release of FNBA Utils.
