@@ -58,9 +58,12 @@ async function openSessionDetail(sessionId: string, sessionCwd: string, pid: num
     pid: String(pid),
   });
   const url = `index.html#session-detail?${params.toString()}`;
+  // Keep these in sync with PANEL_DEFAULTS["session-detail"] in
+  // app/src/composables/useMissionControl.ts — both code paths create the
+  // same window type.
   const win = new WebviewWindow(label, {
-    width: 440,
-    height: 640,
+    width: 880,
+    height: 760,
     minWidth: 360,
     minHeight: 400,
     resizable: true,

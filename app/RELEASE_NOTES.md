@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.6.5 — 2026-05-20
+
+Fix: launching a session from the palette opened at the old 440×640 size — `NewSessionCommand.vue` had its own inline window-size defaults that weren't updated alongside the `PANEL_DEFAULTS` in `useMissionControl.ts`. Both paths now spawn at 880×760 to match.
+
 ## v1.6.4 — 2026-05-20
 
 Fix: newly-launched sessions opened on "Select a session in Mission Control" instead of the terminal. The detail-window precondition required `pid > 0` in the URL params, but `portable_pty::Child::process_id` returns `None` on Windows often enough that we coerced to `0`. Only `sessionId` is actually needed for the lookup now; the precondition has been relaxed.
