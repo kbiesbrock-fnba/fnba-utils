@@ -210,6 +210,7 @@ export type ClaudeEvent =
     }
   | { type: "stderr"; text: string }
   | { type: "raw"; text: string }
+  | { type: "pty"; text: string }
   | { type: string; [k: string]: unknown };
 
 export interface ClaudeEventEnvelope {
@@ -220,6 +221,121 @@ export interface ClaudeEventEnvelope {
 export interface ClaudeSessionClosedEvent {
   sessionId: string;
   exitCode: number;
+}
+
+// --- Standup ---
+
+export interface StandupConfigView {
+  enabled: boolean;
+  hasCredentials: boolean;
+  jiraDomain: string;
+  teamsConfigured: boolean;
+  configPath: string | null;
+}
+
+export interface AppConfigView {
+  standup: StandupConfigView;
+}
+
+export type StandupGroupKey =
+  | "in_progress"
+  | "review"
+  | "todo"
+  | "attention"
+  | "done";
+
+export interface JiraIssue {
+  key: string;
+  summary: string;
+  status: string;
+  statusCategory: string;
+  statusGroup: StandupGroupKey;
+  storyPoints: number | null;
+  url: string;
+  priority: string | null;
+  priorityRank: number; // lower = higher priority; 10 = unknown
+  dueDate: string | null; // YYYY-MM-DD
+  issueType: string;
+  isBug: boolean;
+  /** True when the Smart Checklist custom field has any non-empty content. */
+  hasChecklist: boolean;
+  /** Raw Smart Checklist field text (Smart Checklist syntax). */
+  checklistText: string | null;
+  /** Parsed checklist items derived from checklistText. */
+  checklist: ChecklistItem[];
+}
+
+export interface StandupGroup {
+  group: StandupGroupKey;
+  label: string;
+  emoji: string;
+  issues: JiraIssue[];
+  totalPoints: number;
+}
+
+export interface StandupReport {
+  generatedAt: string;
+  issueCount: number;
+  groups: StandupGroup[];
+}
+
+export interface StandupRunResult {
+  report: StandupReport;
+  postedToTeams: boolean;
+  copiedToClipboard: boolean;
+  warnings: string[];
+}
+
+export interface StandupLastRun {
+  at: string;
+  issueCount: number;
+  postedToTeams: boolean;
+  error: string | null;
+}
+
+export interface StandupRunSummary {
+  id: number;
+  runAt: string;
+  issueCount: number;
+  postedToTeams: boolean;
+  error: string | null;
+}
+
+export interface ChecklistItem {
+  text: string;
+  checked: boolean;
+  isHeader: boolean;
+}
+
+export interface IssueDetail {
+  key: string;
+  url: string;
+  summary: string;
+  status: string;
+  statusGroup: StandupGroupKey;
+  priority: string | null;
+  dueDate: string | null;
+  storyPoints: number | null;
+  issueType: string;
+  isBug: boolean;
+  assignee: string | null;
+  reporter: string | null;
+  labels: string[];
+  description: string;
+  spec: string | null;
+  checklist: ChecklistItem[];
+  checklistRaw: string | null;
+  created: string | null;
+  updated: string | null;
+}
+
+export interface StandupPanelState {
+  report: StandupReport | null;
+  lastRun: StandupRunSummary | null;
+  hiddenKeys: string[];
+  /** Map of issue key -> manual order index (lower comes first). Missing keys have no manual override. */
+  manualOrders: Record<string, number>;
+  history: StandupRunSummary[];
 }
 
 // Detect if running inside Tauri (window.__TAURI_INTERNALS__ exists)
@@ -641,6 +757,326 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "get_app_config": {
+      await delay(20);
+      // Mock with standup enabled so the command is visible in browser dev mode.
+      return {
+        standup: {
+          enabled: true,
+          hasCredentials: true,
+          jiraDomain: "fnba.atlassian.net",
+          teamsConfigured: true,
+          configPath: "~/.fnba-utils/config.yaml",
+        },
+      } as T;
+    }
+
+    case "get_standup_last_run": {
+      await delay(20);
+      return {
+        at: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
+        issueCount: 14,
+        postedToTeams: true,
+        error: null,
+      } as T;
+    }
+
+    case "get_standup_report":
+    case "run_standup": {
+      await delay(400);
+      const mockIssue = (
+        key: string,
+        summary: string,
+        status: string,
+        statusGroup: StandupGroupKey,
+        storyPoints: number | null,
+        opts: {
+          priority?: string;
+          dueDate?: string;
+          issueType?: string;
+          checklist?: ChecklistItem[];
+          checklistText?: string;
+        } = {},
+      ): JiraIssue => {
+        const issueType = opts.issueType ?? "Task";
+        const priorityRank =
+          opts.priority === "Highest"
+            ? 1
+            : opts.priority === "High"
+              ? 2
+              : opts.priority === "Medium"
+                ? 3
+                : opts.priority === "Low"
+                  ? 4
+                  : opts.priority === "Lowest"
+                    ? 5
+                    : 10;
+        const checklist = opts.checklist ?? [];
+        return {
+          key,
+          summary,
+          status,
+          statusCategory: statusGroup === "done" ? "done" : "indeterminate",
+          statusGroup,
+          storyPoints,
+          url: `https://fnba.atlassian.net/browse/${key}`,
+          priority: opts.priority ?? null,
+          priorityRank,
+          dueDate: opts.dueDate ?? null,
+          issueType,
+          isBug: issueType.toLowerCase() === "bug",
+          hasChecklist: checklist.length > 0,
+          checklistText: opts.checklistText ?? null,
+          checklist,
+        };
+      };
+      const sample: StandupReport = {
+        generatedAt: new Date().toISOString(),
+        issueCount: 5,
+        groups: [
+          {
+            group: "in_progress",
+            label: "In Progress",
+            emoji: "💻",
+            totalPoints: 8,
+            issues: [
+              mockIssue("MIN-1243", "Hot path fix for assumeIdentity", "Implement", "in_progress", 5, {
+                priority: "High",
+                issueType: "Bug",
+                dueDate: "2026-05-22",
+                checklist: [
+                  { text: "Setup", checked: false, isHeader: true },
+                  { text: "Reproduce locally", checked: true, isHeader: false },
+                  { text: "Implementation", checked: false, isHeader: true },
+                  { text: "Idempotency token in proc call", checked: false, isHeader: false },
+                  { text: "Frontend guard while in-flight", checked: false, isHeader: false },
+                ],
+              }),
+              mockIssue("MIN-1301", "Refactor permission cache", "Investigate", "in_progress", 3, {
+                priority: "Medium",
+              }),
+            ],
+          },
+          {
+            group: "review",
+            label: "In Review",
+            emoji: "🔍",
+            totalPoints: 2,
+            issues: [
+              mockIssue("MIN-1199", "Right lookup recent pinning", "Ready to Review", "review", 2, {
+                priority: "Medium",
+              }),
+            ],
+          },
+          {
+            group: "done",
+            label: "Done This Week",
+            emoji: "✅",
+            totalPoints: 5,
+            issues: [
+              mockIssue("MIN-1180", "Mission Control parallel resume", "Done", "done", 5),
+            ],
+          },
+        ],
+      };
+      if (cmd === "get_standup_report") {
+        return sample as T;
+      }
+      return {
+        report: sample,
+        postedToTeams: !!(args && (args.postToTeamsFlag as boolean)),
+        copiedToClipboard: true,
+        warnings: [],
+      } as T;
+    }
+
+    case "get_standup_panel_state": {
+      await delay(60);
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 1000 * 60 * 60 * 26);
+      const pIssue = (
+        key: string,
+        summary: string,
+        status: string,
+        statusGroup: StandupGroupKey,
+        storyPoints: number | null,
+        opts: {
+          priority?: string;
+          dueDate?: string;
+          issueType?: string;
+          checklist?: ChecklistItem[];
+        } = {},
+      ): JiraIssue => {
+        const issueType = opts.issueType ?? "Task";
+        const priorityRank =
+          opts.priority === "Highest"
+            ? 1
+            : opts.priority === "High"
+              ? 2
+              : opts.priority === "Medium"
+                ? 3
+                : opts.priority === "Low"
+                  ? 4
+                  : opts.priority === "Lowest"
+                    ? 5
+                    : 10;
+        const checklist = opts.checklist ?? [];
+        return {
+          key,
+          summary,
+          status,
+          statusCategory: statusGroup === "done" ? "done" : "indeterminate",
+          statusGroup,
+          storyPoints,
+          url: `https://fnba.atlassian.net/browse/${key}`,
+          priority: opts.priority ?? null,
+          priorityRank,
+          dueDate: opts.dueDate ?? null,
+          issueType,
+          isBug: issueType.toLowerCase() === "bug",
+          hasChecklist: checklist.length > 0,
+          checklistText: null,
+          checklist,
+        };
+      };
+      return {
+        report: {
+          generatedAt: yesterday.toISOString(),
+          issueCount: 5,
+          groups: [
+            {
+              group: "in_progress",
+              label: "In Progress",
+              emoji: "💻",
+              totalPoints: 8,
+              issues: [
+                pIssue("MIN-1243", "Hot path fix for assumeIdentity", "Implement", "in_progress", 5, {
+                  priority: "Highest",
+                  issueType: "Bug",
+                  dueDate: "2026-05-21",
+                  checklist: [
+                    { text: "Setup", checked: false, isHeader: true },
+                    { text: "Reproduce locally", checked: true, isHeader: false },
+                    { text: "Add integration test", checked: true, isHeader: false },
+                    { text: "Implementation", checked: false, isHeader: true },
+                    { text: "Idempotency token in proc call", checked: false, isHeader: false },
+                    { text: "Frontend guard while in-flight", checked: false, isHeader: false },
+                  ],
+                }),
+                pIssue("MIN-1301", "Refactor permission cache", "Investigate", "in_progress", 3, {
+                  priority: "Medium",
+                }),
+              ],
+            },
+            {
+              group: "review",
+              label: "In Review",
+              emoji: "🔍",
+              totalPoints: 2,
+              issues: [
+                pIssue("MIN-1199", "Right lookup recent pinning", "Ready to Review", "review", 2, {
+                  priority: "Low",
+                }),
+                pIssue("MIN-1310", "NPE on login when SSO times out", "Investigate", "review", 1, {
+                  priority: "High",
+                  issueType: "Bug",
+                  dueDate: "2026-05-25",
+                }),
+              ],
+            },
+            {
+              group: "done",
+              label: "Done This Week",
+              emoji: "✅",
+              totalPoints: 5,
+              issues: [
+                pIssue("MIN-1180", "Mission Control parallel resume", "Done", "done", 5),
+              ],
+            },
+          ],
+        },
+        lastRun: {
+          id: 42,
+          runAt: yesterday.toISOString(),
+          issueCount: 5,
+          postedToTeams: true,
+          error: null,
+        },
+        hiddenKeys: [],
+        manualOrders: {},
+        history: [
+          {
+            id: 42,
+            runAt: yesterday.toISOString(),
+            issueCount: 3,
+            postedToTeams: true,
+            error: null,
+          },
+          {
+            id: 41,
+            runAt: new Date(now.getTime() - 1000 * 60 * 60 * 50).toISOString(),
+            issueCount: 5,
+            postedToTeams: true,
+            error: null,
+          },
+        ],
+      } as T;
+    }
+
+    case "set_issue_hidden":
+    case "clear_hidden_issues":
+    case "set_issue_order":
+    case "clear_manual_order": {
+      await delay(20);
+      console.log(`[mock] ${cmd}`, args);
+      return (cmd === "clear_hidden_issues" || cmd === "clear_manual_order"
+        ? 0
+        : undefined) as T;
+    }
+
+    case "get_run_snapshot": {
+      await delay(40);
+      console.log("[mock] get_run_snapshot", args);
+      return null as T;
+    }
+
+    case "get_issue_detail": {
+      await delay(200);
+      const key = (args?.key as string) ?? "MIN-1243";
+      return {
+        key,
+        url: `https://fnba.atlassian.net/browse/${key}`,
+        summary: "Hot path fix for assumeIdentity",
+        status: "Implement",
+        statusGroup: "in_progress",
+        priority: "Highest",
+        dueDate: "2026-05-21",
+        storyPoints: 5,
+        issueType: "Bug",
+        isBug: true,
+        assignee: "Kevin Biesbrock",
+        reporter: "QA Lead",
+        labels: ["sql", "auth"],
+        description:
+          "Repro:\n  1. Open assume identity\n  2. Pick a connection\n  3. Submit twice quickly\n\nExpected: idempotent. Actual: second call fails with race on the login table.",
+        spec:
+          "Acceptance criteria:\n- A second submission while the first is in-flight must return the same result (no second proc call).\n- No new DB rows in the login table.\n- The UI shows a 'still running' indicator instead of becoming unresponsive.",
+        checklist: [
+          { text: "Setup", checked: false, isHeader: true },
+          { text: "Reproduce locally with sample creds", checked: true, isHeader: false },
+          { text: "Add integration test covering double-submit", checked: true, isHeader: false },
+          { text: "Implementation", checked: false, isHeader: true },
+          { text: "Idempotency token in proc call", checked: false, isHeader: false },
+          { text: "Frontend guard while in-flight", checked: false, isHeader: false },
+          { text: "Update release notes", checked: false, isHeader: false },
+        ],
+        checklistRaw:
+          "> Setup\n- [x] Reproduce locally with sample creds\n- [x] Add integration test covering double-submit\n> Implementation\n- [ ] Idempotency token in proc call\n- [ ] Frontend guard while in-flight\n- [ ] Update release notes",
+        created: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString(),
+        updated: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
+      } as T;
+    }
+
     case "start_new_claude_session": {
       await delay(400);
       console.log("[mock] start_new_claude_session", args);
@@ -1048,6 +1484,61 @@ export async function onClaudeSessionClosed(
 
 export function openInExplorer(cwd: string): Promise<void> {
   return invoke<void>("open_in_explorer", { cwd });
+}
+
+export function getAppConfig(): Promise<AppConfigView> {
+  return invoke<AppConfigView>("get_app_config");
+}
+
+export function getStandupLastRun(): Promise<StandupLastRun | null> {
+  return invoke<StandupLastRun | null>("get_standup_last_run");
+}
+
+export function getStandupReport(): Promise<StandupReport> {
+  return invoke<StandupReport>("get_standup_report");
+}
+
+export function runStandup(postToTeams: boolean): Promise<StandupRunResult> {
+  return invoke<StandupRunResult>("run_standup", { postToTeamsFlag: postToTeams });
+}
+
+export function getStandupPanelState(): Promise<StandupPanelState> {
+  return invoke<StandupPanelState>("get_standup_panel_state");
+}
+
+export function setIssueHidden(key: string, hidden: boolean): Promise<void> {
+  return invoke<void>("set_issue_hidden", { key, hidden });
+}
+
+export function clearHiddenIssues(): Promise<number> {
+  return invoke<number>("clear_hidden_issues");
+}
+
+export function setIssueOrder(orderedKeys: string[]): Promise<void> {
+  return invoke<void>("set_issue_order", { orderedKeys });
+}
+
+export function clearManualOrder(): Promise<number> {
+  return invoke<number>("clear_manual_order");
+}
+
+export function getRunSnapshot(runId: number): Promise<StandupReport | null> {
+  return invoke<StandupReport | null>("get_run_snapshot", { runId });
+}
+
+export function getIssueDetail(key: string): Promise<IssueDetail> {
+  return invoke<IssueDetail>("get_issue_detail", { key });
+}
+
+/** Listen for standup-updated events (emitted after run_standup completes). */
+export async function onStandupUpdated(handler: () => void): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen("standup-updated", () => handler());
+  }
+  const listener = () => handler();
+  window.addEventListener("mock-standup-updated", listener);
+  return () => window.removeEventListener("mock-standup-updated", listener);
 }
 
 export { isTauri };

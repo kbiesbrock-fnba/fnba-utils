@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.9.0 — 2026-05-20
+
+### Standup feature: Jira fetch, Teams post, always-on-top panel
+
+Opt-in via `~/.fnba-utils/config.yaml` (no file or `standup.enabled: false` keeps the feature invisible). New palette command **Standup** pulls Jira issues and posts a redesigned Adaptive Card to Teams; **Win+Shift+D** opens a persistent always-on-top panel with the live work list. Double-clicking a row opens a full-task window that lazy-fetches description, specification, and Smart Checklist.
+
+### Panel
+
+- Wide-grid layout (1200×960 default, resizable) on CSS subgrid: `[checkbox] [KEY+badge] [type pill] [checklist-icon] [summary…] [priority+due] [drag-handle]`. Every row 32px; drag handle pinned to the rightmost column.
+- **Story points badge** with per-value coloring — alternating deep / bright tones so adjacent point values are unmistakable.
+- **Bugs section** at top; everything else below in a single ordered list (status → priority → due date), reorderable by drag.
+- **Checkboxes mark items done** (line-through, dimmed); "show completed" toggle in header surfaces them back.
+- **Smart Checklist sub-rows** behind a "Toggle Smart Checklist" row with a done/total count pill. Headers, markdown task syntax, and Railsware/Titanium legacy bullets all parsed. Reads from `cf[13097]`.
+
+### Full-task window
+
+- Issue metadata (status, priority, due, assignee, reporter, labels, dates).
+- **Description** + **Specification** sections collapsible behind real `<button>` toggles with rotating chevrons; tabbable with visible focus rings, Enter/Space to expand.
+- Smart Checklist rendered with progress pill (`done/total`).
+- Specification field resolves by display name (`spec_field_name`, default `"Specification Details"`) via `/rest/api/3/field`, cached per session.
+
+### Storage
+
+All state is local to the install: SQLite at `<exe-dir>/resources/standup.db` captures every run, snapshot, hidden-state, manual-order, and checklist text. Migrations are best-effort `ALTER TABLE`s so existing DBs upgrade in place.
+
+### Config
+
+```yaml
+standup:
+  enabled: true
+  jira_email: kevin.biesbrock@fnba.com
+  jira_api_token: "..."
+  jira_domain: fnba.atlassian.net
+  teams_webhook_url: "..."
+  spec_field_name: "Specification Details"
+```
+
 ## v1.8.1 — 2026-05-20
 
 Fix: v1.8.0 didn't compile. Added `ended_at` to `OwnedSession` but missed the existing constructor in `start_new_claude_session` — the new `resume_owned_session` had it but the original spawn path didn't.
