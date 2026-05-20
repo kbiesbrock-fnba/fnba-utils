@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.8.1 — 2026-05-20
+
+Fix: v1.8.0 didn't compile. Added `ended_at` to `OwnedSession` but missed the existing constructor in `start_new_claude_session` — the new `resume_owned_session` had it but the original spawn path didn't.
+
 ## v1.8.0 — 2026-05-20
 
 **Persistent session history + Resume.**

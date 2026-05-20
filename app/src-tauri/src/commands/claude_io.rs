@@ -784,6 +784,7 @@ pub async fn start_new_claude_session(
         claude_home: claude_home.to_string_lossy().into_owned(),
         worktree_path: worktree_path.clone(),
         tmux_session: tmux_session_name(&session_id),
+        ended_at: None,
     })?;
 
     start_workers(
