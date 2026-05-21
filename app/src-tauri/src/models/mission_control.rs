@@ -9,6 +9,19 @@ pub enum SessionStatus {
     Unknown,
 }
 
+/// Where a session row came from. `Mc` = launched by Mission Control (tmux name
+/// `claude-<uuid>`, registered in `OwnedSessionsState`); `ClaudeExternal` = a
+/// tmux session whose foreground process is `claude` but which MC didn't spawn
+/// (typical for IntelliJ terminals where the user ran `claude` manually);
+/// `Tmux` = everything else (plain shells, vim, etc.).
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionSource {
+    Mc,
+    ClaudeExternal,
+    Tmux,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentInfo {
@@ -35,6 +48,20 @@ pub struct ClaudeSession {
     pub label: Option<String>,
     /// If this session was launched into a git worktree (Feature #7), the worktree path.
     pub worktree_path: Option<String>,
+    /// Classification: MC-owned, claude running outside MC, or generic tmux.
+    pub source: SessionSource,
+    /// tmux session name. For MC sessions this is `claude-<uuid>`; for
+    /// external rows it's whatever name tmux assigned (e.g. directory basename).
+    pub tmux_session_name: String,
+    /// `pane_current_command` of the active pane, when known. Lets the user
+    /// tell at a glance whether a session is running claude / vim / bash.
+    pub running_command: Option<String>,
+    /// `pane_current_path` of the active pane, when known.
+    pub current_path: Option<String>,
+    /// True if any tmux client is currently attached to this session.
+    pub attached: bool,
+    /// Number of tmux windows in this session.
+    pub window_count: u32,
 }
 
 #[derive(Serialize, Clone)]

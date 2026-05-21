@@ -1019,16 +1019,23 @@ pub async fn resize_session_pty(
 }
 
 /// Send Ctrl-C to interrupt the current turn (Feature #14). The claude process
-/// stays alive; only the in-flight reasoning is cancelled.
+/// stays alive; only the in-flight reasoning is cancelled. For attached
+/// external tmux sessions (id `tmux:<name>`) the same send-keys works against
+/// whatever foreground process happens to be in the pane.
 #[tauri::command]
 pub async fn interrupt_claude_session(
     session_id: String,
     owned_state: tauri::State<'_, OwnedSessionsState>,
 ) -> Result<(), String> {
-    let owned = owned_state
-        .get(&session_id)
-        .ok_or("No such session")?;
-    run_tmux(&["send-keys", "-t", &owned.tmux_session, "C-c"])
+    let target = if let Some(name) = tmux_name_from_session_id(&session_id) {
+        name.to_string()
+    } else {
+        owned_state
+            .get(&session_id)
+            .ok_or("No such session")?
+            .tmux_session
+    };
+    run_tmux(&["send-keys", "-t", &target, "C-c"])
 }
 
 /// Read a list of historical (dead) sessions, newest-first. Wave 4 history view.
@@ -1047,6 +1054,146 @@ pub async fn forget_session_history(
     owned_state: tauri::State<'_, OwnedSessionsState>,
 ) -> Result<bool, String> {
     owned_state.forget_history(&session_id)
+}
+
+/// Synthetic session-id prefix used for non-MC tmux sessions attached from
+/// Mission Control. The full id is `tmux:<tmux_session_name>` — the prefix
+/// lets `write_session_pty` / `disconnect_session` / `interrupt_claude_session`
+/// share one HashMap key namespace with owned MC sessions while still being
+/// recognizable at routing points.
+pub const TMUX_ATTACH_PREFIX: &str = "tmux:";
+
+/// Strip the `tmux:` prefix from a synthetic session_id, returning the tmux
+/// session name. Returns None for ids that aren't synthetic.
+fn tmux_name_from_session_id(session_id: &str) -> Option<&str> {
+    session_id.strip_prefix(TMUX_ATTACH_PREFIX)
+}
+
+/// PTY drain thread for an external tmux attach. Strictly simpler than the
+/// claude drain in `start_workers`: no JSONL tail, no permission-prompt
+/// pattern matching, and on EOF we *only* release the ClaudeIoState entry —
+/// we never kill the tmux session or touch OwnedSessionsState because we
+/// didn't create either of those.
+fn start_tmux_attach_drain(
+    app: tauri::AppHandle,
+    synthetic_id: String,
+    tmux_name: String,
+    reader: Box<dyn std::io::Read + Send>,
+    pty_buffer: PtyBuffer,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let mut sink = [0u8; 4096];
+        let mut r = reader;
+        loop {
+            match std::io::Read::read(&mut r, &mut sink) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Ok(mut buf) = pty_buffer.lock() {
+                        buf.extend(sink[..n].iter().copied());
+                        while buf.len() > PTY_BUFFER_CAP {
+                            buf.pop_front();
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&sink[..n]).into_owned();
+                    let _ = app.emit(
+                        "claude-event",
+                        serde_json::json!({
+                            "sessionId": synthetic_id,
+                            "event": { "type": "pty", "text": text },
+                        }),
+                    );
+                }
+            }
+        }
+        // EOF on our PTY: we detached. If the tmux session itself is dead
+        // (probably someone else killed it), emit `claude-session-closed` so
+        // the panel can show the "session ended" state. Otherwise stay quiet —
+        // the user just closed the panel and the tmux session lives on.
+        let session_dead = !tmux_session_alive(&tmux_name);
+        if session_dead {
+            let _ = app.emit(
+                "claude-session-closed",
+                serde_json::json!({ "sessionId": synthetic_id, "exitCode": 0 }),
+            );
+        }
+        if let Some(io_state) = app.try_state::<ClaudeIoState>() {
+            if let Ok(mut sessions) = io_state.sessions.lock() {
+                let same_gen = sessions
+                    .get(&synthetic_id)
+                    .map(|s| s.generation == generation)
+                    .unwrap_or(false);
+                if same_gen {
+                    sessions.remove(&synthetic_id);
+                }
+            }
+        }
+    });
+}
+
+/// Attach to an arbitrary tmux session (one that MC did NOT spawn). The
+/// frontend identifies these via the synthetic session id `tmux:<name>` so
+/// the existing `write_session_pty` / `resize_session_pty` plumbing routes
+/// without modification.
+#[tauri::command]
+pub async fn attach_tmux_session(
+    app: tauri::AppHandle,
+    name: String,
+    cwd: Option<String>,
+    io_state: tauri::State<'_, ClaudeIoState>,
+) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("tmux session name cannot be empty".into());
+    }
+    if !tmux_session_alive(&name) {
+        return Err(format!("tmux session '{name}' is not running"));
+    }
+    let synthetic_id = format!("{TMUX_ATTACH_PREFIX}{name}");
+
+    // Idempotent re-attach: if we're already holding a PTY for this name,
+    // just replay the ring buffer so a freshly-mounted xterm catches up.
+    {
+        let sessions = io_state
+            .sessions
+            .lock()
+            .map_err(|e| format!("State lock poisoned: {e}"))?;
+        if let Some(session) = sessions.get(&synthetic_id) {
+            replay_pty_buffer(&app, &synthetic_id, &session.pty_buffer);
+            return Ok(());
+        }
+    }
+
+    // Use the pane's reported cwd as wsl.exe's --cd, falling back to "/" —
+    // `tmux attach` doesn't care where it's run from, and wsl rejects an
+    // empty --cd.
+    let pty_cwd = cwd
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/".to_string());
+    let bash_cmd = format!("tmux attach -t {}", shell_quote(&name));
+    let (writer, master, reader, _pid) = spawn_in_pty(&pty_cwd, &bash_cmd)?;
+
+    let (tail_stop_tx, _tail_stop_rx) = std::sync::mpsc::channel::<()>();
+    let pty_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(PTY_BUFFER_CAP)));
+    let generation = next_generation();
+    io_state
+        .sessions
+        .lock()
+        .map_err(|e| format!("State lock poisoned: {e}"))?
+        .insert(
+            synthetic_id.clone(),
+            ClaudeIoSession {
+                writer,
+                _master: master,
+                _tail_stop: tail_stop_tx,
+                pty_buffer: pty_buffer.clone(),
+                generation,
+            },
+        );
+
+    start_tmux_attach_drain(app, synthetic_id, name, reader, pty_buffer, generation);
+    Ok(())
 }
 
 /// Resume a historical session: re-spawn `claude --resume <sid>` in the

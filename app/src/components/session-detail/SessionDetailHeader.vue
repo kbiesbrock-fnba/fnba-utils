@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import type { SessionDetail } from "@/lib/tauri";
-import { updateSessionLabel } from "@/lib/tauri";
+import { updateSessionLabel, isTmuxSessionId, tmuxNameFromSessionId } from "@/lib/tauri";
 import PinButton from "@/components/common/PinButton.vue";
 import { displayNameForSession, formatElapsed } from "@/lib/format";
 
@@ -72,7 +72,12 @@ const statusColor = computed(() => {
 });
 
 // Tmux session name and copy-attach action (Wave 1 — IntelliJ follow-along).
-const attachCommand = computed(() => `tmux attach -t claude-${props.detail.sessionId}`);
+const attachCommand = computed(() => {
+  const tmuxName = isTmuxSessionId(props.detail.sessionId)
+    ? tmuxNameFromSessionId(props.detail.sessionId)
+    : `claude-${props.detail.sessionId}`;
+  return `tmux attach -t ${tmuxName}`;
+});
 const copied = ref(false);
 async function copyAttach() {
   try {

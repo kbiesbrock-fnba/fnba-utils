@@ -1,13 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ClaudeSession } from "@/lib/tauri";
+import type { ClaudeSession, SessionSource } from "@/lib/tauri";
 import { displayNameForSession, formatRelative } from "@/lib/format";
 
-type SessionStatusKey = "dead" | "busy" | "idle";
+type SessionStatusKey = "dead" | "busy" | "idle" | "unknown";
 const STATUS_INFO: Record<SessionStatusKey, { dotClass: string; label: string }> = {
   dead: { dotClass: "dot-dead", label: "dead" },
   busy: { dotClass: "dot-busy", label: "busy" },
   idle: { dotClass: "dot-idle", label: "idle" },
+  // "Unknown" is the default for external tmux rows (no JSONL to read);
+  // render as a neutral grey dot rather than misleading green.
+  unknown: { dotClass: "dot-unknown", label: "tmux" },
+};
+
+const SOURCE_BADGE: Record<SessionSource, { label: string; cls: string }> = {
+  mc: { label: "MC", cls: "src-mc" },
+  "claude-external": { label: "claude", cls: "src-claude" },
+  tmux: { label: "tmux", cls: "src-tmux" },
 };
 
 const props = defineProps<{
@@ -21,20 +30,32 @@ const emit = defineEmits<{
   open: [session: ClaudeSession];
 }>();
 
-const displayName = computed(() =>
-  displayNameForSession(props.session.name, props.session.cwd),
-);
+const displayName = computed(() => {
+  // For external tmux sessions the tmux name (e.g. "fnba-utils") is more
+  // recognizable than the cwd basename — that's how the user named it in
+  // IntelliJ's `tmux new -A -s "$(basename "$PWD")"` snippet.
+  if (props.session.source !== "mc" && props.session.tmuxSessionName) {
+    return props.session.tmuxSessionName;
+  }
+  return displayNameForSession(props.session.name, props.session.cwd);
+});
 
 const relativeTime = computed(() =>
   formatRelative(props.session.lastMessageAt ?? props.session.startedAt),
 );
 
 const status = computed(() => {
-  const key = (props.session.status === "dead" || props.session.status === "busy"
-    ? props.session.status
-    : "idle") as SessionStatusKey;
+  const s = props.session.status;
+  const key: SessionStatusKey =
+    s === "dead" || s === "busy" || s === "idle" || s === "unknown" ? s : "idle";
   return STATUS_INFO[key];
 });
+
+const sourceBadge = computed(() => SOURCE_BADGE[props.session.source]);
+
+const showRunningCommand = computed(
+  () => props.session.source !== "mc" && !!props.session.runningCommand,
+);
 
 const agentTypeSummary = computed(() => {
   if (props.session.subagents.length === 0) return null;
@@ -81,7 +102,11 @@ function handleKeydown(e: KeyboardEvent) {
         <path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z" />
       </svg>
       <span class="session-dot" :class="status.dotClass" />
+      <span class="src-badge" :class="sourceBadge.cls">{{ sourceBadge.label }}</span>
       <span class="session-name" :title="session.cwd">{{ displayName }}</span>
+      <span v-if="showRunningCommand" class="session-run" :title="`Running: ${session.runningCommand}`"
+        >· {{ session.runningCommand }}</span
+      >
       <button class="session-open-btn compact-open" title="Open session detail" @click.stop="emit('open', session)">Open</button>
       <span class="session-time">{{ relativeTime }}</span>
     </div>
@@ -90,14 +115,22 @@ function handleKeydown(e: KeyboardEvent) {
         <div class="session-detail-row">
           <span class="session-badge status-badge" :class="status.dotClass">{{ status.label }}</span>
           <span v-if="session.kind" class="session-badge muted">{{ session.kind }}</span>
-          <span class="session-badge muted">PID {{ session.pid }}</span>
+          <span v-if="session.pid > 0" class="session-badge muted">PID {{ session.pid }}</span>
+          <span v-if="session.attached" class="session-badge attached-badge" title="A tmux client is attached to this session">attached</span>
+          <span v-if="session.windowCount > 1" class="session-badge muted">{{ session.windowCount }} windows</span>
           <button class="session-open-btn expanded-open" @click.stop="emit('open', session)">Open</button>
+        </div>
+        <div v-if="session.source !== 'mc' && session.runningCommand" class="session-detail-row">
+          <span class="run-label">Running:</span>
+          <span class="run-value">{{ session.runningCommand }}</span>
         </div>
         <div v-if="agentTypeSummary" class="session-detail-row">
           <span class="agent-count">{{ session.subagentCount }} agent{{ session.subagentCount !== 1 ? "s" : "" }}</span>
           <span class="agent-types">{{ agentTypeSummary }}</span>
         </div>
-        <div class="session-cwd" :title="session.cwd">{{ session.cwd }}</div>
+        <div class="session-cwd" :title="session.cwd || session.currentPath || ''">
+          {{ session.cwd || session.currentPath || "(no path)" }}
+        </div>
       </div>
     </div>
   </div>
@@ -178,6 +211,72 @@ function handleKeydown(e: KeyboardEvent) {
 .dot-dead {
   background: var(--accent-red);
   box-shadow: 0 0 4px rgba(248, 113, 113, 0.4);
+}
+
+.dot-unknown {
+  background: var(--text-placeholder);
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.18);
+}
+
+.src-badge {
+  flex-shrink: 0;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 0 4px;
+  line-height: 13px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+
+.src-badge.src-mc {
+  background: rgba(96, 165, 250, 0.16);
+  color: var(--accent-blue);
+  border-color: rgba(96, 165, 250, 0.32);
+}
+
+.src-badge.src-claude {
+  background: rgba(168, 85, 247, 0.16);
+  color: rgb(196, 132, 252);
+  border-color: rgba(168, 85, 247, 0.32);
+}
+
+.src-badge.src-tmux {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.session-run {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.session-badge.attached-badge {
+  background: rgba(52, 211, 153, 0.16);
+  color: var(--accent-green);
+}
+
+.run-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-placeholder);
+}
+
+.run-value {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.session-badge.status-badge.dot-unknown {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
 }
 
 .session-name {

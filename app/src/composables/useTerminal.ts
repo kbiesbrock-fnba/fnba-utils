@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
   startClaudeSession,
+  attachTmuxSession,
   disconnectSession,
   writeSessionPty,
   resizeSessionPty,
@@ -11,6 +12,8 @@ import {
   openPathInEditor,
   onClaudeEvent,
   onClaudeSessionClosed,
+  isTmuxSessionId,
+  tmuxNameFromSessionId,
   type ClaudeEventEnvelope,
 } from "@/lib/tauri";
 import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
@@ -130,11 +133,21 @@ export function useTerminal(opts: UseTerminalOptions) {
     }
   }
 
+  async function attach(): Promise<void> {
+    if (isTmuxSessionId(opts.sessionId)) {
+      // External tmux attach — uses the synthetic `tmux:<name>` session id
+      // for PTY routing (write/disconnect/resize all key off the string).
+      await attachTmuxSession(tmuxNameFromSessionId(opts.sessionId), opts.cwd);
+    } else {
+      await startClaudeSession(opts.sessionId, opts.cwd);
+    }
+  }
+
   async function retryStart() {
     startupState.value = "connecting";
     if (startupWatchdog !== null) clearTimeout(startupWatchdog);
     try {
-      await startClaudeSession(opts.sessionId, opts.cwd);
+      await attach();
     } catch (e) {
       startupState.value = "error";
       opts.onError?.(String(e));
@@ -244,7 +257,7 @@ export function useTerminal(opts: UseTerminalOptions) {
     });
 
     try {
-      await startClaudeSession(opts.sessionId, opts.cwd);
+      await attach();
     } catch (e) {
       startupState.value = "error";
       opts.onError?.(String(e));

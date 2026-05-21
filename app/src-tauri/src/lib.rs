@@ -280,6 +280,7 @@ pub fn run() {
             commands::claude_io::list_session_history,
             commands::claude_io::forget_session_history,
             commands::claude_io::resume_owned_session,
+            commands::claude_io::attach_tmux_session,
             commands::projects::list_projects,
             commands::projects::add_project,
             commands::projects::update_project,

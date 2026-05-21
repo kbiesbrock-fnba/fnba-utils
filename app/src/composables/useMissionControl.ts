@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import {
   getClaudeSessions,
   getConnectionStatuses,
@@ -6,6 +6,7 @@ import {
   isTauri,
   type ClaudeSession,
   type ConnectionStatus,
+  type SessionSource,
 } from "@/lib/tauri";
 import {
   readBool,
@@ -30,13 +31,55 @@ import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
 const SESSIONS_COLLAPSED_KEY = "fnba-utils:mc-sessions-collapsed";
+const SOURCE_FILTER_KEY = "fnba-utils:mc-source-filter";
 const POLL_INTERVAL = 3000;
 const CONNECTIONS_POLL_INTERVAL = 30000;
 const BLUR_SUPPRESS_MS = 300;
 
+/** Chip values for the source filter bar above the session list. */
+export type SourceFilter = "all" | "mc" | "claude" | "tmux";
+
+function readFilter(): SourceFilter {
+  try {
+    const raw = localStorage.getItem(SOURCE_FILTER_KEY);
+    if (raw === "mc" || raw === "claude" || raw === "tmux" || raw === "all") {
+      return raw;
+    }
+  } catch {
+    /* ignore */
+  }
+  return "all";
+}
+
+function writeFilter(v: SourceFilter) {
+  try {
+    localStorage.setItem(SOURCE_FILTER_KEY, v);
+  } catch {
+    /* ignore */
+  }
+}
+
+function matchesFilter(source: SessionSource, filter: SourceFilter): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "mc":
+      return source === "mc";
+    // The "claude" chip covers both MC-spawned and external claude rows so
+    // the user can see "every session where I'm using claude" in one click.
+    case "claude":
+      return source === "mc" || source === "claude-external";
+    case "tmux":
+      return source === "tmux";
+  }
+}
 
 const pinned = ref(readBool(PINNED_KEY));
 const sessions = ref<ClaudeSession[]>([]);
+const sourceFilter = ref<SourceFilter>(readFilter());
+const visibleSessions = computed(() =>
+  sessions.value.filter((s) => matchesFilter(s.source, sourceFilter.value)),
+);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const selectedPid = ref<number | null>(null);
@@ -46,6 +89,7 @@ const connectionStatuses = ref<ConnectionStatus[]>([]);
 const connectionsLoading = ref(true);
 const connectionsCollapsed = ref(readBool(CONNECTIONS_COLLAPSED_KEY));
 const sessionsCollapsed = ref(readBool(SESSIONS_COLLAPSED_KEY));
+const sessionsRefreshing = ref(false);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let connectionsPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -59,9 +103,9 @@ let suppressBlur = false;
  */
 const lastStatus = new Map<string, string>();
 
-async function fetchSessions() {
+async function fetchSessions(force = false) {
   try {
-    const next = await getClaudeSessions();
+    const next = await getClaudeSessions(force);
     notifyIdleTransitions(next);
     sessions.value = next;
     error.value = null;
@@ -386,14 +430,34 @@ export function useMissionControl() {
     fetchConnectionStatuses();
   }
 
+  async function refreshSessions() {
+    if (sessionsRefreshing.value) return;
+    sessionsRefreshing.value = true;
+    try {
+      await fetchSessions(true);
+    } finally {
+      sessionsRefreshing.value = false;
+    }
+  }
+
+  function setSourceFilter(v: SourceFilter) {
+    sourceFilter.value = v;
+    writeFilter(v);
+  }
+
   return {
     pinned,
     sessions,
+    visibleSessions,
+    sourceFilter,
+    setSourceFilter,
     loading,
     error,
     selectedPid,
     expandedPid,
     sessionsCollapsed,
+    sessionsRefreshing,
+    refreshSessions,
     dismiss,
     togglePin,
     toggleSessionExpand,

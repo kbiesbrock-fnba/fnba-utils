@@ -71,6 +71,15 @@ export interface SubagentInfo {
 
 export type SessionStatus = "idle" | "busy" | "dead" | "unknown";
 
+/**
+ * Classification of a row in Mission Control's session list.
+ *   `mc`              — launched by MC (tmux name `claude-<uuid>`, in OwnedSessionsState)
+ *   `claude-external` — tmux session whose foreground process is `claude` but
+ *                       MC didn't spawn (e.g. user ran `claude` in IntelliJ)
+ *   `tmux`            — any other tmux session (bash, vim, etc.)
+ */
+export type SessionSource = "mc" | "claude-external" | "tmux";
+
 export interface ClaudeSession {
   pid: number;
   sessionId: string;
@@ -88,6 +97,18 @@ export interface ClaudeSession {
   label: string | null;
   /** If launched into a git worktree (Feature #7), the worktree path. */
   worktreePath: string | null;
+  /** Where this row came from — MC-owned, external claude, or plain tmux. */
+  source: SessionSource;
+  /** tmux session name. For MC sessions this is `claude-<uuid>`. */
+  tmuxSessionName: string;
+  /** Active pane's `pane_current_command` (e.g. "claude", "vim", "bash"). */
+  runningCommand: string | null;
+  /** Active pane's `pane_current_path`. */
+  currentPath: string | null;
+  /** True if any tmux client is currently attached. */
+  attached: boolean;
+  /** Number of tmux windows in the session. */
+  windowCount: number;
 }
 
 export interface ConversationMessage {
@@ -516,6 +537,12 @@ async function mockInvoke<T>(
           lastMessageAt: new Date(now - 30000).toISOString(),
           label: null,
           worktreePath: null,
+          source: "mc",
+          tmuxSessionName: "claude-abc-123-def",
+          runningCommand: "node",
+          currentPath: "/mnt/c/dev/my-project",
+          attached: true,
+          windowCount: 1,
         },
         {
           pid: 67890,
@@ -534,9 +561,96 @@ async function mockInvoke<T>(
           lastMessageAt: new Date(now - 120000).toISOString(),
           label: "refactor-auth",
           worktreePath: "/mnt/c/dev/other-project/.worktrees/abc12345",
+          source: "mc",
+          tmuxSessionName: "claude-ghi-456-jkl",
+          runningCommand: "node",
+          currentPath: "/mnt/c/dev/other-project/.worktrees/abc12345",
+          attached: false,
+          windowCount: 1,
+        },
+        {
+          pid: 22001,
+          sessionId: "tmux:fnba-utils",
+          cwd: "/mnt/c/dev/fnba-utils",
+          startedAt: now - 7200000,
+          kind: null,
+          name: null,
+          entrypoint: null,
+          isAlive: true,
+          subagentCount: 0,
+          subagents: [],
+          status: "unknown",
+          lastMessageAt: null,
+          label: null,
+          worktreePath: null,
+          source: "claude-external",
+          tmuxSessionName: "fnba-utils",
+          runningCommand: "claude",
+          currentPath: "/mnt/c/dev/fnba-utils",
+          attached: true,
+          windowCount: 2,
+        },
+        {
+          pid: 22002,
+          sessionId: "tmux:accounting",
+          cwd: "/mnt/c/dev/accounting",
+          startedAt: now - 14400000,
+          kind: null,
+          name: null,
+          entrypoint: null,
+          isAlive: true,
+          subagentCount: 0,
+          subagents: [],
+          status: "unknown",
+          lastMessageAt: null,
+          label: null,
+          worktreePath: null,
+          source: "tmux",
+          tmuxSessionName: "accounting",
+          runningCommand: "vim",
+          currentPath: "/mnt/c/dev/accounting/src",
+          attached: false,
+          windowCount: 1,
+        },
+        {
+          pid: 22003,
+          sessionId: "tmux:misc",
+          cwd: "/home/kbiesbrock",
+          startedAt: now - 1800000,
+          kind: null,
+          name: null,
+          entrypoint: null,
+          isAlive: true,
+          subagentCount: 0,
+          subagents: [],
+          status: "unknown",
+          lastMessageAt: null,
+          label: null,
+          worktreePath: null,
+          source: "tmux",
+          tmuxSessionName: "misc",
+          runningCommand: "bash",
+          currentPath: "/home/kbiesbrock",
+          attached: false,
+          windowCount: 1,
         },
       ];
       return sessions as T;
+    }
+
+    case "attach_tmux_session": {
+      console.log("[mock] attach_tmux_session", args);
+      const name = (args?.name as string) ?? "mock";
+      const sid = `tmux:${name}`;
+      window.dispatchEvent(
+        new CustomEvent("mock-claude-event", {
+          detail: {
+            sessionId: sid,
+            event: { type: "pty", text: `\r\n[mock] attached to tmux session '${name}'\r\n$ ` },
+          },
+        }),
+      );
+      return undefined as T;
     }
 
     case "get_connection_statuses": {
@@ -1337,8 +1451,8 @@ export function getAssociateRights(server: string, assocId: number): Promise<Rig
   return invoke<RightInfo[]>("get_associate_rights", { server, assocId });
 }
 
-export function getClaudeSessions(): Promise<ClaudeSession[]> {
-  return invoke<ClaudeSession[]>("get_claude_sessions");
+export function getClaudeSessions(force = false): Promise<ClaudeSession[]> {
+  return invoke<ClaudeSession[]>("get_claude_sessions", { forceRefresh: force });
 }
 
 export function getConnectionStatuses(): Promise<ConnectionStatus[]> {
@@ -1453,6 +1567,30 @@ export function killSession(pid: number): Promise<void> {
 /** Spawn a Claude SDK process for an existing session and start streaming events. */
 export function startClaudeSession(sessionId: string, cwd: string): Promise<void> {
   return invoke<void>("start_claude_session", { sessionId, cwd });
+}
+
+/**
+ * Attach to an external tmux session (not spawned by MC). Streams PTY bytes
+ * over the same `claude-event` channel under the synthetic session id
+ * `tmux:<name>`, so the existing xterm wiring routes without changes.
+ */
+export function attachTmuxSession(name: string, cwd: string | null): Promise<void> {
+  return invoke<void>("attach_tmux_session", { name, cwd });
+}
+
+/** Synthetic prefix used for external tmux session ids in Mission Control. */
+export const TMUX_SESSION_PREFIX = "tmux:";
+
+/** True if a session id refers to an external tmux attach (vs. an MC session). */
+export function isTmuxSessionId(sessionId: string): boolean {
+  return sessionId.startsWith(TMUX_SESSION_PREFIX);
+}
+
+/** Extract the tmux session name from a synthetic `tmux:<name>` id. */
+export function tmuxNameFromSessionId(sessionId: string): string {
+  return sessionId.startsWith(TMUX_SESSION_PREFIX)
+    ? sessionId.slice(TMUX_SESSION_PREFIX.length)
+    : sessionId;
 }
 
 /** Send a user message to a running Claude SDK session (legacy; used for the initial-prompt path on spawn). */

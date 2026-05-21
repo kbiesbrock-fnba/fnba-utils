@@ -10,9 +10,14 @@ import SessionCard from "./SessionCard.vue";
 const {
   pinned,
   sessions,
+  visibleSessions,
+  sourceFilter,
+  setSourceFilter,
   selectedPid,
   expandedPid,
   sessionsCollapsed,
+  sessionsRefreshing,
+  refreshSessions,
   togglePin,
   toggleSessionExpand,
   openSessionDetail,
@@ -24,6 +29,22 @@ const {
   refreshConnections,
   selectConnection,
 } = useMissionControl();
+
+type FilterChip = { key: "all" | "mc" | "claude" | "tmux"; label: string };
+const FILTER_CHIPS: FilterChip[] = [
+  { key: "all", label: "All" },
+  { key: "mc", label: "MC" },
+  { key: "claude", label: "claude" },
+  { key: "tmux", label: "tmux" },
+];
+
+function sessionCountForChip(key: FilterChip["key"]): number {
+  if (key === "all") return sessions.value.length;
+  if (key === "mc") return sessions.value.filter((s) => s.source === "mc").length;
+  if (key === "claude")
+    return sessions.value.filter((s) => s.source === "mc" || s.source === "claude-external").length;
+  return sessions.value.filter((s) => s.source === "tmux").length;
+}
 
 const { history, refresh: refreshHistory, forget, resume } = useSessionHistory();
 const historyCollapsed = ref(true);
@@ -65,6 +86,12 @@ async function onResume(sid: string) {
       lastMessageAt: null,
       label: null,
       worktreePath: info.worktreePath,
+      source: "mc",
+      tmuxSessionName: `claude-${info.sessionId}`,
+      runningCommand: null,
+      currentPath: info.cwd,
+      attached: false,
+      windowCount: 1,
     });
   }
 }
@@ -108,16 +135,39 @@ async function onResume(sid: string) {
         >
           <path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z" />
         </svg>
-        <span class="mc-section-title">Claude Sessions</span>
+        <span class="mc-section-title">Tmux Sessions</span>
         <span class="mc-section-count">{{ sessions.length }}</span>
+        <button
+          class="mc-refresh"
+          :class="{ spinning: sessionsRefreshing }"
+          title="Refresh tmux sessions"
+          @click.stop="refreshSessions"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" width="11" height="11">
+            <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z" />
+            <path d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z" />
+          </svg>
+        </button>
+      </div>
+      <div v-if="!sessionsCollapsed" class="mc-filter-chips">
+        <button
+          v-for="chip in FILTER_CHIPS"
+          :key="chip.key"
+          class="mc-chip"
+          :class="{ active: sourceFilter === chip.key }"
+          @click="setSourceFilter(chip.key)"
+        >
+          {{ chip.label }}
+          <span class="mc-chip-count">{{ sessionCountForChip(chip.key) }}</span>
+        </button>
       </div>
       <div v-if="!sessionsCollapsed" class="mc-list">
-        <div v-if="sessions.length === 0" class="mc-empty">
-          No active sessions
+        <div v-if="visibleSessions.length === 0" class="mc-empty">
+          {{ sessions.length === 0 ? "No active tmux sessions" : "No sessions match this filter" }}
         </div>
         <SessionCard
-          v-for="s in sessions"
-          :key="s.pid"
+          v-for="s in visibleSessions"
+          :key="s.sessionId || s.tmuxSessionName"
           :session="s"
           :selected="selectedPid === s.pid"
           :expanded="expandedPid === s.pid"
@@ -265,10 +315,84 @@ async function onResume(sid: string) {
   line-height: 16px;
 }
 
+.mc-refresh {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.mc-refresh:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+@keyframes mc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mc-refresh.spinning svg {
+  animation: mc-spin 0.8s linear infinite;
+}
+
 .mc-list {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+}
+
+.mc-filter-chips {
+  display: flex;
+  gap: 4px;
+  padding: 4px 12px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.mc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: lowercase;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.mc-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mc-chip.active {
+  background: rgba(96, 165, 250, 0.15);
+  color: var(--accent-blue);
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+.mc-chip-count {
+  font-size: 9px;
+  color: var(--text-placeholder);
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-chip.active .mc-chip-count {
+  color: var(--accent-blue);
 }
 
 .mc-empty {

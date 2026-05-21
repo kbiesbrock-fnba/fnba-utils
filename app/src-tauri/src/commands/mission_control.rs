@@ -2,9 +2,13 @@ use crate::commands::assume_identity::load_all_connections;
 use crate::db;
 use crate::models::mission_control::{
     ClaudeSession, ConnectionStatus, ConversationMessage, QueryResult, SessionDetail,
-    SessionStats, SessionStatus, SqlQueryState, SubagentInfo,
+    SessionSource, SessionStats, SessionStatus, SqlQueryState, SubagentInfo,
 };
 use crate::state::owned_sessions::{OwnedSession, OwnedSessionsState};
+use crate::state::tmux_sessions::{
+    invalidate_cache as invalidate_tmux_cache, list_all_tmux_sessions, ps_contains_claude,
+    TmuxSessionInfo,
+};
 use std::collections::{HashMap, VecDeque};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -234,49 +238,51 @@ pub(crate) fn wsl_claude_dirs() -> Vec<(PathBuf, PathBuf)> {
     results
 }
 
-/// Mission Control now exclusively shows sessions launched from MC. Reads the
-/// `OwnedSessionsState` registry, filters to alive PIDs, and enriches with
-/// status + recent activity from the JSONL tail. External claude processes
-/// (IntelliJ plugin, plain WSL terminals) are deliberately not surfaced.
+/// Mission Control lists every tmux session on the host so the panel doubles
+/// as an "all my terminals" dashboard. MC-spawned sessions (tmux name
+/// `claude-<uuid>`) are enriched with JSONL-derived status + subagents;
+/// external sessions running `claude` are tagged `claude-external`; everything
+/// else is plain `tmux`. The tmux probe is cached at 2s in
+/// `state::tmux_sessions`.
 #[tauri::command]
 pub async fn get_claude_sessions(
     owned_state: tauri::State<'_, OwnedSessionsState>,
+    force_refresh: Option<bool>,
 ) -> Result<Vec<ClaudeSession>, String> {
+    if force_refresh.unwrap_or(false) {
+        invalidate_tmux_cache();
+    }
+
     let owned = owned_state.list_alive();
-    let mut sessions = Vec::with_capacity(owned.len());
+    // Index owned entries by their tmux session name so we can decide each
+    // tmux row's source in O(1).
+    let mut owned_by_tmux: HashMap<String, OwnedSession> = HashMap::with_capacity(owned.len());
+    for o in owned {
+        owned_by_tmux.insert(o.tmux_session.clone(), o);
+    }
+
+    let tmux_rows = list_all_tmux_sessions();
+    let mut sessions: Vec<ClaudeSession> = Vec::with_capacity(tmux_rows.len());
     let mut seen_jsonls: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for o in owned {
-        let claude_dir = PathBuf::from(&o.claude_home);
-        let projects_dir = claude_dir.join("projects");
-        let hash = cwd_to_project_hash(&o.cwd);
-        let jsonl_path = projects_dir.join(&hash).join(format!("{}.jsonl", &o.session_id));
-        seen_jsonls.insert(jsonl_path.to_string_lossy().into_owned());
-
-        let info = tail_conversation_info(&jsonl_path);
-        let status = derive_status(&info.last_role, is_stale_at(info.mtime));
-        let subagents = read_subagents(&projects_dir, &o.cwd, &o.session_id);
-
-        sessions.push(ClaudeSession {
-            pid: o.pid,
-            session_id: o.session_id,
-            cwd: o.cwd,
-            started_at: o.started_at,
-            kind: Some("interactive".to_string()),
-            name: o.label.clone(),
-            entrypoint: Some("mc".to_string()),
-            is_alive: true,
-            subagent_count: subagents.len() as u32,
-            subagents,
-            status,
-            last_message_at: info.last_ts,
-            label: o.label,
-            worktree_path: o.worktree_path,
-        });
+    for tmux in tmux_rows {
+        match owned_by_tmux.remove(&tmux.name) {
+            Some(o) => sessions.push(build_mc_session(o, &tmux, &mut seen_jsonls)),
+            None => sessions.push(build_external_session(&tmux)),
+        }
     }
-    sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
 
-    // Prune caches for JSONLs we no longer track.
+    // Sort: MC first (newest-first), then claude-external, then tmux
+    // (most-recently-created first).
+    sessions.sort_by(|a, b| {
+        let rank = |s: &ClaudeSession| match s.source {
+            SessionSource::Mc => 0,
+            SessionSource::ClaudeExternal => 1,
+            SessionSource::Tmux => 2,
+        };
+        rank(a).cmp(&rank(b)).then_with(|| b.started_at.cmp(&a.started_at))
+    });
+
     if let Ok(mut cache) = jsonl_tail_cache().lock() {
         cache.retain(|k, _| seen_jsonls.contains(k));
     }
@@ -285,6 +291,103 @@ pub async fn get_claude_sessions(
     }
 
     Ok(sessions)
+}
+
+fn build_mc_session(
+    owned: OwnedSession,
+    tmux: &TmuxSessionInfo,
+    seen_jsonls: &mut std::collections::HashSet<String>,
+) -> ClaudeSession {
+    let claude_dir = PathBuf::from(&owned.claude_home);
+    let projects_dir = claude_dir.join("projects");
+    let hash = cwd_to_project_hash(&owned.cwd);
+    let jsonl_path = projects_dir.join(&hash).join(format!("{}.jsonl", &owned.session_id));
+    seen_jsonls.insert(jsonl_path.to_string_lossy().into_owned());
+
+    let info = tail_conversation_info(&jsonl_path);
+    let status = derive_status(&info.last_role, is_stale_at(info.mtime));
+    let subagents = read_subagents(&projects_dir, &owned.cwd, &owned.session_id);
+
+    ClaudeSession {
+        pid: owned.pid,
+        session_id: owned.session_id,
+        cwd: owned.cwd,
+        started_at: owned.started_at,
+        kind: Some("interactive".to_string()),
+        name: owned.label.clone(),
+        entrypoint: Some("mc".to_string()),
+        is_alive: true,
+        subagent_count: subagents.len() as u32,
+        subagents,
+        status,
+        last_message_at: info.last_ts,
+        label: owned.label,
+        worktree_path: owned.worktree_path,
+        source: SessionSource::Mc,
+        tmux_session_name: tmux.name.clone(),
+        running_command: tmux.current_command.clone(),
+        current_path: tmux.current_path.clone(),
+        attached: tmux.attached,
+        window_count: tmux.window_count,
+    }
+}
+
+fn build_external_session(tmux: &TmuxSessionInfo) -> ClaudeSession {
+    let source = classify_external(tmux);
+    let cwd = tmux.current_path.clone().unwrap_or_default();
+    // tmux `session_created` is epoch seconds; ClaudeSession.started_at is ms.
+    let started_at = (tmux.created_at.max(0) as u64) * 1000;
+    ClaudeSession {
+        pid: tmux.pane_pid.unwrap_or(0).max(0) as u32,
+        // Synthetic session_id: prefix lets the frontend / backend route
+        // attach + write calls without a separate id namespace.
+        session_id: format!("tmux:{}", tmux.name),
+        cwd,
+        started_at,
+        kind: None,
+        name: None,
+        entrypoint: None,
+        is_alive: true,
+        subagent_count: 0,
+        subagents: Vec::new(),
+        // External rows have no JSONL → we can't tell busy/idle. "unknown"
+        // keeps the dot neutral.
+        status: SessionStatus::Unknown,
+        last_message_at: None,
+        label: None,
+        worktree_path: None,
+        source,
+        tmux_session_name: tmux.name.clone(),
+        running_command: tmux.current_command.clone(),
+        current_path: tmux.current_path.clone(),
+        attached: tmux.attached,
+        window_count: tmux.window_count,
+    }
+}
+
+/// Decide whether a non-MC tmux session is running claude. `pane_current_command`
+/// is checked first; if it's a generic interpreter we follow up with a `ps` on
+/// the pane's pid to look for `claude` in argv. Anything else is plain `tmux`.
+fn classify_external(tmux: &TmuxSessionInfo) -> SessionSource {
+    let cmd = match tmux.current_command.as_deref() {
+        Some(c) => c,
+        None => return SessionSource::Tmux,
+    };
+    if cmd == "claude" {
+        return SessionSource::ClaudeExternal;
+    }
+    // The claude CLI is a Node app — when running it the foreground process
+    // often shows up as `node`. Same story for python-based wrappers and a
+    // bash launcher script. Probe argv on those candidates only.
+    let needs_argv_check = matches!(cmd, "node" | "python" | "python3" | "bash" | "sh");
+    if needs_argv_check {
+        if let Some(pid) = tmux.pane_pid {
+            if ps_contains_claude(pid) {
+                return SessionSource::ClaudeExternal;
+            }
+        }
+    }
+    SessionSource::Tmux
 }
 
 // --- Connection statuses ---

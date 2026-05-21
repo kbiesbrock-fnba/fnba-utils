@@ -5,6 +5,8 @@ import {
   stopClaudeSession,
   openInExplorer,
   isTauri,
+  isTmuxSessionId,
+  tmuxNameFromSessionId,
   type SessionDetail,
 } from "@/lib/tauri";
 import {
@@ -69,11 +71,46 @@ async function startListening() {
   }
 }
 
+function synthesizeTmuxDetail(sessionId: string): SessionDetail {
+  const name = tmuxNameFromSessionId(sessionId);
+  return {
+    pid: initialPid,
+    sessionId,
+    cwd: initialCwd || "/",
+    startedAt: Date.now(),
+    kind: "tmux",
+    name,
+    entrypoint: "tmux",
+    isAlive: true,
+    gitBranch: null,
+    status: "unknown",
+    stats: {
+      messageCount: 0,
+      userMessageCount: 0,
+      assistantMessageCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+    },
+    recentMessages: [],
+    subagents: [],
+    label: name,
+    worktreePath: null,
+  };
+}
+
 async function fetchDetail(sessionId: string) {
   loading.value = true;
   error.value = null;
   try {
-    detail.value = await getSessionDetail(sessionId);
+    // External tmux attaches don't have an MC-managed JSONL, so we synthesize
+    // a stripped-down detail locally instead of calling the backend (which
+    // would error: "not tracked by Mission Control"). The terminal pane still
+    // attaches via attachTmuxSession and works normally.
+    if (isTmuxSessionId(sessionId)) {
+      detail.value = synthesizeTmuxDetail(sessionId);
+    } else {
+      detail.value = await getSessionDetail(sessionId);
+    }
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -96,11 +133,16 @@ async function kill() {
   const pid = detail.value.pid;
   const sid = detail.value.sessionId;
   try {
-    // Tear down the chat sidecar (PTY + tmux + state) BEFORE destroying the
-    // window. Otherwise the window goes away mid-IPC and the ChatPane's
-    // onUnmounted cleanup races destroy().
-    await stopClaudeSession(sid).catch(() => {});
-    await killSession(pid).catch(() => {});
+    // External tmux sessions belong to whoever spawned them (typically an
+    // IntelliJ terminal). We never tear those down from MC — just close the
+    // window. The user can kill the tmux session from the owning terminal.
+    if (!isTmuxSessionId(sid)) {
+      // Tear down the chat sidecar (PTY + tmux + state) BEFORE destroying
+      // the window. Otherwise the window goes away mid-IPC and the
+      // ChatPane's onUnmounted cleanup races destroy().
+      await stopClaudeSession(sid).catch(() => {});
+      await killSession(pid).catch(() => {});
+    }
 
     // PID is gone — drop the pinned descriptor since it would no longer
     // resolve to a real session on next restore.

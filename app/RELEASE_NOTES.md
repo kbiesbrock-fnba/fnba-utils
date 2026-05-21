@@ -1,5 +1,28 @@
 # Release Notes
 
+## v1.10.1 — 2026-05-21
+
+### Mission Control: manual refresh button for tmux sessions
+
+Added a refresh button to the "Tmux Sessions" section header. Clicking it busts the 2s tmux probe cache and immediately re-fetches the session list, so spawning or killing a tmux session outside the app shows up right away instead of waiting for the next 3s poll.
+
+## v1.10.0 — 2026-05-21
+
+### Mission Control: every tmux session, one panel
+
+The session list is no longer limited to claude sessions spawned by MC. It now shows **every tmux session on the host** — including the IntelliJ terminals that auto-attach via `tmux new -A -s "$(basename "$PWD")"` — so a single panel covers "what am I running."
+
+- **Source badges.** Each row is tagged `MC` (spawned by Mission Control), `claude` (claude is running inside an external tmux session — detected by `pane_current_command`, with a `ps` follow-up for `node`-wrapped invocations), or `tmux` (plain shells, vim, etc.).
+- **Current program column.** The compact row shows the foreground command of the active pane (e.g. `vim`, `bash`, `claude`). Expanded view adds `attached`, `windows`, and `current path`.
+- **Source filter chips.** `All / MC / claude / tmux` chips above the list, single-select with per-chip counts. Persisted in localStorage (`fnba-utils:mc-source-filter`).
+- **Attach to external sessions.** Clicking any tmux row opens the detail panel and the xterm pane runs `tmux attach -t <name>` — read/write, just like an MC session. Closing the panel disconnects (does not kill); the originating IntelliJ terminal keeps the session alive.
+- **No-kill safety.** External sessions can be observed and attached but never killed from MC. The `Kill` action only tears down sessions MC created.
+
+### Backend
+
+- New `state::tmux_sessions` module batches the probe into two `wsl.exe -e tmux` calls (`list-sessions` + `list-panes -a`) with a 2s TTL cache.
+- New Tauri command `attach_tmux_session(name, cwd)` reuses the existing PTY plumbing under a synthetic session id `tmux:<name>` so `write_session_pty` / `resize_session_pty` / `disconnect_session` route without modification.
+
 ## v1.9.1 — 2026-05-21
 
 ### Standup: preview before posting
