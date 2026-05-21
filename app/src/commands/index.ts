@@ -3,6 +3,7 @@ import type { PaletteCommand } from "./types";
 import { assumeIdentityCommand } from "./assume-identity";
 import { rightLookupCommand } from "./right-lookup";
 import { newClaudeSessionCommand } from "./new-claude-session";
+import { clipboardManagerCommand } from "./clipboard-manager";
 import { buildStandupCommand, buildStandupDescription } from "./standup";
 import { getAppConfig } from "@/lib/tauri";
 
@@ -11,6 +12,7 @@ const baseCommands: PaletteCommand[] = [
   assumeIdentityCommand,
   rightLookupCommand,
   newClaudeSessionCommand,
+  clipboardManagerCommand,
 ];
 
 /** Live list of palette commands. Mutated as opt-in features are detected. */

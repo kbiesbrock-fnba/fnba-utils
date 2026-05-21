@@ -39,6 +39,13 @@ done
 # directories when WSL cargo or IDE tooling reads the file.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-C:\\Users\\$USER\\.cargo-targets\\fnba-utils}"
 cd "$APP_DIR/src-tauri"
+
+# Build the clipboard daemon up front so fnba-utils can spawn it on startup.
+# `cargo tauri dev` only builds the Tauri binary; sibling bins aren't compiled
+# automatically, and a missing fnba-clipd.exe means no capture happens.
+echo "Building fnba-clipd (clipboard capture daemon)..."
+"$CARGO_WIN" build --bin fnba-clipd
+
 "$CARGO_WIN" tauri dev
 
 wait $VITE_PID 2>/dev/null || true

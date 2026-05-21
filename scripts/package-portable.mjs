@@ -25,6 +25,7 @@ const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8"));
 const version = pkg.version;
 
 const exeSrc = join(appDir, "src-tauri", "target", "release", "fnba-utils.exe");
+const clipdSrc = join(appDir, "src-tauri", "target", "release", "fnba-clipd.exe");
 const readmeSrc = join(appDir, "README.md");
 const releaseNotesSrc = join(appDir, "RELEASE_NOTES.md");
 
@@ -36,12 +37,13 @@ const zipPath = join(releasesDir, `fnba-utils-portable-${version}.zip`);
 
 for (const [label, path] of [
   ["release binary", exeSrc],
+  ["clipboard daemon binary", clipdSrc],
   ["app/README.md", readmeSrc],
   ["app/RELEASE_NOTES.md", releaseNotesSrc],
 ]) {
   if (!existsSync(path)) {
     console.error(`ERROR: ${label} not found at ${path}`);
-    if (label === "release binary") {
+    if (label === "release binary" || label === "clipboard daemon binary") {
       console.error(`Run \`tauri build --no-bundle\` first (or use \`npm run package\` which does both).`);
     }
     process.exit(1);
@@ -54,6 +56,7 @@ mkdirSync(stageDir, { recursive: true });
 mkdirSync(releasesDir, { recursive: true });
 
 copyFileSync(exeSrc, join(stageDir, "fnba-utils.exe"));
+copyFileSync(clipdSrc, join(stageDir, "fnba-clipd.exe"));
 copyFileSync(readmeSrc, join(stageDir, "README.md"));
 copyFileSync(releaseNotesSrc, join(stageDir, "RELEASE_NOTES.md"));
 
@@ -77,12 +80,14 @@ const psCmd = `Compress-Archive -Force -Path '${stageDir}\\*' -DestinationPath '
 execFileSync("powershell.exe", ["-NoProfile", "-Command", psCmd], { stdio: "inherit" });
 
 const exeBytes = statSync(join(stageDir, "fnba-utils.exe")).size;
+const clipdBytes = statSync(join(stageDir, "fnba-clipd.exe")).size;
 const zipBytes = statSync(zipPath).size;
 const mb = (n) => (n / 1024 / 1024).toFixed(1) + " MB";
 
 console.log("");
 console.log(`Staged:  ${stageDir}`);
 console.log(`         fnba-utils.exe (${mb(exeBytes)})`);
+console.log(`         fnba-clipd.exe (${mb(clipdBytes)})`);
 console.log(`         README.md`);
 console.log(`         RELEASE_NOTES.md`);
 console.log(`         example.assumeIdentity.json`);

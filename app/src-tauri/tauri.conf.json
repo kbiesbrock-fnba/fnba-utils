@@ -1,11 +1,11 @@
 {
   "productName": "FNBA Utils",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "identifier": "com.fnba.utils",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:with-clipd",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
@@ -77,6 +77,25 @@
         "backgroundColor": "#00000000",
         "visible": false,
         "alwaysOnTop": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "clipboard-manager",
+        "title": "Clipboard",
+        "url": "index.html#clipboard-manager",
+        "width": 540,
+        "height": 620,
+        "minWidth": 420,
+        "minHeight": 360,
+        "x": 0,
+        "y": 0,
+        "resizable": true,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "visible": false,
+        "alwaysOnTop": true,
         "skipTaskbar": true
       }
     ],

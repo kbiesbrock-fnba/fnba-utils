@@ -1,9 +1,10 @@
 [package]
 name = "fnba-utils"
-version = "1.9.0"
+version = "1.10.0"
 description = "FNBA Utils command palette"
 authors = ["kbiesbrock"]
 edition = "2021"
+default-run = "fnba-utils"
 
 [lib]
 name = "fnba_utils_lib"
@@ -33,3 +34,24 @@ base64 = "0.22"
 arboard = "3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+fuzzy-matcher = "0.3"
+winreg = "0.52"
+
+[[bin]]
+name = "fnba-clipd"
+path = "src/bin/clipd.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+] }

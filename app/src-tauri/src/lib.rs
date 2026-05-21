@@ -1,9 +1,26 @@
+mod clipboard;
 mod commands;
 mod config;
 mod db;
 mod models;
 mod standup_db;
 mod state;
+
+/// Public re-exports for the `fnba-clipd` daemon binary, which only needs
+/// the clipboard subsystem (no Tauri / commands / standup).
+pub mod clipboard_state {
+    pub use crate::state::clipboard_history::{
+        ClipboardHistoryState, ClipboardSettings, InsertOutcome, NewClipboardEntry,
+    };
+
+    pub fn load() -> ClipboardHistoryState {
+        ClipboardHistoryState::load()
+    }
+}
+
+pub mod clipboard_listener {
+    pub use crate::clipboard::listener::{spawn, ClipboardEventSender};
+}
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem},
@@ -24,6 +41,9 @@ pub fn run() {
         .manage(models::mission_control::SqlQueryState::new())
         .manage(state::owned_sessions::OwnedSessionsState::load())
         .manage(state::projects::ProjectsState::load())
+        .manage(state::clipboard_history::ClipboardHistoryState::load())
+        .manage(clipboard::ForegroundCapture::default())
+        .manage(commands::clipboard_manager::RevealTokens::default())
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
@@ -195,6 +215,22 @@ pub fn run() {
                 },
             )?;
 
+            // --- Clipboard daemon (fnba-clipd.exe) ---
+            // Capture lives in a separate background process so it keeps
+            // running even when fnba-utils itself is closed. We ensure it's
+            // alive on startup and register it for Windows auto-start on
+            // login. See `clipboard::daemon`.
+            if let Err(e) = clipboard::daemon::ensure_running_and_registered() {
+                eprintln!("fnba-clipd auto-launch failed: {e}");
+            }
+
+            // --- Global Hotkey: Win+V (Clipboard Manager) ---
+            // Replaces the native Windows clipboard history. Uses a
+            // WH_KEYBOARD_LL hook (not RegisterHotKey) so we see Win+V before
+            // the shell does and can swallow it. See `clipboard::hotkey` for
+            // rationale.
+            clipboard::hotkey::spawn(app.handle().clone());
+
             // --- Global Shortcut: Win+Shift+D (Standup Panel) ---
             // Registered unconditionally; the panel window only exists when the
             // standup feature is enabled, so the shortcut is a no-op otherwise.
@@ -283,6 +319,17 @@ pub fn run() {
             commands::projects::update_project,
             commands::projects::remove_project,
             commands::projects::record_project_used,
+            commands::clipboard_manager::list_clipboard_entries,
+            commands::clipboard_manager::get_clipboard_entry,
+            commands::clipboard_manager::paste_clipboard_entry,
+            commands::clipboard_manager::request_sensitive_reveal,
+            commands::clipboard_manager::delete_clipboard_entry,
+            commands::clipboard_manager::pin_clipboard_entry,
+            commands::clipboard_manager::clear_clipboard_history,
+            commands::clipboard_manager::get_clipboard_settings,
+            commands::clipboard_manager::set_clipboard_settings,
+            commands::clipboard_manager::hide_clipboard_window,
+            commands::clipboard_manager::get_clipboard_max_captured_at,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -1,0 +1,232 @@
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import {
+  clearClipboardHistory,
+  deleteClipboardEntry,
+  getClipboardEntry,
+  getClipboardMaxCapturedAt,
+  hideClipboardWindow,
+  listClipboardEntries,
+  onClipboardWindowShown,
+  pasteClipboardEntry,
+  pinClipboardEntry,
+  requestSensitiveReveal,
+  type ClipboardEntryFull,
+  type ClipboardEntrySummary,
+  type ClipboardKind,
+} from "@/lib/tauri";
+
+export type Filter = "all" | ClipboardKind | "pinned";
+
+export function useClipboardManager() {
+  const entries = ref<ClipboardEntrySummary[]>([]);
+  const selectedId = ref<number | null>(null);
+  const detail = ref<ClipboardEntryFull | null>(null);
+  const detailLoading = ref(false);
+  const query = ref("");
+  const filter = ref<Filter>("all");
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let unsubShown: (() => void) | null = null;
+  let lastSeenCapturedAt = 0;
+  const POLL_INTERVAL_MS = 1500;
+
+  const selected = computed(() =>
+    entries.value.find((e) => e.id === selectedId.value) ?? null,
+  );
+
+  async function load() {
+    loading.value = true;
+    try {
+      const kind = filter.value === "all" || filter.value === "pinned"
+        ? undefined
+        : (filter.value as ClipboardKind);
+      const rows = await listClipboardEntries(
+        query.value || undefined,
+        kind,
+        filter.value === "pinned",
+        200,
+        0,
+      );
+      entries.value = rows;
+      // Keep the selection if still present; otherwise pick the first row.
+      if (
+        selectedId.value == null ||
+        !rows.some((r) => r.id === selectedId.value)
+      ) {
+        selectedId.value = rows[0]?.id ?? null;
+      }
+      // Track the freshest captured_at so polling can short-circuit when
+      // nothing new has landed.
+      lastSeenCapturedAt = rows.reduce(
+        (m, r) => (r.capturedAt > m ? r.capturedAt : m),
+        lastSeenCapturedAt,
+      );
+      error.value = null;
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function pollForNew() {
+    try {
+      const latest = await getClipboardMaxCapturedAt();
+      if (latest > lastSeenCapturedAt) {
+        // New capture from the daemon — reload to surface it.
+        await load();
+      }
+    } catch {
+      // Polling is best-effort; ignore transient errors (e.g. DB locked).
+    }
+  }
+
+  function scheduleReload() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => void load(), 120);
+  }
+
+  watch([query, filter], () => scheduleReload());
+
+  watch(selectedId, async (id) => {
+    if (id == null) {
+      detail.value = null;
+      return;
+    }
+    detailLoading.value = true;
+    try {
+      detail.value = await getClipboardEntry(id);
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    } finally {
+      detailLoading.value = false;
+    }
+  });
+
+  function selectIndex(delta: number) {
+    if (entries.value.length === 0) return;
+    const currentIdx = entries.value.findIndex((e) => e.id === selectedId.value);
+    const nextIdx = Math.max(
+      0,
+      Math.min(entries.value.length - 1, (currentIdx < 0 ? 0 : currentIdx) + delta),
+    );
+    selectedId.value = entries.value[nextIdx].id;
+  }
+
+  function selectFirst() {
+    if (entries.value.length) selectedId.value = entries.value[0].id;
+  }
+
+  function selectLast() {
+    if (entries.value.length) {
+      selectedId.value = entries.value[entries.value.length - 1].id;
+    }
+  }
+
+  async function paste(opts: { simulate: boolean }) {
+    const entry = selected.value;
+    if (!entry) return;
+    try {
+      if (entry.sensitive) {
+        const token = await requestSensitiveReveal(entry.id);
+        await pasteClipboardEntry(entry.id, {
+          simulatePaste: opts.simulate,
+          revealToken: token.token,
+        });
+      } else {
+        await pasteClipboardEntry(entry.id, { simulatePaste: opts.simulate });
+      }
+      await hideClipboardWindow();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function togglePin(id?: number) {
+    const target = id ?? selectedId.value;
+    if (target == null) return;
+    const row = entries.value.find((r) => r.id === target);
+    if (!row) return;
+    try {
+      await pinClipboardEntry(target, !row.pinned);
+      row.pinned = !row.pinned;
+      // Reload to honor the pinned-first ordering.
+      void load();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function remove(id?: number) {
+    const target = id ?? selectedId.value;
+    if (target == null) return;
+    try {
+      await deleteClipboardEntry(target);
+      // Advance selection before removing the row so the UI doesn't blank.
+      const idx = entries.value.findIndex((r) => r.id === target);
+      entries.value = entries.value.filter((r) => r.id !== target);
+      selectedId.value =
+        entries.value[idx]?.id ?? entries.value[idx - 1]?.id ?? null;
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function clearAll(includePinned: boolean) {
+    try {
+      await clearClipboardHistory(includePinned);
+      await load();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function close() {
+    void hideClipboardWindow();
+  }
+
+  onMounted(async () => {
+    await load();
+    // Capture lives in a separate daemon process now, so we can't subscribe
+    // to in-process events for new entries. Instead, poll the DB for the
+    // latest captured_at while the window is open and reload when it bumps.
+    pollTimer = setInterval(() => void pollForNew(), POLL_INTERVAL_MS);
+    unsubShown = await onClipboardWindowShown(() => {
+      // When the window is reopened via the global shortcut, reset the
+      // query so the user lands on the freshest entries.
+      query.value = "";
+      filter.value = "all";
+      void load();
+    });
+  });
+
+  onUnmounted(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (unsubShown) unsubShown();
+  });
+
+  return {
+    entries,
+    selectedId,
+    selected,
+    detail,
+    detailLoading,
+    query,
+    filter,
+    loading,
+    error,
+    load,
+    selectIndex,
+    selectFirst,
+    selectLast,
+    paste,
+    togglePin,
+    remove,
+    clearAll,
+    close,
+  };
+}

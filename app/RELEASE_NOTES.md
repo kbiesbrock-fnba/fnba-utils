@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.10.0 — 2026-05-21
+
+### Clipboard Manager: Win+V
+
+New palette command **Clipboard** plus a dedicated `Win+V` global shortcut opens a Raycast-style clipboard history window. Built to replace the native Windows Clipboard (Win+V) with: unlimited SQLite-backed history, full-text search, source-app attribution, image thumbnails, pinned entries, and sensitivity-aware masking.
+
+- **Captures text, HTML, and images** via a hidden Win32 `AddClipboardFormatListener` window — event-driven, no polling. Image entries are stored as PNG with a 256px thumbnail; HTML entries keep both the fragment and a plain-text fallback for search.
+- **Sensitivity-aware**: entries flagged by source apps (1Password, KeePass, Bitwarden — anything that sets `ExcludeClipboardContentFromMonitoring`, `CanIncludeInClipboardHistory`, or `CanUploadToCloudClipboard`) are stored but rendered as `••••••` and require an explicit reveal-token round-trip before they can be pasted.
+- **Paste back into the prior app**: pressing Enter restores the foreground window that was active before the launcher and synthesizes Ctrl+V via `SendInput`. Ctrl+Enter sets the clipboard without auto-pasting.
+- **Replaces the native Windows clipboard history**: hooks `Win+V` via `WH_KEYBOARD_LL` and swallows it before the shell sees it, so our window opens instead of the OS popup. Hotkey is always *show + focus + select-all-in-search*, never toggle — pressing it while open just re-focuses the search. `Win+Shift+V` is left alone for PowerToys Advanced Paste and similar tools.
+- **Capture runs as a separate daemon (`fnba-clipd.exe`)**: a tiny background process owns the clipboard listener + SQLite writes and is registered under `HKCU\…\Run` on first fnba-utils launch, so history keeps accruing even when fnba-utils itself is closed. fnba-utils only owns the search/display UI and reads from the shared DB at `%LOCALAPPDATA%\fnba-utils\clipboard.db`. The daemon is singleton-protected (TCP port 53217 bind) so duplicate launches are no-ops.
+- **Fuzzy search** in the clipboard list — skim/fzf-style ranking (`fuzzy-matcher` crate) replaces the old `LIKE %query%`, so subsequence and typo matches surface naturally. Pinned entries still float to the top; pool capped at the 5 000 most-recent rows so ranking stays fast at any history size.
+- **Dedupe by content hash** — repeating a copy bumps the existing row's timestamp instead of creating duplicates. Pinned entries always sort first and are never auto-pruned.
+- **Configurable caps** (default 5 000 text/HTML, 500 image) with per-source ignore list; settings live in the same SQLite DB at `~/.claude/fnba-mc/clipboard.db`.
+- **Keyboard**: `↑/↓` navigate, `PageUp/Down` jump, `Enter` paste, `Ctrl+Enter` copy only, `P` pin, `Del` remove, `/` focus search, `Esc` hide.
+
 ## v1.9.0 — 2026-05-20
 
 ### Standup feature: Jira fetch, Teams post, always-on-top panel

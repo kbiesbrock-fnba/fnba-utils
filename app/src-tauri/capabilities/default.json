@@ -8,7 +8,8 @@
     "session-detail*",
     "sql-query*",
     "standup-panel",
-    "issue-detail"
+    "issue-detail",
+    "clipboard-manager"
   ],
   "permissions": [
     "core:default",
