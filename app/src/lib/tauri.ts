@@ -284,6 +284,10 @@ export interface StandupRunResult {
   postedToTeams: boolean;
   copiedToClipboard: boolean;
   warnings: string[];
+  /** Whether a Teams webhook is configured. Drives whether the Post button is enabled. */
+  teamsConfigured: boolean;
+  /** Channel deep-link to open after a successful post. Null means leave Teams alone. */
+  teamsChannelUrl: string | null;
 }
 
 export interface StandupLastRun {
@@ -782,7 +786,9 @@ async function mockInvoke<T>(
     }
 
     case "get_standup_report":
-    case "run_standup": {
+    case "run_standup":
+    case "preview_standup":
+    case "post_standup_to_teams": {
       await delay(400);
       const mockIssue = (
         key: string,
@@ -882,11 +888,35 @@ async function mockInvoke<T>(
       if (cmd === "get_standup_report") {
         return sample as T;
       }
+      // Toggle this to dev the "missing channel URL" hint in the browser:
+      const mockTeamsConfigured = true;
+      const mockChannelUrl =
+        "https://teams.microsoft.com/l/channel/19%3aexample%40thread.tacv2/Standup";
+      let postedToTeams: boolean;
+      let reportForResult: StandupReport;
+      if (cmd === "preview_standup") {
+        postedToTeams = false;
+        reportForResult = sample;
+      } else if (cmd === "post_standup_to_teams") {
+        postedToTeams = true;
+        // Echo back the report the frontend passed in, so generatedAt round-trips
+        // correctly (the real backend posts exactly what was previewed).
+        reportForResult =
+          (args && (args.report as StandupReport | undefined)) ?? sample;
+        // Pretend Teams was opened.
+        console.info("[mock] openExternal:", mockChannelUrl);
+      } else {
+        // legacy run_standup path
+        postedToTeams = !!(args && (args.postToTeamsFlag as boolean));
+        reportForResult = sample;
+      }
       return {
-        report: sample,
-        postedToTeams: !!(args && (args.postToTeamsFlag as boolean)),
-        copiedToClipboard: true,
+        report: reportForResult,
+        postedToTeams,
+        copiedToClipboard: cmd !== "post_standup_to_teams",
         warnings: [],
+        teamsConfigured: mockTeamsConfigured,
+        teamsChannelUrl: mockTeamsConfigured ? mockChannelUrl : null,
       } as T;
     }
 
@@ -1500,6 +1530,22 @@ export function getStandupReport(): Promise<StandupReport> {
 
 export function runStandup(postToTeams: boolean): Promise<StandupRunResult> {
   return invoke<StandupRunResult>("run_standup", { postToTeamsFlag: postToTeams });
+}
+
+/**
+ * Preview-first flow: fetch Jira, build the report, copy text to clipboard, and
+ * persist as a preview run. Does NOT post to Teams.
+ */
+export function previewStandup(): Promise<StandupRunResult> {
+  return invoke<StandupRunResult>("preview_standup");
+}
+
+/**
+ * Post the previewed report to Teams. The frontend echoes back the exact
+ * StandupReport from the preview so the post matches what was on screen.
+ */
+export function postStandupToTeams(report: StandupReport): Promise<StandupRunResult> {
+  return invoke<StandupRunResult>("post_standup_to_teams", { report });
 }
 
 export function getStandupPanelState(): Promise<StandupPanelState> {

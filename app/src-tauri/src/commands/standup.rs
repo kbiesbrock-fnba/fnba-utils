@@ -602,6 +602,141 @@ async fn run_standup_inner(
         posted_to_teams: posted,
         copied_to_clipboard: copied,
         warnings,
+        teams_configured: s
+            .teams_webhook_url
+            .as_deref()
+            .is_some_and(|v| !v.is_empty()),
+        teams_channel_url: s
+            .teams_channel_url
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string()),
+    })
+}
+
+/// Preview-flow command: fetch + clipboard + record as preview (posted_to_teams=false).
+/// Does NOT post to Teams. The frontend renders this, then calls `post_standup_to_teams`
+/// with the same `StandupReport` if the user clicks Post.
+#[tauri::command]
+pub async fn preview_standup(
+    app: tauri::AppHandle,
+    cfg: tauri::State<'_, AppConfig>,
+) -> Result<StandupRunResult, String> {
+    let s = standup_config(&cfg)?;
+    let issues = fetch_issues(s).await?;
+    let report = build_report(issues);
+
+    let mut warnings: Vec<String> = Vec::new();
+    let copied = match copy_report_to_clipboard(&report) {
+        Ok(()) => true,
+        Err(e) => {
+            warnings.push(format!("Clipboard copy failed: {e}"));
+            false
+        }
+    };
+
+    // Record the preview run so the always-on-top panel sees fresh data.
+    // posted_to_teams=false here; `post_standup_to_teams` flips the row if the
+    // user actually posts. Best-effort: DB errors don't fail the preview.
+    if let Ok(mut db) = crate::standup_db::StandupDb::open() {
+        if let Err(e) = db.record_run(&report, false, None) {
+            eprintln!("standup_db: record_run (preview) failed: {e}");
+        }
+        let keys: Vec<String> = report
+            .groups
+            .iter()
+            .flat_map(|g| g.issues.iter().map(|i| i.key.clone()))
+            .collect();
+        if let Err(e) = db.mark_seen(&keys) {
+            eprintln!("standup_db: mark_seen failed: {e}");
+        }
+    }
+
+    use tauri::Emitter;
+    let _ = app.emit("standup-updated", ());
+
+    Ok(StandupRunResult {
+        report,
+        posted_to_teams: false,
+        copied_to_clipboard: copied,
+        warnings,
+        teams_configured: s
+            .teams_webhook_url
+            .as_deref()
+            .is_some_and(|v| !v.is_empty()),
+        teams_channel_url: s
+            .teams_channel_url
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string()),
+    })
+}
+
+/// Post the *previewed* report to Teams.
+///
+/// Frontend echoes back the `StandupReport` it just rendered so the post matches
+/// exactly what the user saw — no re-fetch. On success, flips the existing
+/// preview row's `posted_to_teams` flag (keyed by `report.generated_at`) and
+/// stamps the last-run JSON. If no preview row exists for that timestamp
+/// (e.g. DB was cleared between preview and post), inserts a fresh row.
+#[tauri::command]
+pub async fn post_standup_to_teams(
+    app: tauri::AppHandle,
+    cfg: tauri::State<'_, AppConfig>,
+    report: StandupReport,
+) -> Result<StandupRunResult, String> {
+    let s = standup_config(&cfg)?;
+
+    let webhook = s
+        .teams_webhook_url
+        .as_deref()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            "Teams webhook not configured (set standup.teams_webhook_url in config.yaml)"
+                .to_string()
+        })?;
+
+    let card = build_adaptive_card(&report);
+    post_to_teams(webhook, &card).await?;
+
+    // Update the preview row (or insert one if the preview didn't make it to disk).
+    if let Ok(mut db) = crate::standup_db::StandupDb::open() {
+        match db.mark_run_posted(&report.generated_at) {
+            Ok(0) => {
+                // No matching preview row — insert one now so history reflects the post.
+                if let Err(e) = db.record_run(&report, true, None) {
+                    eprintln!("standup_db: record_run (post fallback) failed: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("standup_db: mark_run_posted failed: {e}"),
+        }
+    } else {
+        eprintln!("standup_db: could not open database (post not recorded)");
+    }
+
+    let last_run = StandupLastRun {
+        at: report.generated_at.clone(),
+        issue_count: report.issue_count,
+        posted_to_teams: true,
+        error: None,
+    };
+    save_last_run(&last_run);
+
+    use tauri::Emitter;
+    let _ = app.emit("standup-updated", ());
+
+    Ok(StandupRunResult {
+        report,
+        posted_to_teams: true,
+        copied_to_clipboard: false, // clipboard already done at preview time
+        warnings: Vec::new(),
+        teams_configured: true,
+        teams_channel_url: s
+            .teams_channel_url
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string()),
     })
 }
 

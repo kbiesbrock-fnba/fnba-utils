@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JiraIssue {
     pub key: String,
@@ -23,7 +23,7 @@ pub struct JiraIssue {
     pub checklist: Vec<ChecklistItem>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChecklistItem {
     pub text: String,
@@ -185,7 +185,7 @@ impl StatusGroup {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StandupGroup {
     pub group: StatusGroup,
@@ -195,7 +195,7 @@ pub struct StandupGroup {
     pub total_points: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StandupReport {
     pub generated_at: String, // RFC3339
@@ -203,6 +203,11 @@ pub struct StandupReport {
     pub groups: Vec<StandupGroup>,
 }
 
+/// Result of `preview_standup` and `post_standup_to_teams`.
+///
+/// `teams_configured` drives whether the frontend's Post button is enabled.
+/// `teams_channel_url` is the deep-link the frontend opens after a successful
+/// post so Teams pops to the channel — None means leave Teams alone.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StandupRunResult {
@@ -210,6 +215,8 @@ pub struct StandupRunResult {
     pub posted_to_teams: bool,
     pub copied_to_clipboard: bool,
     pub warnings: Vec<String>,
+    pub teams_configured: bool,
+    pub teams_channel_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,13 @@
 # Release Notes
 
+## v1.9.1 — 2026-05-21
+
+### Standup: preview before posting
+
+The Standup palette command is now preview-first. Opening it auto-fetches your Jira list and renders the report immediately — no more committing to "Post to Teams" or "Preview Only" before you see what would be sent. From the preview you can either **Refresh** the data or **Post to Teams**.
+
+After a successful post, the configured `teams_channel_url` is opened so Teams pops to the channel — no more alt-tabbing to find it. Set `standup.teams_channel_url` in `~/.fnba-utils/config.yaml` (channel deep-link, either `msteams:` or `https://teams.microsoft.com/l/channel/...`) to enable; if it's unset, the post still succeeds and a one-line hint points at the config.
+
 ## v1.9.0 — 2026-05-20
 
 ### Standup feature: Jira fetch, Teams post, always-on-top panel

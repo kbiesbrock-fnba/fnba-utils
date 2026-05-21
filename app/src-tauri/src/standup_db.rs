@@ -161,6 +161,19 @@ impl StandupDb {
         Ok(())
     }
 
+    /// Flip an existing run's posted_to_teams flag to true. Keyed by run_at
+    /// (the RFC3339 generated_at the frontend echoes back from the preview).
+    /// Returns the number of rows updated — 0 means we couldn't find the preview row
+    /// (caller should fall back to recording a fresh row).
+    pub fn mark_run_posted(&self, run_at: &str) -> Result<usize, String> {
+        self.conn
+            .execute(
+                "UPDATE run_history SET posted_to_teams = 1, error = NULL WHERE run_at = ?1",
+                params![run_at],
+            )
+            .map_err(|e| e.to_string())
+    }
+
     pub fn set_hidden(&self, key: &str, hidden: bool) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
         self.conn

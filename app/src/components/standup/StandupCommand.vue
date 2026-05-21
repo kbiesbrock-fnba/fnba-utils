@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import {
-  getStandupLastRun,
-  runStandup,
-  type StandupLastRun,
+  previewStandup,
+  postStandupToTeams,
   type StandupRunResult,
 } from "@/lib/tauri";
+import { openExternal } from "@/lib/external";
 import { refreshStandupCommand } from "@/commands";
 import { useKeyLayer, KEY_PRIORITY } from "@/composables/useKeyLayer";
 import StatusBar from "../StatusBar.vue";
@@ -18,68 +18,63 @@ const emit = defineEmits<{
   dismiss: [];
 }>();
 
-type Step = "idle" | "running" | "result" | "error";
+type Step = "loading" | "preview" | "posting" | "posted" | "error";
 
-const step = ref<Step>("idle");
-const lastRun = ref<StandupLastRun | null>(null);
+const step = ref<Step>("loading");
 const result = ref<StandupRunResult | null>(null);
 const error = ref<string | null>(null);
-const selectedAction = ref<0 | 1>(0); // 0 = post to teams, 1 = fetch only
 
-onMounted(async () => {
-  try {
-    lastRun.value = await getStandupLastRun();
-  } catch (e) {
-    // Last-run is best-effort; failing to load it shouldn't block the command.
-    console.warn("standup: get_standup_last_run failed", e);
-  }
+const teamsConfigured = computed(() => result.value?.teamsConfigured ?? false);
+const teamsChannelUrl = computed(() => result.value?.teamsChannelUrl ?? null);
+
+onMounted(() => {
+  void fetchPreview();
 });
 
-async function execute(postToTeams: boolean) {
-  step.value = "running";
+async function fetchPreview() {
+  step.value = "loading";
   error.value = null;
   try {
-    result.value = await runStandup(postToTeams);
-    step.value = "result";
-    // Refresh palette subtitle so "Last run" is current next time.
-    void refreshStandupCommand();
-    // Update local last-run badge too.
-    try {
-      lastRun.value = await getStandupLastRun();
-    } catch {
-      // ignore
-    }
+    result.value = await previewStandup();
+    step.value = "preview";
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
     step.value = "error";
-    void refreshStandupCommand();
   }
 }
+
+async function postToTeams() {
+  if (!result.value || !teamsConfigured.value) return;
+  step.value = "posting";
+  error.value = null;
+  try {
+    result.value = await postStandupToTeams(result.value.report);
+    step.value = "posted";
+    void refreshStandupCommand();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+    step.value = "error";
+  }
+}
+
+// Fire openExternal(teamsChannelUrl) exactly once when we enter "posted",
+// so Teams pops to the channel.
+watch(step, (s) => {
+  if (s === "posted" && teamsChannelUrl.value) {
+    void openExternal(teamsChannelUrl.value);
+  }
+});
 
 useKeyLayer(
   [
     {
-      key: "ArrowDown",
-      handler: () => {
-        if (step.value !== "idle") return false;
-        selectedAction.value = selectedAction.value === 0 ? 1 : 0;
-      },
-    },
-    {
-      key: "ArrowUp",
-      handler: () => {
-        if (step.value !== "idle") return false;
-        selectedAction.value = selectedAction.value === 0 ? 1 : 0;
-      },
-    },
-    {
       key: "Enter",
       handler: () => {
-        if (step.value === "idle") {
-          void execute(selectedAction.value === 0);
+        if (step.value === "preview") {
+          if (teamsConfigured.value) void postToTeams();
           return;
         }
-        if (step.value === "result" || step.value === "error") {
+        if (step.value === "posted" || step.value === "error") {
           emit("dismiss");
           return;
         }
@@ -89,7 +84,7 @@ useKeyLayer(
     {
       key: "Escape",
       handler: () => {
-        if (step.value === "result" || step.value === "error") {
+        if (step.value === "posted" || step.value === "error") {
           emit("dismiss");
           return;
         }
@@ -99,211 +94,130 @@ useKeyLayer(
   ],
   { priority: KEY_PRIORITY.COMMAND },
 );
-
-function humanAgo(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const m = Math.floor((Date.now() - t) / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
 </script>
 
 <template>
-  <template v-if="step === 'idle'">
-    <div class="standup-idle">
-      <div class="last-run-card" :class="{ recent: lastRun && !lastRun.error }">
-        <template v-if="!lastRun">
-          <div class="lr-headline">Standup has not been run yet</div>
-        </template>
-        <template v-else-if="lastRun.error">
-          <div class="lr-headline error">Last run failed</div>
-          <div class="lr-meta">{{ humanAgo(lastRun.at) }}</div>
-          <div class="lr-error">{{ lastRun.error }}</div>
-        </template>
-        <template v-else>
-          <div class="lr-headline">
-            Last run <span class="lr-time">{{ humanAgo(lastRun.at) }}</span>
-          </div>
-          <div class="lr-meta">
-            {{ lastRun.issueCount }} issue{{ lastRun.issueCount === 1 ? '' : 's' }} ·
-            {{ lastRun.postedToTeams ? 'posted to Teams' : 'no Teams post' }}
-          </div>
-        </template>
-      </div>
-
-      <div class="action-list" role="listbox">
-        <button
-          class="action"
-          :class="{ selected: selectedAction === 0 }"
-          @click="execute(true)"
-          @mouseenter="selectedAction = 0"
-        >
-          <span class="action-icon">📤</span>
-          <span class="action-body">
-            <span class="action-name">Fetch &amp; Post to Teams</span>
-            <span class="action-desc">Pull Jira, copy to clipboard, post Adaptive Card</span>
-          </span>
-        </button>
-        <button
-          class="action"
-          :class="{ selected: selectedAction === 1 }"
-          @click="execute(false)"
-          @mouseenter="selectedAction = 1"
-        >
-          <span class="action-icon">👁</span>
-          <span class="action-body">
-            <span class="action-name">Fetch &amp; Preview Only</span>
-            <span class="action-desc">Pull Jira and show inline. No Teams post.</span>
-          </span>
-        </button>
-      </div>
-    </div>
-    <StatusBar hint="↑↓ Select  ⏎ Run  ⎋ Back" />
-  </template>
-
-  <template v-else-if="step === 'running'">
+  <template v-if="step === 'loading'">
     <LoadingView message="Fetching Jira tasks..." />
   </template>
 
-  <template v-else-if="step === 'result' && result">
+  <template v-else-if="step === 'preview' && result">
     <StandupReportView :result="result" />
+    <div v-if="!teamsConfigured" class="config-hint warn">
+      Set <code>standup.teams_webhook_url</code> in <code>~/.fnba-utils/config.yaml</code>
+      to enable posting.
+    </div>
+    <div class="action-row">
+      <button class="btn secondary" @click="fetchPreview" title="Re-fetch from Jira">
+        ↻ Refresh
+      </button>
+      <button
+        class="btn primary"
+        :disabled="!teamsConfigured"
+        @click="postToTeams"
+      >
+        📤 Post to Teams
+      </button>
+    </div>
+    <StatusBar :hint="teamsConfigured ? '⏎ Post  ⎋ Back' : '⎋ Back'" />
+  </template>
+
+  <template v-else-if="step === 'posting'">
+    <LoadingView message="Posting to Teams..." />
+  </template>
+
+  <template v-else-if="step === 'posted' && result">
+    <StandupReportView :result="result" />
+    <div v-if="!teamsChannelUrl" class="config-hint">
+      Set <code>standup.teams_channel_url</code> in <code>~/.fnba-utils/config.yaml</code>
+      to auto-open the channel after posting.
+    </div>
+    <div class="action-row single">
+      <button class="btn secondary" @click="emit('dismiss')">Close</button>
+    </div>
     <StatusBar hint="⏎ Close  ⎋ Close" />
   </template>
 
   <template v-else-if="step === 'error' && error">
     <ErrorView :error="error" />
-    <div class="close-row">
-      <button class="confirm-btn" @click="emit('dismiss')">Close</button>
+    <div class="action-row">
+      <button class="btn secondary" @click="fetchPreview">Retry</button>
+      <button class="btn secondary" @click="emit('dismiss')">Close</button>
     </div>
     <StatusBar hint="⏎ Close  ⎋ Close" />
   </template>
 </template>
 
 <style scoped>
-.standup-idle {
+.action-row {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 16px 14px;
 }
 
-.last-run-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  background: var(--bg-hover);
-}
-
-.last-run-card.recent {
-  border-color: rgba(96, 165, 250, 0.35);
-  background: rgba(96, 165, 250, 0.08);
-}
-
-.lr-headline {
-  font-size: 13px;
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
-.lr-headline.error {
-  color: #f87171;
-}
-
-.lr-time {
-  color: var(--text-secondary);
-  font-weight: 400;
-  margin-left: 6px;
-}
-
-.lr-meta {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 2px;
-  font-family: var(--font-mono);
-}
-
-.lr-error {
-  font-size: 11px;
-  color: #f87171;
-  margin-top: 4px;
-  font-family: var(--font-mono);
-  white-space: pre-wrap;
-}
-
-.action-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.action {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  font-family: inherit;
-  color: inherit;
-  transition: background 0.1s ease, border-color 0.1s ease;
-}
-
-.action:hover,
-.action.selected {
-  background: var(--bg-selected);
-  border-color: rgba(96, 165, 250, 0.35);
-}
-
-.action-icon {
-  font-size: 18px;
-  flex-shrink: 0;
-  width: 24px;
-  text-align: center;
-}
-
-.action-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.action-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.action-desc {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.close-row {
-  display: flex;
+.action-row.single {
   justify-content: center;
-  padding: 0 20px 16px;
 }
 
-.confirm-btn {
-  padding: 3px 14px;
-  border: 1px solid var(--border-subtle);
-  background: transparent;
-  color: var(--text-secondary);
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
   border-radius: var(--radius-sm);
-  font-size: 11px;
   font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 
-.confirm-btn:hover {
+.btn.primary {
+  background: rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(96, 165, 250, 0.55);
+  color: #93c5fd;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.28);
+  border-color: rgba(96, 165, 250, 0.8);
+  color: #bfdbfe;
+}
+
+.btn.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.secondary {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.btn.secondary:hover {
   border-color: var(--text-secondary);
   color: var(--text-primary);
+}
+
+.config-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 0 16px 4px;
+  line-height: 1.5;
+}
+
+.config-hint.warn {
+  color: #fbbf24;
+}
+
+.config-hint code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 </style>

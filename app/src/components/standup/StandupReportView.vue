@@ -33,9 +33,7 @@ function pointsTotal(n: number): string {
         </span>
       </div>
       <div class="report-badges">
-        <span class="badge" :class="result.postedToTeams ? 'ok' : 'muted'">
-          {{ result.postedToTeams ? '✓ Posted to Teams' : 'Teams skipped' }}
-        </span>
+        <span v-if="result.postedToTeams" class="badge ok">✓ Posted to Teams</span>
         <span v-if="result.copiedToClipboard" class="badge ok">✓ Copied</span>
       </div>
     </div>
@@ -140,10 +138,6 @@ function pointsTotal(n: number): string {
 .badge.ok {
   border-color: rgba(74, 222, 128, 0.35);
   color: #4ade80;
-}
-
-.badge.muted {
-  color: var(--text-placeholder);
 }
 
 .warning {
