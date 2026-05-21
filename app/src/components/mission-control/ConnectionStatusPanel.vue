@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ConnectionStatus } from "@/lib/tauri";
+import RefreshButton from "@/components/common/RefreshButton.vue";
 import ConnectionStatusRow from "./ConnectionStatusRow.vue";
 
 const props = defineProps<{
@@ -8,11 +9,11 @@ const props = defineProps<{
   loading: boolean;
   collapsed: boolean;
   hideErrors: boolean;
+  onRefresh: () => Promise<unknown> | unknown;
 }>();
 
 const emit = defineEmits<{
   toggle: [];
-  refresh: [];
   toggleHideErrors: [];
   select: [status: ConnectionStatus];
 }>();
@@ -74,17 +75,11 @@ const erroredCount = computed(
           <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
         </svg>
       </button>
-      <button
+      <RefreshButton
         class="conn-refresh"
-        :class="{ spinning: loading }"
+        :on-refresh="props.onRefresh"
         title="Refresh"
-        @click.stop="emit('refresh')"
-      >
-        <svg viewBox="0 0 16 16" fill="currentColor" width="11" height="11">
-          <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z" />
-          <path d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z" />
-        </svg>
-      </button>
+      />
     </div>
     <div v-if="!collapsed" class="conn-list">
       <div v-if="statuses.length === 0 && loading" class="conn-empty">Loading...</div>
@@ -151,7 +146,6 @@ const erroredCount = computed(
   line-height: 16px;
 }
 
-.conn-refresh,
 .conn-toggle-errors {
   margin-left: auto;
   display: flex;
@@ -167,13 +161,6 @@ const erroredCount = computed(
   transition: background 0.1s ease, color 0.1s ease;
 }
 
-/* When the toggle button is present, it takes the auto margin and refresh
- * sits flush next to it. */
-.conn-toggle-errors + .conn-refresh {
-  margin-left: 0;
-}
-
-.conn-refresh:hover,
 .conn-toggle-errors:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -183,12 +170,13 @@ const erroredCount = computed(
   color: var(--accent-red);
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+/* Refresh button: pushed right when alone; flush next to toggle when both. */
+.conn-refresh {
+  margin-left: auto;
 }
 
-.conn-refresh.spinning svg {
-  animation: spin 0.8s linear infinite;
+.conn-toggle-errors + .conn-refresh {
+  margin-left: 0;
 }
 
 .conn-list {

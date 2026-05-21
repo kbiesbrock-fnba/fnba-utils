@@ -1,5 +1,17 @@
 # Release Notes
 
+## v1.10.5 — 2026-05-21
+
+### Mission Control: refresh buttons show success / error feedback
+
+The refresh icons in the Connections panel and Tmux Sessions section now own their full click lifecycle. Click the icon: it spins for at least 400 ms (so very fast refreshes are still visible) and then briefly flashes a green check on success or a red X on failure for ~1.5 s before reverting. This fixes the case where the tmux refresh ran so quickly that the spin never rendered. The button is now a reusable `RefreshButton` component that takes a single `:on-refresh` async handler.
+
+## v1.10.4 — 2026-05-21
+
+### Mission Control: refresh buttons spin while refreshing
+
+The refresh icons in the Connections panel and Tmux Sessions section now reliably spin from the moment they're clicked until the underlying fetch returns. Previously the Connections refresh icon never animated on user click — only the very first load. Both buttons are now a shared `RefreshButton` component.
+
 ## v1.10.3 — 2026-05-21
 
 ### Mission Control: hide errored connections by default

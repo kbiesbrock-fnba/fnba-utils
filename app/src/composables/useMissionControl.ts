@@ -93,7 +93,6 @@ const connectionsCollapsed = ref(readBool(CONNECTIONS_COLLAPSED_KEY));
 // key, so we invert the storage: persist "show errors" and default to false.
 const connectionsHideErrors = ref(!readBool(CONNECTIONS_HIDE_ERRORS_KEY));
 const sessionsCollapsed = ref(readBool(SESSIONS_COLLAPSED_KEY));
-const sessionsRefreshing = ref(false);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let connectionsPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -436,18 +435,18 @@ export function useMissionControl() {
     writeBool(SESSIONS_COLLAPSED_KEY, sessionsCollapsed.value);
   }
 
-  function refreshConnections() {
-    fetchConnectionStatuses();
+  // Refresh entry points used by the RefreshButton component. Distinct from
+  // the polling-driven fetch* functions because we want errors to propagate
+  // so the button can show its red-X badge.
+  async function refreshConnections(): Promise<void> {
+    connectionStatuses.value = await getConnectionStatuses();
   }
 
-  async function refreshSessions() {
-    if (sessionsRefreshing.value) return;
-    sessionsRefreshing.value = true;
-    try {
-      await fetchSessions(true);
-    } finally {
-      sessionsRefreshing.value = false;
-    }
+  async function refreshSessions(): Promise<void> {
+    const next = await getClaudeSessions(true);
+    notifyIdleTransitions(next);
+    sessions.value = next;
+    error.value = null;
   }
 
   function setSourceFilter(v: SourceFilter) {
@@ -466,7 +465,6 @@ export function useMissionControl() {
     selectedPid,
     expandedPid,
     sessionsCollapsed,
-    sessionsRefreshing,
     refreshSessions,
     dismiss,
     togglePin,

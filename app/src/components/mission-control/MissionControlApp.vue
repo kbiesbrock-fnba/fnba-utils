@@ -4,6 +4,7 @@ import { useMissionControl } from "@/composables/useMissionControl";
 import { useSessionHistory } from "@/composables/useSessionHistory";
 import PinButton from "@/components/common/PinButton.vue";
 import ResizeHandles from "@/components/common/ResizeHandles.vue";
+import RefreshButton from "@/components/common/RefreshButton.vue";
 import ConnectionStatusPanel from "./ConnectionStatusPanel.vue";
 import SessionCard from "./SessionCard.vue";
 
@@ -16,7 +17,6 @@ const {
   selectedPid,
   expandedPid,
   sessionsCollapsed,
-  sessionsRefreshing,
   refreshSessions,
   togglePin,
   toggleSessionExpand,
@@ -121,8 +121,8 @@ async function onResume(sid: string) {
       :loading="connectionsLoading"
       :collapsed="connectionsCollapsed"
       :hide-errors="connectionsHideErrors"
+      :on-refresh="refreshConnections"
       @toggle="toggleConnectionsCollapsed"
-      @refresh="refreshConnections"
       @toggle-hide-errors="toggleConnectionsHideErrors"
       @select="selectConnection"
     />
@@ -141,17 +141,11 @@ async function onResume(sid: string) {
         </svg>
         <span class="mc-section-title">Tmux Sessions</span>
         <span class="mc-section-count">{{ sessions.length }}</span>
-        <button
+        <RefreshButton
           class="mc-refresh"
-          :class="{ spinning: sessionsRefreshing }"
+          :on-refresh="refreshSessions"
           title="Refresh tmux sessions"
-          @click.stop="refreshSessions"
-        >
-          <svg viewBox="0 0 16 16" fill="currentColor" width="11" height="11">
-            <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z" />
-            <path d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z" />
-          </svg>
-        </button>
+        />
       </div>
       <div v-if="!sessionsCollapsed" class="mc-filter-chips">
         <button
@@ -321,30 +315,6 @@ async function onResume(sid: string) {
 
 .mc-refresh {
   margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
-}
-
-.mc-refresh:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-@keyframes mc-spin {
-  to { transform: rotate(360deg); }
-}
-
-.mc-refresh.spinning svg {
-  animation: mc-spin 0.8s linear infinite;
 }
 
 .mc-list {
