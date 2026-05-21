@@ -1,5 +1,11 @@
 # Release Notes
 
+## v1.10.3 — 2026-05-21
+
+### Mission Control: hide errored connections by default
+
+The Connections panel now hides any servers whose probe returned an error, so a healthy connection list isn't crowded out by red rows when the VPN is off or a server is down. A small eye icon appears in the panel header whenever errored connections exist — click it to toggle them back on. The choice is remembered across app restarts, and the panel's total count still reflects every configured connection.
+
 ## v1.10.2 — 2026-05-21
 
 ### Mission Control: refresh is now sub-second

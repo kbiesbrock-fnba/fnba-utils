@@ -30,6 +30,7 @@ import { notify, isAnyMcWindowFocused } from "@/composables/useNotifications";
 
 const PINNED_KEY = "fnba-utils:mission-control-pinned";
 const CONNECTIONS_COLLAPSED_KEY = "fnba-utils:mc-connections-collapsed";
+const CONNECTIONS_HIDE_ERRORS_KEY = "fnba-utils:mc-connections-hide-errors";
 const SESSIONS_COLLAPSED_KEY = "fnba-utils:mc-sessions-collapsed";
 const SOURCE_FILTER_KEY = "fnba-utils:mc-source-filter";
 const POLL_INTERVAL = 3000;
@@ -88,6 +89,9 @@ const expandedPid = ref<number | null>(null);
 const connectionStatuses = ref<ConnectionStatus[]>([]);
 const connectionsLoading = ref(true);
 const connectionsCollapsed = ref(readBool(CONNECTIONS_COLLAPSED_KEY));
+// Hide errored connections by default. readBool returns false for a missing
+// key, so we invert the storage: persist "show errors" and default to false.
+const connectionsHideErrors = ref(!readBool(CONNECTIONS_HIDE_ERRORS_KEY));
 const sessionsCollapsed = ref(readBool(SESSIONS_COLLAPSED_KEY));
 const sessionsRefreshing = ref(false);
 
@@ -421,6 +425,12 @@ export function useMissionControl() {
     writeBool(CONNECTIONS_COLLAPSED_KEY, connectionsCollapsed.value);
   }
 
+  function toggleConnectionsHideErrors() {
+    connectionsHideErrors.value = !connectionsHideErrors.value;
+    // Persisted value tracks "show errors" so a missing key defaults to hide.
+    writeBool(CONNECTIONS_HIDE_ERRORS_KEY, !connectionsHideErrors.value);
+  }
+
   function toggleSessionsCollapsed() {
     sessionsCollapsed.value = !sessionsCollapsed.value;
     writeBool(SESSIONS_COLLAPSED_KEY, sessionsCollapsed.value);
@@ -466,7 +476,9 @@ export function useMissionControl() {
     connectionStatuses,
     connectionsLoading,
     connectionsCollapsed,
+    connectionsHideErrors,
     toggleConnectionsCollapsed,
+    toggleConnectionsHideErrors,
     refreshConnections,
     selectConnection,
   };

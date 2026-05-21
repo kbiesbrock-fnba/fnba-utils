@@ -25,7 +25,9 @@ const {
   connectionStatuses,
   connectionsLoading,
   connectionsCollapsed,
+  connectionsHideErrors,
   toggleConnectionsCollapsed,
+  toggleConnectionsHideErrors,
   refreshConnections,
   selectConnection,
 } = useMissionControl();
@@ -118,8 +120,10 @@ async function onResume(sid: string) {
       :statuses="connectionStatuses"
       :loading="connectionsLoading"
       :collapsed="connectionsCollapsed"
+      :hide-errors="connectionsHideErrors"
       @toggle="toggleConnectionsCollapsed"
       @refresh="refreshConnections"
+      @toggle-hide-errors="toggleConnectionsHideErrors"
       @select="selectConnection"
     />
     <div class="mc-divider" />
