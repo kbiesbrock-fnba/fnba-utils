@@ -11,8 +11,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn epoch_ms_now() -> u64 {
     SystemTime::now()
@@ -261,47 +261,15 @@ fn resolve_store_path() -> PathBuf {
     PathBuf::from("owned-sessions.json")
 }
 
-/// Snapshot of all currently-running tmux sessions visible to `wsl.exe -e tmux
-/// list-sessions`, with a short TTL cache so the 3s Mission Control poll
-/// doesn't fork+exec a process every tick. Tmux is the liveness source of
-/// truth: our captured PID is the bash shell hosting `tmux attach` and dies
-/// when the panel closes, but the tmux session keeps running.
+/// Snapshot of currently-running tmux session names, served from the shared
+/// `tmux_sessions` cache. Tmux is the liveness source of truth: our captured
+/// PID is the bash shell hosting `tmux attach` and dies when the panel
+/// closes, but the tmux session keeps running.
+///
+/// Sharing the cache means `get_claude_sessions` in MC pays for the underlying
+/// probe at most once per refresh (whichever caller arrives first primes the
+/// cache; the other reads it).
 fn list_live_tmux_sessions() -> HashSet<String> {
-    const TTL: Duration = Duration::from_millis(2000);
-    static CACHE: OnceLock<Mutex<Option<(HashSet<String>, Instant)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
-    if let Ok(guard) = cache.lock() {
-        if let Some((ref names, when)) = *guard {
-            if when.elapsed() < TTL {
-                return names.clone();
-            }
-        }
-    }
-    let fresh = fetch_live_tmux_sessions();
-    if let Ok(mut guard) = cache.lock() {
-        *guard = Some((fresh.clone(), Instant::now()));
-    }
-    fresh
-}
-
-fn fetch_live_tmux_sessions() -> HashSet<String> {
-    let output = match std::process::Command::new("wsl.exe")
-        .args(["-e", "tmux", "list-sessions", "-F", "#{session_name}"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return HashSet::new(),
-    };
-    if !output.status.success() {
-        return HashSet::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
+    super::tmux_sessions::list_live_session_names()
 }
 

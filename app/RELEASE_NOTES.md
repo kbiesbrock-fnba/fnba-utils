@@ -1,5 +1,13 @@
 # Release Notes
 
+## v1.10.2 — 2026-05-21
+
+### Mission Control: refresh is now sub-second
+
+The tmux/ps probe used to fork `wsl.exe` three to seven times per refresh — each cold start costs ~300-1000 ms on Windows, so manual refresh could stall for 2-4 seconds. All probes now share a single long-lived `wsl.exe bash` subprocess and run as one batched script (`tmux list-sessions` + `tmux list-panes -a` + a single `ps` over every pane pid). Typical refresh latency drops from ~2-4 s to under 200 ms. Background polling benefits too.
+
+Internals: new `state::wsl_helper` module owns the persistent shell with auto-respawn on broken pipe / WSL shutdown. `OwnedSessions` no longer probes tmux on its own — it shares the `tmux_sessions` cache so MC's two callers pay for one probe per refresh.
+
 ## v1.10.1 — 2026-05-21
 
 ### Mission Control: manual refresh button for tmux sessions

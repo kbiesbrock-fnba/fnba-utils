@@ -6,8 +6,7 @@ use crate::models::mission_control::{
 };
 use crate::state::owned_sessions::{OwnedSession, OwnedSessionsState};
 use crate::state::tmux_sessions::{
-    invalidate_cache as invalidate_tmux_cache, list_all_tmux_sessions, ps_contains_claude,
-    TmuxSessionInfo,
+    invalidate_cache as invalidate_tmux_cache, list_all_tmux_sessions, TmuxSessionInfo,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io::BufRead;
@@ -366,8 +365,9 @@ fn build_external_session(tmux: &TmuxSessionInfo) -> ClaudeSession {
 }
 
 /// Decide whether a non-MC tmux session is running claude. `pane_current_command`
-/// is checked first; if it's a generic interpreter we follow up with a `ps` on
-/// the pane's pid to look for `claude` in argv. Anything else is plain `tmux`.
+/// is checked first; if it's a generic interpreter we inspect the pane's argv
+/// (already attached to the `TmuxSessionInfo` by the batched probe) to look
+/// for `claude`. Anything else is plain `tmux`.
 fn classify_external(tmux: &TmuxSessionInfo) -> SessionSource {
     let cmd = match tmux.current_command.as_deref() {
         Some(c) => c,
@@ -378,11 +378,11 @@ fn classify_external(tmux: &TmuxSessionInfo) -> SessionSource {
     }
     // The claude CLI is a Node app — when running it the foreground process
     // often shows up as `node`. Same story for python-based wrappers and a
-    // bash launcher script. Probe argv on those candidates only.
+    // bash launcher script. Inspect argv on those candidates only.
     let needs_argv_check = matches!(cmd, "node" | "python" | "python3" | "bash" | "sh");
     if needs_argv_check {
-        if let Some(pid) = tmux.pane_pid {
-            if ps_contains_claude(pid) {
+        if let Some(args) = tmux.pane_args.as_deref() {
+            if args.contains("claude") {
                 return SessionSource::ClaudeExternal;
             }
         }
