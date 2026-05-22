@@ -1,11 +1,13 @@
 {
   "name": "fnba-utils",
   "private": true,
-  "version": "1.10.5",
+  "version": "1.11.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:with-clipd": "npm run build:clipd && vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:clipd": "node scripts/build-clipd.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "package": "tauri build --no-bundle && node ../scripts/package-portable.mjs",

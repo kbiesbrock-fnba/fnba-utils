@@ -354,6 +354,58 @@ export interface IssueDetail {
   updated: string | null;
 }
 
+// --- Clipboard Manager ---
+
+export type ClipboardKind = "text" | "html" | "image";
+
+export interface ClipboardEntrySummary {
+  id: number;
+  kind: ClipboardKind;
+  textPreview: string | null;
+  thumbBase64: string | null;
+  width: number | null;
+  height: number | null;
+  byteSize: number;
+  sensitive: boolean;
+  sourceProcess: string | null;
+  capturedAt: number;
+  pinned: boolean;
+}
+
+export interface ClipboardEntryFull {
+  id: number;
+  kind: ClipboardKind;
+  textContent: string | null;
+  htmlContent: string | null;
+  imageBase64: string | null;
+  width: number | null;
+  height: number | null;
+  byteSize: number;
+  sensitive: boolean;
+  sourceProcess: string | null;
+  capturedAt: number;
+  pinned: boolean;
+  contentHash: string;
+}
+
+export interface ClipboardSettings {
+  textCap: number;
+  imageCap: number;
+  captureEnabled: boolean;
+  ignoredProcesses: string[];
+}
+
+export interface ClipboardRevealToken {
+  id: number;
+  token: string;
+  expiresInMs: number;
+}
+
+export interface ClipboardPasteOptions {
+  simulatePaste: boolean;
+  revealToken?: string;
+}
+
 export interface StandupPanelState {
   report: StandupReport | null;
   lastRun: StandupRunSummary | null;
@@ -1372,9 +1424,174 @@ async function mockInvoke<T>(
       } as T;
     }
 
+    case "list_clipboard_entries": {
+      await delay(60);
+      const q = (args?.query as string | undefined)?.trim().toLowerCase();
+      const kind = args?.kind as string | undefined;
+      const pinnedOnly = (args?.pinnedOnly as boolean | undefined) ?? false;
+      let rows = mockClipboardEntries();
+      if (kind) rows = rows.filter((r) => r.kind === kind);
+      if (pinnedOnly) rows = rows.filter((r) => r.pinned);
+      if (q) {
+        rows = rows.filter(
+          (r) => r.textPreview && r.textPreview.toLowerCase().includes(q),
+        );
+      }
+      rows.sort(
+        (a, b) =>
+          Number(b.pinned) - Number(a.pinned) || b.capturedAt - a.capturedAt,
+      );
+      return rows as T;
+    }
+    case "get_clipboard_entry": {
+      await delay(40);
+      const id = args?.id as number;
+      const found = mockClipboardEntries().find((e) => e.id === id);
+      if (!found) return null as T;
+      return {
+        ...found,
+        textContent: found.textPreview,
+        htmlContent: found.kind === "html" ? `<p>${found.textPreview}</p>` : null,
+        imageBase64: null,
+        contentHash: `mock-${id}`,
+      } as T;
+    }
+    case "paste_clipboard_entry": {
+      await delay(40);
+      return undefined as T;
+    }
+    case "request_sensitive_reveal": {
+      await delay(40);
+      return {
+        id: args?.id as number,
+        token: `mock-token-${Date.now()}`,
+        expiresInMs: 15000,
+      } as T;
+    }
+    case "delete_clipboard_entry":
+    case "pin_clipboard_entry":
+    case "clear_clipboard_history":
+    case "set_clipboard_settings":
+    case "hide_clipboard_window": {
+      await delay(20);
+      return undefined as T;
+    }
+    case "get_clipboard_settings": {
+      await delay(20);
+      return {
+        textCap: 5000,
+        imageCap: 500,
+        captureEnabled: true,
+        ignoredProcesses: [],
+      } as T;
+    }
+    case "get_clipboard_max_captured_at": {
+      await delay(10);
+      return (mockClipboardEntries()[0]?.capturedAt ?? 0) as T;
+    }
+
     default:
       throw new Error(`[mock] Unknown command: ${cmd}`);
   }
+}
+
+function mockClipboardEntries(): ClipboardEntrySummary[] {
+  const now = Date.now();
+  return [
+    {
+      id: 1,
+      kind: "text",
+      textPreview: "SELECT TOP 100 * FROM logincheck.dbo.AssumeIdentityLog ORDER BY CreatedAt DESC",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 78,
+      sensitive: false,
+      sourceProcess: "ssms.exe",
+      capturedAt: now - 1000 * 30,
+      pinned: false,
+    },
+    {
+      id: 2,
+      kind: "text",
+      textPreview: "git checkout -b feature/clipboard-manager",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 42,
+      sensitive: false,
+      sourceProcess: "WindowsTerminal.exe",
+      capturedAt: now - 1000 * 60 * 5,
+      pinned: true,
+    },
+    {
+      id: 3,
+      kind: "html",
+      textPreview: "The quick brown fox jumps over the lazy dog.",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 180,
+      sensitive: false,
+      sourceProcess: "chrome.exe",
+      capturedAt: now - 1000 * 60 * 12,
+      pinned: false,
+    },
+    {
+      id: 4,
+      kind: "image",
+      textPreview: null,
+      thumbBase64:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+      width: 1920,
+      height: 1080,
+      byteSize: 245_000,
+      sensitive: false,
+      sourceProcess: "SnippingTool.exe",
+      capturedAt: now - 1000 * 60 * 25,
+      pinned: false,
+    },
+    {
+      id: 5,
+      kind: "text",
+      textPreview: "•••••••••••",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 24,
+      sensitive: true,
+      sourceProcess: "1Password.exe",
+      capturedAt: now - 1000 * 60 * 47,
+      pinned: false,
+    },
+    {
+      id: 6,
+      kind: "text",
+      textPreview: "kevin.biesbrock@fnba.com",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 26,
+      sensitive: false,
+      sourceProcess: "outlook.exe",
+      capturedAt: now - 1000 * 60 * 60 * 2,
+      pinned: false,
+    },
+    {
+      id: 7,
+      kind: "text",
+      textPreview:
+        "Error: Connection timeout to FNB-SQL-01.fnba.com after 30000ms (tcp/1433)",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 84,
+      sensitive: false,
+      sourceProcess: "ssms.exe",
+      capturedAt: now - 1000 * 60 * 60 * 4,
+      pinned: false,
+    },
+  ];
 }
 
 // --- Public API (same interface whether Tauri or browser) ---
@@ -1723,6 +1940,95 @@ export async function onStandupUpdated(handler: () => void): Promise<() => void>
   const listener = () => handler();
   window.addEventListener("mock-standup-updated", listener);
   return () => window.removeEventListener("mock-standup-updated", listener);
+}
+
+// --- Clipboard Manager public API ---
+
+export function listClipboardEntries(
+  query?: string,
+  kind?: ClipboardKind,
+  pinnedOnly?: boolean,
+  limit?: number,
+  offset?: number,
+): Promise<ClipboardEntrySummary[]> {
+  return invoke<ClipboardEntrySummary[]>("list_clipboard_entries", {
+    query: query ?? null,
+    kind: kind ?? null,
+    pinnedOnly: pinnedOnly ?? false,
+    limit: limit ?? 100,
+    offset: offset ?? 0,
+  });
+}
+
+export function getClipboardEntry(id: number): Promise<ClipboardEntryFull | null> {
+  return invoke<ClipboardEntryFull | null>("get_clipboard_entry", { id });
+}
+
+export function pasteClipboardEntry(
+  id: number,
+  options: ClipboardPasteOptions,
+): Promise<void> {
+  return invoke<void>("paste_clipboard_entry", { id, options });
+}
+
+export function requestSensitiveReveal(id: number): Promise<ClipboardRevealToken> {
+  return invoke<ClipboardRevealToken>("request_sensitive_reveal", { id });
+}
+
+export function deleteClipboardEntry(id: number): Promise<void> {
+  return invoke<void>("delete_clipboard_entry", { id });
+}
+
+export function pinClipboardEntry(id: number, pinned: boolean): Promise<void> {
+  return invoke<void>("pin_clipboard_entry", { id, pinned });
+}
+
+export function clearClipboardHistory(includePinned: boolean): Promise<number> {
+  return invoke<number>("clear_clipboard_history", { includePinned });
+}
+
+export function getClipboardSettings(): Promise<ClipboardSettings> {
+  return invoke<ClipboardSettings>("get_clipboard_settings");
+}
+
+export function setClipboardSettings(settings: ClipboardSettings): Promise<void> {
+  return invoke<void>("set_clipboard_settings", { settings });
+}
+
+export function hideClipboardWindow(): Promise<void> {
+  return invoke<void>("hide_clipboard_window");
+}
+
+/** Latest captured_at timestamp in the DB; used by the UI to poll for new
+ *  entries inserted by the out-of-process capture daemon. */
+export function getClipboardMaxCapturedAt(): Promise<number> {
+  return invoke<number>("get_clipboard_max_captured_at");
+}
+
+/** Fires whenever a new clipboard entry is captured + persisted. */
+export async function onClipboardEntryAdded(
+  handler: (id: number) => void,
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<number>("clipboard-entry-added", (e) => handler(e.payload));
+  }
+  const listener = (e: Event) => handler((e as CustomEvent<number>).detail);
+  window.addEventListener("mock-clipboard-entry-added", listener);
+  return () => window.removeEventListener("mock-clipboard-entry-added", listener);
+}
+
+/** Fires when the clipboard window is shown via the global shortcut. */
+export async function onClipboardWindowShown(
+  handler: () => void,
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen("clipboard-window-shown", () => handler());
+  }
+  const listener = () => handler();
+  window.addEventListener("mock-clipboard-window-shown", listener);
+  return () => window.removeEventListener("mock-clipboard-window-shown", listener);
 }
 
 export { isTauri };

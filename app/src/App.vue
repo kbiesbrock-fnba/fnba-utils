@@ -5,6 +5,7 @@ import SessionDetailApp from "./components/session-detail/SessionDetailApp.vue";
 import SqlQueryApp from "./components/sql-query/SqlQueryApp.vue";
 import StandupPanelApp from "./components/standup/StandupPanelApp.vue";
 import IssueDetailApp from "./components/standup/IssueDetailApp.vue";
+import ClipboardManagerWindow from "./components/clipboard-manager/ClipboardManagerWindow.vue";
 import { usePalette } from "./composables/usePalette";
 
 const { dismiss } = usePalette();
@@ -14,6 +15,7 @@ const isSessionDetail = window.location.hash.startsWith("#session-detail");
 const isSqlQuery = window.location.hash.startsWith("#sql-query");
 const isStandupPanel = window.location.hash.startsWith("#standup-panel");
 const isIssueDetail = window.location.hash.startsWith("#issue-detail");
+const isClipboardManager = window.location.hash.startsWith("#clipboard-manager");
 
 function onBackdropClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains("backdrop")) {
@@ -28,6 +30,7 @@ function onBackdropClick(e: MouseEvent) {
   <MissionControlApp v-else-if="isMissionControl" />
   <StandupPanelApp v-else-if="isStandupPanel" />
   <IssueDetailApp v-else-if="isIssueDetail" />
+  <ClipboardManagerWindow v-else-if="isClipboardManager" />
   <div v-else class="backdrop" @mousedown="onBackdropClick">
     <CommandPalette />
   </div>
