@@ -1,12 +1,32 @@
 <script setup lang="ts">
-import CommandPalette from "./components/CommandPalette.vue";
-import MissionControlApp from "./components/mission-control/MissionControlApp.vue";
-import SessionDetailApp from "./components/session-detail/SessionDetailApp.vue";
-import SqlQueryApp from "./components/sql-query/SqlQueryApp.vue";
-import StandupPanelApp from "./components/standup/StandupPanelApp.vue";
-import IssueDetailApp from "./components/standup/IssueDetailApp.vue";
-import ClipboardManagerWindow from "./components/clipboard-manager/ClipboardManagerWindow.vue";
+import { defineAsyncComponent } from "vue";
 import { usePalette } from "./composables/usePalette";
+
+// Each Tauri window loads the same index.html with a different hash, but only
+// ever renders one of these components. defineAsyncComponent + dynamic import
+// puts each in its own chunk so a given window only pays for the code it
+// actually uses.
+const CommandPalette = defineAsyncComponent(
+  () => import("./components/CommandPalette.vue"),
+);
+const MissionControlApp = defineAsyncComponent(
+  () => import("./components/mission-control/MissionControlApp.vue"),
+);
+const SessionDetailApp = defineAsyncComponent(
+  () => import("./components/session-detail/SessionDetailApp.vue"),
+);
+const SqlQueryApp = defineAsyncComponent(
+  () => import("./components/sql-query/SqlQueryApp.vue"),
+);
+const StandupPanelApp = defineAsyncComponent(
+  () => import("./components/standup/StandupPanelApp.vue"),
+);
+const IssueDetailApp = defineAsyncComponent(
+  () => import("./components/standup/IssueDetailApp.vue"),
+);
+const ClipboardManagerWindow = defineAsyncComponent(
+  () => import("./components/clipboard-manager/ClipboardManagerWindow.vue"),
+);
 
 const { dismiss } = usePalette();
 

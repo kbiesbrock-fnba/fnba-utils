@@ -30,6 +30,24 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Lift heavy vendors into their own cacheable chunks so application
+        // code splits stay well under Vite's 500 kB warning threshold.
+        manualChunks(id) {
+          if (id.includes("node_modules/@xterm/")) return "xterm";
+          if (id.includes("node_modules/@tauri-apps/")) return "tauri";
+          if (
+            id.includes("node_modules/vue/") ||
+            id.includes("node_modules/@vue/")
+          ) {
+            return "vue";
+          }
+        },
+      },
+    },
+  },
   clearScreen: false,
   server: {
     port: 5173,
