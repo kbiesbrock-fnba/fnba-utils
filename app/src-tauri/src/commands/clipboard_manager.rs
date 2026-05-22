@@ -8,6 +8,7 @@ use crate::clipboard::ForegroundCapture;
 use crate::state::clipboard_history::{
     ClipboardEntryFull, ClipboardEntrySummary, ClipboardHistoryState, ClipboardSettings,
 };
+use crate::state::test_users::{TestUser, TestUsersState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -62,6 +63,12 @@ pub struct RevealToken {
 #[serde(rename_all = "camelCase")]
 pub struct PasteOptions {
     pub simulate_paste: bool,
+    /// When true on a sensitive entry, paste the original captured text and
+    /// require a valid reveal_token. When false (default), paste the stored
+    /// obfuscated/test-user-substituted text — no token needed. Non-sensitive
+    /// entries ignore this flag.
+    #[serde(default)]
+    pub paste_original: bool,
     #[serde(default)]
     pub reveal_token: Option<String>,
 }
@@ -107,20 +114,51 @@ pub async fn paste_clipboard_entry(
     let entry = state
         .get(id)?
         .ok_or_else(|| format!("clipboard entry {id} not found"))?;
-    if entry.sensitive {
+
+    // Decide what bytes actually go on the OS clipboard. For sensitive
+    // entries, the default (`paste_original = false`) writes the obfuscated
+    // text — no reveal token needed. Original requires a valid token. If a
+    // sensitive entry has no stored obfuscation (image flagged only by an
+    // OS-marker), we fall through to requiring the token even on the default
+    // path, because there's no safe substitute to paste.
+    let use_obfuscated = entry.sensitive
+        && !options.paste_original
+        && entry.obfuscated_text.as_deref().is_some();
+
+    if entry.sensitive && !use_obfuscated {
         let ok = options
             .reveal_token
             .as_deref()
             .map(|t| reveal_tokens.consume(id, t))
             .unwrap_or(false);
         if !ok {
-            return Err("entry is marked sensitive; call request_sensitive_reveal first".into());
+            return Err(
+                "sensitive entry: pass paste_original=false to paste the safe version, or \
+                 request_sensitive_reveal first to paste the original"
+                    .into(),
+            );
         }
     }
+
     #[cfg(windows)]
     {
-        crate::clipboard::listener::mark_self_write(entry.content_hash.clone());
-        crate::clipboard::paste::set_clipboard(&entry)?;
+        if use_obfuscated {
+            // SAFETY: use_obfuscated only true when obfuscated_text is Some.
+            let obfuscated = entry.obfuscated_text.as_deref().unwrap_or("");
+            // Mark our own write so the listener doesn't re-capture this as a
+            // fresh entry. Hash uses the same `txt:` prefix the listener uses
+            // for plain-text captures.
+            crate::clipboard::listener::mark_self_write(
+                crate::clipboard::listener::compute_text_hash(obfuscated),
+            );
+            let mut cb = arboard::Clipboard::new()
+                .map_err(|e| format!("clipboard open: {e}"))?;
+            cb.set_text(obfuscated)
+                .map_err(|e| format!("set obfuscated text: {e}"))?;
+        } else {
+            crate::clipboard::listener::mark_self_write(entry.content_hash.clone());
+            crate::clipboard::paste::set_clipboard(&entry)?;
+        }
         if options.simulate_paste {
             let prior = foreground.take();
             crate::clipboard::paste::simulate_paste(prior)?;
@@ -128,13 +166,12 @@ pub async fn paste_clipboard_entry(
     }
     #[cfg(not(windows))]
     {
-        // On non-Windows hosts we can still set the clipboard via arboard; we
-        // just can't simulate paste. The frontend treats simulate_paste as
-        // best-effort, so silently dropping it is acceptable.
         let _ = foreground.take();
-        let _ = options;
         let mut cb = arboard::Clipboard::new().map_err(|e| format!("clipboard open: {e}"))?;
-        if let Some(t) = entry.text_content.as_deref() {
+        if use_obfuscated {
+            let obfuscated = entry.obfuscated_text.as_deref().unwrap_or("");
+            cb.set_text(obfuscated).map_err(|e| format!("set obfuscated text: {e}"))?;
+        } else if let Some(t) = entry.text_content.as_deref() {
             cb.set_text(t).map_err(|e| format!("set text: {e}"))?;
         }
     }
@@ -220,4 +257,39 @@ pub async fn get_clipboard_max_captured_at(
     state: State<'_, ClipboardHistoryState>,
 ) -> Result<i64, String> {
     state.max_captured_at()
+}
+
+// --- Test Users (PII substitution pool) ---
+
+#[tauri::command]
+pub async fn list_test_users(
+    state: State<'_, TestUsersState>,
+) -> Result<Vec<TestUser>, String> {
+    state.list_all()
+}
+
+#[tauri::command]
+pub async fn upsert_test_user(
+    state: State<'_, TestUsersState>,
+    user: TestUser,
+) -> Result<i64, String> {
+    state.upsert(&user)
+}
+
+#[tauri::command]
+pub async fn delete_test_user(
+    state: State<'_, TestUsersState>,
+    id: i64,
+) -> Result<(), String> {
+    state.delete(id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_test_user_enabled(
+    state: State<'_, TestUsersState>,
+    id: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    state.set_enabled(id, enabled)
 }

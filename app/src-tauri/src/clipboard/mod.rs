@@ -14,6 +14,7 @@ pub mod hotkey;
 pub mod listener;
 #[cfg(windows)]
 pub mod paste;
+pub mod pii;
 
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -44,7 +45,12 @@ impl ForegroundCapture {
 ///
 /// Captures the prior foreground HWND first so the paste path can return
 /// focus + synthesize Ctrl+V into whichever app the user was typing in.
-pub fn show_clipboard_window(app: &AppHandle) {
+///
+/// `initial_filter` is forwarded to the frontend via the emitted
+/// `clipboard-window-shown` event payload. `None` keeps the existing
+/// behavior (reset to "all"); `Some("pinned")` is used by Win+Shift+V to
+/// land directly on the pinned filter.
+pub fn show_clipboard_window(app: &AppHandle, initial_filter: Option<&str>) {
     let Some(w) = app.get_webview_window("clipboard-manager") else {
         return;
     };
@@ -83,5 +89,8 @@ pub fn show_clipboard_window(app: &AppHandle) {
         let _ = w.show();
     }
     let _ = w.set_focus();
-    let _ = app.emit("clipboard-window-shown", ());
+    let _ = app.emit(
+        "clipboard-window-shown",
+        serde_json::json!({ "initialFilter": initial_filter }),
+    );
 }

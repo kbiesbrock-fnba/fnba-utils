@@ -28,6 +28,17 @@ fn main() {
     };
 
     let history = fnba_utils_lib::clipboard_state::load();
+    let test_users = std::sync::Arc::new(fnba_utils_lib::test_users_state::load());
+
+    // Install the test-user picker BEFORE spawning the listener so the very
+    // first capture already has access to the substitution pool. The closure
+    // owns a clone of the Arc so it outlives this scope.
+    {
+        let pool = test_users.clone();
+        fnba_utils_lib::clipboard_listener::install_test_user_picker(move || {
+            pool.pick_random_enabled().ok().flatten()
+        });
+    }
 
     let (tx, mut rx) =
         tokio::sync::mpsc::unbounded_channel::<fnba_utils_lib::clipboard_state::NewClipboardEntry>();

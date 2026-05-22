@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { ClipboardEntrySummary } from "@/lib/tauri";
 
 const props = defineProps<{
@@ -7,11 +7,14 @@ const props = defineProps<{
   selected: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   (e: "select"): void;
   (e: "togglePin"): void;
   (e: "delete"): void;
   (e: "open"): void;
+  (e: "pasteOriginal"): void;
+  (e: "copyObfuscated"): void;
+  (e: "copyOriginal"): void;
 }>();
 
 const ageLabel = computed(() => humanAgo(props.entry.capturedAt));
@@ -20,6 +23,51 @@ const sourceLabel = computed(() => {
   if (!s) return "";
   return s.replace(/\.exe$/i, "");
 });
+
+// --- Right-click context menu ---
+
+const menuOpen = ref(false);
+const menuX = ref(0);
+const menuY = ref(0);
+
+function openContextMenu(e: MouseEvent) {
+  e.preventDefault();
+  emit("select");
+  menuX.value = e.clientX;
+  menuY.value = e.clientY;
+  menuOpen.value = true;
+  document.addEventListener("click", onOutsideClick, true);
+  document.addEventListener("keydown", onMenuKey);
+}
+
+function closeMenu() {
+  menuOpen.value = false;
+  document.removeEventListener("click", onOutsideClick, true);
+  document.removeEventListener("keydown", onMenuKey);
+}
+
+function onOutsideClick() {
+  closeMenu();
+}
+
+function onMenuKey(e: KeyboardEvent) {
+  if (e.key === "Escape") closeMenu();
+}
+
+onBeforeUnmount(closeMenu);
+
+function runAction(action: "open" | "pasteOriginal" | "copyObfuscated" | "copyOriginal" | "togglePin" | "delete") {
+  closeMenu();
+  // Switch explicitly so Vue's emit overloads narrow to a literal event name.
+  switch (action) {
+    case "open": emit("open"); break;
+    case "pasteOriginal": emit("pasteOriginal"); break;
+    case "copyObfuscated": emit("copyObfuscated"); break;
+    case "copyOriginal": emit("copyOriginal"); break;
+    case "togglePin": emit("togglePin"); break;
+    case "delete": emit("delete"); break;
+  }
+}
 
 function humanAgo(epoch: number): string {
   const m = Math.floor((Date.now() - epoch) / 60_000);
@@ -37,6 +85,7 @@ function humanAgo(epoch: number): string {
     :class="{ selected, sensitive: entry.sensitive }"
     @click="$emit('select')"
     @dblclick="$emit('open')"
+    @contextmenu="openContextMenu"
   >
     <div class="thumb" v-if="entry.kind === 'image' && entry.thumbBase64">
       <img :src="`data:image/png;base64,${entry.thumbBase64}`" alt="" />
@@ -48,12 +97,8 @@ function humanAgo(epoch: number): string {
     </div>
 
     <div class="body">
-      <div class="preview" :class="{ masked: entry.sensitive }">
-        <template v-if="entry.sensitive">
-          <span class="lock" title="Sensitive entry">[locked]</span>
-          <span class="masked-text">{{ "•".repeat(12) }}</span>
-        </template>
-        <template v-else-if="entry.kind === 'image'">
+      <div class="preview" :class="{ obfuscated: entry.sensitive }">
+        <template v-if="entry.kind === 'image' && !entry.textPreview">
           {{ entry.width }}x{{ entry.height }} image
         </template>
         <template v-else>
@@ -61,6 +106,9 @@ function humanAgo(epoch: number): string {
         </template>
       </div>
       <div class="meta">
+        <span v-if="entry.sensitive" class="pii-tag" :title="entry.piiKinds.join(', ') || 'sensitive'">
+          {{ entry.piiKinds.length ? entry.piiKinds.join(' · ') : 'sensitive' }}
+        </span>
         <span v-if="entry.pinned" class="pin-tag" title="Pinned">pinned</span>
         <span class="age">{{ ageLabel }}</span>
         <span v-if="sourceLabel" class="source">{{ sourceLabel }}</span>
@@ -84,6 +132,38 @@ function humanAgo(epoch: number): string {
       </button>
     </div>
   </li>
+
+  <Teleport to="body">
+    <ul
+      v-if="menuOpen"
+      class="ctx-menu"
+      :style="{ left: menuX + 'px', top: menuY + 'px' }"
+      @click.stop
+      @mousedown.stop
+    >
+      <li @click="runAction('open')">
+        {{ entry.sensitive ? "Paste obfuscated" : "Paste" }}
+        <kbd>Enter</kbd>
+      </li>
+      <li v-if="entry.sensitive" @click="runAction('pasteOriginal')" class="danger">
+        Paste original
+        <kbd>Ctrl+Shift+Enter</kbd>
+      </li>
+      <li @click="runAction('copyObfuscated')">
+        {{ entry.sensitive ? "Copy obfuscated" : "Copy" }}
+        <kbd>Ctrl+Enter</kbd>
+      </li>
+      <li v-if="entry.sensitive" @click="runAction('copyOriginal')" class="danger">
+        Copy original
+        <kbd>Ctrl+Alt+Enter</kbd>
+      </li>
+      <li class="separator"></li>
+      <li @click="runAction('togglePin')">
+        {{ entry.pinned ? "Unpin" : "Pin" }}
+      </li>
+      <li @click="runAction('delete')" class="danger">Delete</li>
+    </ul>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -104,8 +184,11 @@ function humanAgo(epoch: number): string {
   background: rgba(96, 165, 250, 0.18);
   border-color: rgba(96, 165, 250, 0.5);
 }
-.row.sensitive .preview {
-  color: rgba(255, 200, 130, 0.85);
+.row.sensitive {
+  border-left: 2px solid rgba(255, 200, 130, 0.5);
+}
+.row.sensitive .preview.obfuscated {
+  color: rgba(255, 200, 130, 0.95);
   font-style: italic;
 }
 
@@ -146,17 +229,6 @@ function humanAgo(epoch: number): string {
   text-overflow: ellipsis;
   word-break: break-word;
 }
-.lock {
-  margin-right: 6px;
-  color: rgba(255, 200, 130, 0.9);
-  font-style: normal;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.masked-text {
-  letter-spacing: 4px;
-}
 .meta {
   display: flex;
   gap: 8px;
@@ -164,6 +236,15 @@ function humanAgo(epoch: number): string {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.5);
   align-items: center;
+}
+.pii-tag {
+  color: rgba(255, 200, 130, 0.95);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  background: rgba(255, 200, 130, 0.12);
+  padding: 1px 6px;
+  border-radius: 999px;
 }
 .pin-tag {
   color: rgba(250, 204, 21, 0.85);
@@ -197,5 +278,58 @@ function humanAgo(epoch: number): string {
 }
 .icon-btn.danger:hover {
   color: rgba(248, 113, 113, 0.95);
+}
+
+/* Context menu */
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  margin: 0;
+  padding: 4px;
+  min-width: 220px;
+  list-style: none;
+  background: rgba(20, 24, 33, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: rgba(255, 255, 255, 0.9);
+}
+.ctx-menu li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  gap: 16px;
+}
+.ctx-menu li:hover {
+  background: rgba(96, 165, 250, 0.18);
+}
+.ctx-menu li.danger {
+  color: rgba(255, 200, 130, 0.95);
+}
+.ctx-menu li.danger:hover {
+  background: rgba(255, 200, 130, 0.14);
+}
+.ctx-menu li.separator {
+  height: 1px;
+  padding: 0;
+  margin: 4px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: default;
+}
+.ctx-menu li.separator:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ctx-menu kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 </style>

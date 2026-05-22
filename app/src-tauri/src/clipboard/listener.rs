@@ -10,10 +10,71 @@
 //!
 //! On non-Windows platforms this module is a no-op so the crate still builds.
 
+use crate::clipboard::pii;
 use crate::state::clipboard_history::{ClipboardKind, NewClipboardEntry};
+use crate::state::test_users::TestUser;
+use std::sync::OnceLock;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub type ClipboardEventSender = UnboundedSender<NewClipboardEntry>;
+
+/// Callback the host process installs so the listener thread can pick a test
+/// user without depending on Tauri State. Set once at startup by either
+/// `bin/clipd.rs` (daemon) or `lib.rs` (UI process).
+type TestUserPicker = Box<dyn Fn() -> Option<TestUser> + Send + Sync>;
+static TEST_USER_PICKER: OnceLock<TestUserPicker> = OnceLock::new();
+
+/// Install the test-user picker used by the PII substitutor. Subsequent calls
+/// are no-ops (first wins) — both `clipd` and `fnba-utils` may try to set this
+/// when running the listener pipeline; either is fine.
+pub fn install_test_user_picker<F>(f: F)
+where
+    F: Fn() -> Option<TestUser> + Send + Sync + 'static,
+{
+    let _ = TEST_USER_PICKER.set(Box::new(f));
+}
+
+#[allow(dead_code)] // Only called from the windows-only `read_clipboard_snapshot`.
+fn current_test_user() -> Option<TestUser> {
+    TEST_USER_PICKER.get().and_then(|p| p())
+}
+
+/// Run PII scan + substitution on a captured text projection. Returns
+/// `(is_pii, obfuscated_text, test_user_id, pii_kinds)`. When PII is detected
+/// we **also replace the OS clipboard** with the obfuscated text — that way
+/// an immediate Ctrl+V (without ever opening Win+V) pastes the safe version.
+/// The original is still preserved in the DB and reachable via
+/// `Ctrl+Shift+Enter` from the manager window.
+#[allow(dead_code)] // Only called from the windows-only `read_clipboard_snapshot`.
+fn scan_and_substitute(text: &str) -> (bool, Option<String>, Option<i64>, Vec<String>) {
+    let res = pii::scan(text);
+    if !res.is_sensitive() {
+        return (false, None, None, Vec::new());
+    }
+    let kinds: Vec<String> = res.kinds().into_iter().map(|k| k.as_str().to_string()).collect();
+    let user = current_test_user();
+    let obfuscated = pii::substitute(text, &res.detections, user.as_ref());
+    let user_id = user.and_then(|u| u.id);
+
+    // Proactive protection: write the obfuscated text back to the OS clipboard
+    // before returning. Mark our own write so the next WM_CLIPBOARDUPDATE
+    // doesn't re-capture the obfuscation as a fresh entry.
+    replace_clipboard_with_obfuscated(&obfuscated);
+
+    (true, Some(obfuscated), user_id, kinds)
+}
+
+#[cfg(windows)]
+fn replace_clipboard_with_obfuscated(obfuscated: &str) {
+    let hash = win::compute_text_hash(obfuscated);
+    win::mark_self_write(hash);
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(obfuscated);
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_clipboard_with_obfuscated(_obfuscated: &str) {}
 
 #[cfg(windows)]
 pub fn spawn(tx: ClipboardEventSender) {
@@ -172,7 +233,7 @@ mod win {
             }
 
             let formats = enumerate_formats();
-            let sensitive = detect_sensitive(&formats);
+            let os_sensitive = detect_sensitive(&formats);
             let source_process = read_source_process();
 
             let html_format_id = RegisterClipboardFormatW(w!("HTML Format"));
@@ -205,7 +266,10 @@ mod win {
                         width: Some(w),
                         height: Some(h),
                         byte_size,
-                        sensitive,
+                        sensitive: os_sensitive,
+                        obfuscated_text: None,
+                        test_user_id: None,
+                        pii_kinds: Vec::new(),
                         source_process,
                         content_hash: hash,
                     });
@@ -214,6 +278,8 @@ mod win {
 
             if let Some(html_raw) = html {
                 let plain = text.clone().unwrap_or_else(|| strip_html(&html_raw));
+                let (has_pii, obfuscated, test_user_id, pii_kinds) =
+                    super::scan_and_substitute(&plain);
                 let hash = hash_bytes(&[b"html:", html_raw.as_bytes()]);
                 let byte_size = html_raw.len() as i64;
                 return Some(NewClipboardEntry {
@@ -225,7 +291,10 @@ mod win {
                     width: None,
                     height: None,
                     byte_size,
-                    sensitive,
+                    sensitive: os_sensitive || has_pii,
+                    obfuscated_text: obfuscated,
+                    test_user_id,
+                    pii_kinds,
                     source_process,
                     content_hash: hash,
                 });
@@ -235,6 +304,8 @@ mod win {
                 if t.trim().is_empty() {
                     return None;
                 }
+                let (has_pii, obfuscated, test_user_id, pii_kinds) =
+                    super::scan_and_substitute(&t);
                 let hash = hash_bytes(&[b"txt:", t.as_bytes()]);
                 let byte_size = t.len() as i64;
                 return Some(NewClipboardEntry {
@@ -246,7 +317,10 @@ mod win {
                     width: None,
                     height: None,
                     byte_size,
-                    sensitive,
+                    sensitive: os_sensitive || has_pii,
+                    obfuscated_text: obfuscated,
+                    test_user_id,
+                    pii_kinds,
                     source_process,
                     content_hash: hash,
                 });
@@ -434,6 +508,14 @@ mod win {
         encode_png_rgba(thumb.as_raw(), new_w, new_h)
     }
 
+    /// Public counterpart of `hash_bytes` for callers in `clipboard::paste`
+    /// that need to mark a clipboard self-write before putting obfuscated
+    /// text on the clipboard. Must use the exact same prefix the listener
+    /// uses for plain-text captures so the dedupe hash matches.
+    pub fn compute_text_hash(text: &str) -> String {
+        hash_bytes(&[b"txt:", text.as_bytes()])
+    }
+
     fn hash_bytes(parts: &[&[u8]]) -> String {
         let mut h = Sha256::new();
         for p in parts {
@@ -453,4 +535,9 @@ mod win {
 pub fn mark_self_write(_hash: String) {}
 
 #[cfg(windows)]
-pub use win::mark_self_write;
+pub use win::{compute_text_hash, mark_self_write};
+
+#[cfg(not(windows))]
+pub fn compute_text_hash(_text: &str) -> String {
+    String::new()
+}

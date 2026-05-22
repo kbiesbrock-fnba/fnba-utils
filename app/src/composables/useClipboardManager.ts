@@ -126,19 +126,23 @@ export function useClipboardManager() {
     }
   }
 
-  async function paste(opts: { simulate: boolean }) {
+  async function paste(opts: { simulate: boolean; original: boolean }) {
     const entry = selected.value;
     if (!entry) return;
     try {
-      if (entry.sensitive) {
-        const token = await requestSensitiveReveal(entry.id);
-        await pasteClipboardEntry(entry.id, {
-          simulatePaste: opts.simulate,
-          revealToken: token.token,
-        });
-      } else {
-        await pasteClipboardEntry(entry.id, { simulatePaste: opts.simulate });
+      // Only sensitive + paste_original needs the reveal-token round-trip.
+      // The default (paste_original=false) writes the stored obfuscated text
+      // directly — no token required.
+      let revealToken: string | undefined;
+      if (entry.sensitive && opts.original) {
+        const t = await requestSensitiveReveal(entry.id);
+        revealToken = t.token;
       }
+      await pasteClipboardEntry(entry.id, {
+        simulatePaste: opts.simulate,
+        pasteOriginal: opts.original,
+        revealToken,
+      });
       await hideClipboardWindow();
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
@@ -194,11 +198,12 @@ export function useClipboardManager() {
     // to in-process events for new entries. Instead, poll the DB for the
     // latest captured_at while the window is open and reload when it bumps.
     pollTimer = setInterval(() => void pollForNew(), POLL_INTERVAL_MS);
-    unsubShown = await onClipboardWindowShown(() => {
+    unsubShown = await onClipboardWindowShown((p) => {
       // When the window is reopened via the global shortcut, reset the
-      // query so the user lands on the freshest entries.
+      // query so the user lands on the freshest entries. Win+Shift+V sends
+      // initialFilter="pinned" to land directly on the pinned view.
       query.value = "";
-      filter.value = "all";
+      filter.value = p?.initialFilter === "pinned" ? "pinned" : "all";
       void load();
     });
   });

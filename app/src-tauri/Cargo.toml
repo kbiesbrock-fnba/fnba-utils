@@ -1,6 +1,6 @@
 [package]
 name = "fnba-utils"
-version = "1.11.0"
+version = "1.12.3"
 description = "FNBA Utils command palette"
 authors = ["kbiesbrock"]
 edition = "2021"
@@ -38,6 +38,9 @@ sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 fuzzy-matcher = "0.3"
 winreg = "0.52"
+regex = "1"
+once_cell = "1"
+rand = "0.8"
 
 [[bin]]
 name = "fnba-clipd"

@@ -358,15 +358,27 @@ export interface IssueDetail {
 
 export type ClipboardKind = "text" | "html" | "image";
 
+export type PiiKind =
+  | "ssn"
+  | "card"
+  | "routing"
+  | "account"
+  | "dob"
+  | "email"
+  | "phone";
+
 export interface ClipboardEntrySummary {
   id: number;
   kind: ClipboardKind;
+  /** Obfuscated preview for sensitive rows; original for non-sensitive. */
   textPreview: string | null;
   thumbBase64: string | null;
   width: number | null;
   height: number | null;
   byteSize: number;
   sensitive: boolean;
+  /** Detected PII categories ("ssn", "card", ...). Empty for non-sensitive rows. */
+  piiKinds: PiiKind[];
   sourceProcess: string | null;
   capturedAt: number;
   pinned: boolean;
@@ -375,6 +387,8 @@ export interface ClipboardEntrySummary {
 export interface ClipboardEntryFull {
   id: number;
   kind: ClipboardKind;
+  /** Original captured text. Only crosses the bridge — never displayed
+   *  directly for sensitive rows. */
   textContent: string | null;
   htmlContent: string | null;
   imageBase64: string | null;
@@ -382,6 +396,13 @@ export interface ClipboardEntryFull {
   height: number | null;
   byteSize: number;
   sensitive: boolean;
+  /** Test-user-substituted text. The default paste path uses this for
+   *  sensitive entries — no reveal token needed. */
+  obfuscatedText: string | null;
+  /** Which Test User was used for substitution (NULL if no test users were
+   *  defined at capture time and the mask-style fallback was used instead). */
+  testUserId: number | null;
+  piiKinds: PiiKind[];
   sourceProcess: string | null;
   capturedAt: number;
   pinned: boolean;
@@ -403,7 +424,35 @@ export interface ClipboardRevealToken {
 
 export interface ClipboardPasteOptions {
   simulatePaste: boolean;
+  /** When true on a sensitive entry, paste the original (requires revealToken).
+   *  When false/omitted, paste the obfuscated/substituted text. Ignored for
+   *  non-sensitive entries. */
+  pasteOriginal?: boolean;
   revealToken?: string;
+}
+
+// --- Test Users (PII substitution pool) ---
+
+export interface TestCard {
+  number: string;
+  expiry: string;
+  cvv: string;
+}
+
+export interface TestUser {
+  id: number | null;
+  label: string;
+  firstName: string | null;
+  lastName: string | null;
+  ssn: string | null;
+  dob: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  accountNum: string | null;
+  routingNum: string | null;
+  cards: TestCard[];
+  enabled: boolean;
 }
 
 export interface StandupPanelState {
@@ -1448,16 +1497,24 @@ async function mockInvoke<T>(
       const id = args?.id as number;
       const found = mockClipboardEntries().find((e) => e.id === id);
       if (!found) return null as T;
+      // Mock obfuscated text: for sensitive rows, expose a fake substituted
+      // version + a fake "original" so the UI can demo the toggle.
+      const original = found.sensitive
+        ? `[mock original ${id}: SSN 123-45-6789]`
+        : found.textPreview;
       return {
         ...found,
-        textContent: found.textPreview,
+        textContent: original,
         htmlContent: found.kind === "html" ? `<p>${found.textPreview}</p>` : null,
         imageBase64: null,
+        obfuscatedText: found.sensitive ? found.textPreview : null,
+        testUserId: found.sensitive ? 1 : null,
         contentHash: `mock-${id}`,
       } as T;
     }
     case "paste_clipboard_entry": {
       await delay(40);
+      console.log("[mock] paste_clipboard_entry", args);
       return undefined as T;
     }
     case "request_sensitive_reveal": {
@@ -1472,7 +1529,9 @@ async function mockInvoke<T>(
     case "pin_clipboard_entry":
     case "clear_clipboard_history":
     case "set_clipboard_settings":
-    case "hide_clipboard_window": {
+    case "hide_clipboard_window":
+    case "delete_test_user":
+    case "set_test_user_enabled": {
       await delay(20);
       return undefined as T;
     }
@@ -1488,6 +1547,15 @@ async function mockInvoke<T>(
     case "get_clipboard_max_captured_at": {
       await delay(10);
       return (mockClipboardEntries()[0]?.capturedAt ?? 0) as T;
+    }
+    case "list_test_users": {
+      await delay(30);
+      return mockTestUsers() as T;
+    }
+    case "upsert_test_user": {
+      await delay(40);
+      const user = args?.user as TestUser;
+      return ((user?.id ?? Math.floor(Math.random() * 10_000) + 100) as number) as T;
     }
 
     default:
@@ -1507,6 +1575,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       height: null,
       byteSize: 78,
       sensitive: false,
+      piiKinds: [],
       sourceProcess: "ssms.exe",
       capturedAt: now - 1000 * 30,
       pinned: false,
@@ -1520,6 +1589,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       height: null,
       byteSize: 42,
       sensitive: false,
+      piiKinds: [],
       sourceProcess: "WindowsTerminal.exe",
       capturedAt: now - 1000 * 60 * 5,
       pinned: true,
@@ -1533,6 +1603,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       height: null,
       byteSize: 180,
       sensitive: false,
+      piiKinds: [],
       sourceProcess: "chrome.exe",
       capturedAt: now - 1000 * 60 * 12,
       pinned: false,
@@ -1547,6 +1618,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       height: 1080,
       byteSize: 245_000,
       sensitive: false,
+      piiKinds: [],
       sourceProcess: "SnippingTool.exe",
       capturedAt: now - 1000 * 60 * 25,
       pinned: false,
@@ -1554,13 +1626,14 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
     {
       id: 5,
       kind: "text",
-      textPreview: "•••••••••••",
+      textPreview: "Customer SSN 900-11-1111 on file",
       thumbBase64: null,
       width: null,
       height: null,
-      byteSize: 24,
+      byteSize: 32,
       sensitive: true,
-      sourceProcess: "1Password.exe",
+      piiKinds: ["ssn"],
+      sourceProcess: "ssms.exe",
       capturedAt: now - 1000 * 60 * 47,
       pinned: false,
     },
@@ -1573,6 +1646,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       height: null,
       byteSize: 26,
       sensitive: false,
+      piiKinds: [],
       sourceProcess: "outlook.exe",
       capturedAt: now - 1000 * 60 * 60 * 2,
       pinned: false,
@@ -1587,9 +1661,59 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       height: null,
       byteSize: 84,
       sensitive: false,
+      piiKinds: [],
       sourceProcess: "ssms.exe",
       capturedAt: now - 1000 * 60 * 60 * 4,
       pinned: false,
+    },
+    {
+      id: 8,
+      kind: "text",
+      textPreview: "Card **** **** **** 4242, DOB 1990-01-15",
+      thumbBase64: null,
+      width: null,
+      height: null,
+      byteSize: 64,
+      sensitive: true,
+      piiKinds: ["card", "dob"],
+      sourceProcess: "chrome.exe",
+      capturedAt: now - 1000 * 60 * 90,
+      pinned: false,
+    },
+  ];
+}
+
+function mockTestUsers(): TestUser[] {
+  return [
+    {
+      id: 1,
+      label: "Test Alice Tester",
+      firstName: "Alice",
+      lastName: "Tester",
+      ssn: "900-11-1111",
+      dob: "1990-01-15",
+      email: "alice.tester@test.fnba.local",
+      phone: "555-010-0001",
+      address: "100 Test Lane, Springfield, IL 62701",
+      accountNum: "100010000001",
+      routingNum: "021000021",
+      cards: [{ number: "4242424242424242", expiry: "12/29", cvv: "123" }],
+      enabled: true,
+    },
+    {
+      id: 2,
+      label: "Test Bob Sample",
+      firstName: "Bob",
+      lastName: "Sample",
+      ssn: "900-22-2222",
+      dob: "1985-03-22",
+      email: "bob.sample@test.fnba.local",
+      phone: "555-010-0002",
+      address: "110 Test Lane, Springfield, IL 62701",
+      accountNum: "100010000002",
+      routingNum: "021000021",
+      cards: [{ number: "5555555555554444", expiry: "11/28", cvv: "234" }],
+      enabled: true,
     },
   ];
 }
@@ -2005,6 +2129,24 @@ export function getClipboardMaxCapturedAt(): Promise<number> {
   return invoke<number>("get_clipboard_max_captured_at");
 }
 
+// --- Test Users public API ---
+
+export function listTestUsers(): Promise<TestUser[]> {
+  return invoke<TestUser[]>("list_test_users");
+}
+
+export function upsertTestUser(user: TestUser): Promise<number> {
+  return invoke<number>("upsert_test_user", { user });
+}
+
+export function deleteTestUser(id: number): Promise<void> {
+  return invoke<void>("delete_test_user", { id });
+}
+
+export function setTestUserEnabled(id: number, enabled: boolean): Promise<void> {
+  return invoke<void>("set_test_user_enabled", { id, enabled });
+}
+
 /** Fires whenever a new clipboard entry is captured + persisted. */
 export async function onClipboardEntryAdded(
   handler: (id: number) => void,
@@ -2019,14 +2161,22 @@ export async function onClipboardEntryAdded(
 }
 
 /** Fires when the clipboard window is shown via the global shortcut. */
+export interface ClipboardWindowShownPayload {
+  initialFilter?: string | null;
+}
+
 export async function onClipboardWindowShown(
-  handler: () => void,
+  handler: (payload: ClipboardWindowShownPayload) => void,
 ): Promise<() => void> {
   if (isTauri) {
     const { listen } = await import("@tauri-apps/api/event");
-    return listen("clipboard-window-shown", () => handler());
+    return listen<ClipboardWindowShownPayload>(
+      "clipboard-window-shown",
+      (e) => handler(e.payload ?? {}),
+    );
   }
-  const listener = () => handler();
+  const listener = (e: Event) =>
+    handler((e as CustomEvent<ClipboardWindowShownPayload>).detail ?? {});
   window.addEventListener("mock-clipboard-window-shown", listener);
   return () => window.removeEventListener("mock-clipboard-window-shown", listener);
 }

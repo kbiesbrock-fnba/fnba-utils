@@ -46,6 +46,11 @@ impl ClipboardKind {
 /// Lightweight row used in the list view — image payloads are excluded; only
 /// the small thumbnail (base64 PNG) is sent so the list can render previews
 /// without dragging full screenshots over the IPC bridge.
+///
+/// For sensitive entries, `text_preview` shows the **obfuscated** text so the
+/// UI list never leaks the original. The original lives in `text_content` on
+/// the full entry and only crosses the bridge when an explicit reveal token
+/// is consumed by the paste path.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntrySummary {
@@ -57,6 +62,7 @@ pub struct ClipboardEntrySummary {
     pub height: Option<u32>,
     pub byte_size: i64,
     pub sensitive: bool,
+    pub pii_kinds: Vec<String>,
     pub source_process: Option<String>,
     pub captured_at: i64,
     pub pinned: bool,
@@ -64,6 +70,12 @@ pub struct ClipboardEntrySummary {
 
 /// Full entry returned by `get_clipboard_entry`. Image bytes are base64-encoded
 /// so the bridge stays uniform across text/html/image kinds.
+///
+/// `text_content` / `html_content` always hold the **original** captured text.
+/// `obfuscated_text` holds the test-user-substituted version (or a keep-last-4
+/// mask, if no test user was available at capture time). The paste path
+/// chooses between them based on the explicit `pasteOriginal` flag — original
+/// requires a reveal token round-trip, obfuscated does not.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardEntryFull {
@@ -76,6 +88,9 @@ pub struct ClipboardEntryFull {
     pub height: Option<u32>,
     pub byte_size: i64,
     pub sensitive: bool,
+    pub obfuscated_text: Option<String>,
+    pub test_user_id: Option<i64>,
+    pub pii_kinds: Vec<String>,
     pub source_process: Option<String>,
     pub captured_at: i64,
     pub pinned: bool,
@@ -93,6 +108,9 @@ pub struct NewClipboardEntry {
     pub height: Option<u32>,
     pub byte_size: i64,
     pub sensitive: bool,
+    pub obfuscated_text: Option<String>,
+    pub test_user_id: Option<i64>,
+    pub pii_kinds: Vec<String>,
     pub source_process: Option<String>,
     pub content_hash: String,
 }
@@ -155,20 +173,23 @@ impl ClipboardHistoryState {
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS entries (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind            TEXT NOT NULL,
-                text_content    TEXT,
-                html_content    TEXT,
-                image_png       BLOB,
-                thumb_png       BLOB,
-                width           INTEGER,
-                height          INTEGER,
-                byte_size       INTEGER NOT NULL,
-                sensitive       INTEGER NOT NULL DEFAULT 0,
-                source_process  TEXT,
-                captured_at     INTEGER NOT NULL,
-                pinned          INTEGER NOT NULL DEFAULT 0,
-                content_hash    TEXT NOT NULL UNIQUE
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind             TEXT NOT NULL,
+                text_content     TEXT,
+                html_content     TEXT,
+                image_png        BLOB,
+                thumb_png        BLOB,
+                width            INTEGER,
+                height           INTEGER,
+                byte_size        INTEGER NOT NULL,
+                sensitive        INTEGER NOT NULL DEFAULT 0,
+                obfuscated_text  TEXT,
+                test_user_id     INTEGER,
+                pii_kinds        TEXT,
+                source_process   TEXT,
+                captured_at      INTEGER NOT NULL,
+                pinned           INTEGER NOT NULL DEFAULT 0,
+                content_hash     TEXT NOT NULL UNIQUE
             );
 
             CREATE INDEX IF NOT EXISTS idx_entries_captured_at ON entries(captured_at DESC);
@@ -180,11 +201,33 @@ impl ClipboardHistoryState {
                 value TEXT NOT NULL
             );
             ",
-        )
+        )?;
+
+        // Add PII columns to pre-existing DBs (CREATE TABLE IF NOT EXISTS is a
+        // no-op when the table already exists with the old schema).
+        let existing_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(entries)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (col, ddl) in [
+            ("obfuscated_text", "ALTER TABLE entries ADD COLUMN obfuscated_text TEXT"),
+            ("test_user_id", "ALTER TABLE entries ADD COLUMN test_user_id INTEGER"),
+            ("pii_kinds", "ALTER TABLE entries ADD COLUMN pii_kinds TEXT"),
+        ] {
+            if !existing_cols.iter().any(|c| c == col) {
+                conn.execute_batch(ddl)?;
+            }
+        }
+        Ok(())
     }
 
     /// Insert a new clipboard entry, or — if the content_hash already exists —
     /// bump its captured_at + source_process and return the existing id.
+    ///
+    /// On the Touched path we `COALESCE` the obfuscation fields so a re-copy
+    /// of the same text doesn't churn substitution (and doesn't reassign the
+    /// row's sticky test user, which would make the same record paste a
+    /// different fake identity each time).
     pub fn insert_or_touch(&self, entry: NewClipboardEntry) -> Result<InsertOutcome, String> {
         let mut conn = self.conn.lock().map_err(|e| format!("clipboard lock poisoned: {e}"))?;
         let tx = conn.transaction().map_err(map_db)?;
@@ -197,14 +240,30 @@ impl ClipboardHistoryState {
             .optional()
             .map_err(map_db)?;
         let now = epoch_ms_now();
+        let pii_kinds_csv = if entry.pii_kinds.is_empty() {
+            None
+        } else {
+            Some(entry.pii_kinds.join(","))
+        };
         let outcome = if let Some(id) = existing {
             tx.execute(
                 "UPDATE entries
                     SET captured_at = ?1,
                         source_process = COALESCE(?2, source_process),
-                        sensitive = ?3
-                  WHERE id = ?4",
-                params![now, entry.source_process, entry.sensitive as i64, id],
+                        sensitive = ?3,
+                        obfuscated_text = COALESCE(obfuscated_text, ?4),
+                        test_user_id    = COALESCE(test_user_id, ?5),
+                        pii_kinds       = COALESCE(pii_kinds, ?6)
+                  WHERE id = ?7",
+                params![
+                    now,
+                    entry.source_process,
+                    entry.sensitive as i64,
+                    entry.obfuscated_text,
+                    entry.test_user_id,
+                    pii_kinds_csv,
+                    id,
+                ],
             )
             .map_err(map_db)?;
             InsertOutcome::Touched(id)
@@ -212,9 +271,10 @@ impl ClipboardHistoryState {
             tx.execute(
                 "INSERT INTO entries
                     (kind, text_content, html_content, image_png, thumb_png,
-                     width, height, byte_size, sensitive, source_process,
+                     width, height, byte_size, sensitive, obfuscated_text,
+                     test_user_id, pii_kinds, source_process,
                      captured_at, pinned, content_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15)",
                 params![
                     entry.kind.as_str(),
                     entry.text_content,
@@ -225,6 +285,9 @@ impl ClipboardHistoryState {
                     entry.height,
                     entry.byte_size,
                     entry.sensitive as i64,
+                    entry.obfuscated_text,
+                    entry.test_user_id,
+                    pii_kinds_csv,
                     entry.source_process,
                     now,
                     entry.content_hash,
@@ -260,7 +323,8 @@ impl ClipboardHistoryState {
 
         let mut sql = String::from(
             "SELECT id, kind, text_content, thumb_png, width, height, byte_size,
-                    sensitive, source_process, captured_at, pinned
+                    sensitive, source_process, captured_at, pinned,
+                    obfuscated_text, pii_kinds
                FROM entries WHERE 1=1",
         );
         if kind_filter.is_some() {
@@ -356,7 +420,8 @@ impl ClipboardHistoryState {
         let row = conn
             .query_row(
                 "SELECT id, kind, text_content, html_content, image_png, width, height,
-                        byte_size, sensitive, source_process, captured_at, pinned, content_hash
+                        byte_size, sensitive, source_process, captured_at, pinned, content_hash,
+                        obfuscated_text, test_user_id, pii_kinds
                    FROM entries WHERE id = ?1",
                 params![id],
                 |r| {
@@ -368,6 +433,7 @@ impl ClipboardHistoryState {
                     });
                     let sensitive: i64 = r.get(8)?;
                     let pinned: i64 = r.get(11)?;
+                    let pii_kinds_raw: Option<String> = r.get(15)?;
                     Ok(ClipboardEntryFull {
                         id: r.get(0)?,
                         kind,
@@ -378,6 +444,9 @@ impl ClipboardHistoryState {
                         height: r.get::<_, Option<i64>>(6)?.map(|n| n as u32),
                         byte_size: r.get(7)?,
                         sensitive: sensitive != 0,
+                        obfuscated_text: r.get(13)?,
+                        test_user_id: r.get(14)?,
+                        pii_kinds: split_kinds(pii_kinds_raw),
                         source_process: r.get(9)?,
                         captured_at: r.get(10)?,
                         pinned: pinned != 0,
@@ -485,6 +554,11 @@ fn map_db(e: rusqlite::Error) -> String {
 
 /// Shared row → summary mapper used by `list`. The column order must match
 /// the SELECT in that query.
+///
+/// For sensitive rows, `text_preview` is sourced from `obfuscated_text` when
+/// available so the list view never exposes the original. Falls through to the
+/// original only when no obfuscated form exists (e.g. an image flagged by an
+/// OS-marker but never PII-scanned).
 fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardEntrySummary> {
     let kind: String = row.get(1)?;
     let text: Option<String> = row.get(2)?;
@@ -493,21 +567,40 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardEntrySum
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(b)
     });
-    let sensitive: i64 = row.get(7)?;
+    let sensitive_raw: i64 = row.get(7)?;
+    let sensitive = sensitive_raw != 0;
     let pinned: i64 = row.get(10)?;
+    let obfuscated: Option<String> = row.get(11)?;
+    let pii_kinds_raw: Option<String> = row.get(12)?;
+    let preview_src = if sensitive {
+        obfuscated.as_deref().or(text.as_deref())
+    } else {
+        text.as_deref()
+    };
     Ok(ClipboardEntrySummary {
         id: row.get(0)?,
         kind,
-        text_preview: text.map(|t| preview(&t, 240)),
+        text_preview: preview_src.map(|t| preview(t, 240)),
         thumb_base64,
         width: row.get::<_, Option<i64>>(4)?.map(|n| n as u32),
         height: row.get::<_, Option<i64>>(5)?.map(|n| n as u32),
         byte_size: row.get(6)?,
-        sensitive: sensitive != 0,
+        sensitive,
+        pii_kinds: split_kinds(pii_kinds_raw),
         source_process: row.get(8)?,
         captured_at: row.get(9)?,
         pinned: pinned != 0,
     })
+}
+
+fn split_kinds(raw: Option<String>) -> Vec<String> {
+    raw.map(|s| {
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn preview(text: &str, max_chars: usize) -> String {

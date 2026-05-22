@@ -1,5 +1,42 @@
 # Release Notes
 
+## v1.12.3 — 2026-05-22
+
+### Clipboard Manager: Win+Shift+V no longer fails to start on managed machines
+
+`Win+Shift+V` is now intercepted by the same low-level keyboard hook that already handles `Win+V`, instead of going through `RegisterHotKey`. On corporate machines where another agent (DLP, EDR, etc.) already owns the chord, `RegisterHotKey` was failing during setup and crashing fnba-utils at startup. The hook runs before hotkey dispatch and swallows the keystroke with `LRESULT(1)`, so whatever else claims the chord no longer matters. User-facing behavior is unchanged — Win+V still opens the full history, Win+Shift+V still opens pre-filtered to pinned.
+
+## v1.12.2 — 2026-05-22
+
+### Clipboard Manager: PII protection now applies to the OS clipboard immediately
+
+PII auto-protection no longer waits for the user to open Win+V. As soon as the daemon detects sensitive content in a fresh copy, it **rewrites the OS clipboard with the substituted ("test user") version** — so an immediate `Ctrl+V` straight from a copy already pastes the safe version, even if the user never opens the clipboard manager. The original is still preserved in history (Win+V then `Ctrl+Shift+Enter` retrieves it).
+
+A Windows toast notification fires each time the daemon auto-protects, listing the detected PII categories (e.g. "Detected PII (ssn, card). Clipboard replaced with safe test data."). The notification only fires when fnba-utils.exe is running; the protection itself is unconditional and runs in the daemon.
+
+## v1.12.1 — 2026-05-22
+
+### Clipboard Manager: Win+Shift+V jumps to pinned entries
+
+New `Win+Shift+V` global shortcut opens the Clipboard Manager already filtered to **Pinned**, so the entries you've explicitly kept around are one chord away. `Win+V` continues to open the full history (filter resets to All); the two chords share the same window, positioning, prior-foreground capture, and show+focus semantics — only the initial filter differs.
+
+## v1.12.0 — 2026-05-22
+
+### Clipboard Manager: PII detection + Test User substitution
+
+The clipboard daemon now scans every captured text/HTML entry for SSNs, credit/debit cards (Luhn-validated), bank account + ABA routing numbers, emails, phones, and DOBs. When a match is found, the entry is flagged sensitive and the daemon picks one Test User from a user-curated pool and stores a **substituted** version of the text alongside the original.
+
+- **Default paste is safe**: pressing `Enter` on a sensitive clipboard entry now pastes the substituted ("test user") version of the content — no reveal-token round-trip, no friction. Muscle-memory `Win+V` -> `Enter` can no longer leak a real SSN into Teams / Jira / a browser by accident.
+- **Paste original is deliberate**: `Ctrl+Shift+Enter` (or right-click -> "Paste original") pastes the captured original, gated by the existing single-use reveal token. `Ctrl+Alt+Enter` does the same as copy-only.
+- **Sticky Test User per record**: when an entry has multiple PII matches (SSN + DOB + email of one fake person), the same Test User's fields are used across all of them, so the substituted text stays coherent. Same paste every time.
+- **10 Test Users seeded on first run**: identities with fake-but-format-valid SSNs (900-block, IRS-reserved), Luhn-valid issuer test card numbers, ABA-valid routing, 555-010 fictional phones, and `@test.fnba.local` emails. Editable from the settings cog (⚙ -> Test Users…).
+- **Test Users panel** lets you add / edit / disable / delete identities. Each user can carry an SSN, DOB, email, phone, address, account #, routing #, and any number of cards (number / expiry / CVV).
+- **Mask-style fallback** when the Test User pool is empty or a field is blank: keep-last-4 obfuscation (`***-**-6789`, `**** **** **** 1111`, `k****@fnba.com`). The row is still flagged sensitive and the original is still gated.
+- **List view never leaks**: previews for sensitive rows now show the obfuscated text, not bullet dots. The original only crosses the IPC bridge when an explicit reveal-token + `pasteOriginal=true` are presented.
+- **Right-click context menu** on any clipboard row: Paste / Paste original / Copy / Copy original / Pin / Delete. Sensitive entries also list the detected PII categories as chips in the detail pane.
+
+Detection uses Luhn for cards and ABA checksum for routing numbers so random digit runs aren't flagged. Account numbers, DOBs, and unpunctuated SSNs require a nearby keyword ("account", "DOB", "SSN", "routing") to fire — false-positive rate matters more than recall in a code-heavy environment.
+
 ## v1.11.0 — 2026-05-22
 
 ### Clipboard Manager: Win+V
@@ -9,7 +46,7 @@ New palette command **Clipboard** plus a dedicated `Win+V` global shortcut opens
 - **Captures text, HTML, and images** via a hidden Win32 `AddClipboardFormatListener` window — event-driven, no polling. Image entries are stored as PNG with a 256px thumbnail; HTML entries keep both the fragment and a plain-text fallback for search.
 - **Sensitivity-aware**: entries flagged by source apps (1Password, KeePass, Bitwarden — anything that sets `ExcludeClipboardContentFromMonitoring`, `CanIncludeInClipboardHistory`, or `CanUploadToCloudClipboard`) are stored but rendered as `••••••` and require an explicit reveal-token round-trip before they can be pasted.
 - **Paste back into the prior app**: pressing Enter restores the foreground window that was active before the launcher and synthesizes Ctrl+V via `SendInput`. Ctrl+Enter sets the clipboard without auto-pasting.
-- **Replaces the native Windows clipboard history**: hooks `Win+V` via `WH_KEYBOARD_LL` and swallows it before the shell sees it, so our window opens instead of the OS popup. Hotkey is always *show + focus + select-all-in-search*, never toggle — pressing it while open just re-focuses the search. `Win+Shift+V` is left alone for PowerToys Advanced Paste and similar tools.
+- **Replaces the native Windows clipboard history**: hooks `Win+V` via `WH_KEYBOARD_LL` and swallows it before the shell sees it, so our window opens instead of the OS popup. Hotkey is always *show + focus + select-all-in-search*, never toggle — pressing it while open just re-focuses the search.
 - **Capture runs as a separate daemon (`fnba-clipd.exe`)**: a tiny background process owns the clipboard listener + SQLite writes and is registered under `HKCU\…\Run` on first fnba-utils launch, so history keeps accruing even when fnba-utils itself is closed. fnba-utils only owns the search/display UI and reads from the shared DB at `%LOCALAPPDATA%\fnba-utils\clipboard.db`. The daemon is singleton-protected (TCP port 53217 bind) so duplicate launches are no-ops.
 - **Fuzzy search** in the clipboard list — skim/fzf-style ranking (`fuzzy-matcher` crate), so subsequence and typo matches surface naturally. Pinned entries still float to the top; pool capped at the 5 000 most-recent rows so ranking stays fast at any history size.
 - **Dedupe by content hash** — repeating a copy bumps the existing row's timestamp instead of creating duplicates. Pinned entries always sort first and are never auto-pruned.

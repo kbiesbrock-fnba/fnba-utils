@@ -1,16 +1,19 @@
-//! Low-level keyboard hook for `Win+V`.
+//! Low-level keyboard hook for `Win+V` and `Win+Shift+V`.
 //!
 //! We deliberately replace the native Windows clipboard history (also bound
-//! to `Win+V`) with our own. `RegisterHotKey` can't take the chord — the
-//! Windows shell already owns it, and that API is per-process with no
-//! force-overtake. `SetWindowsHookEx(WH_KEYBOARD_LL)` runs *before* hotkey
-//! dispatch, so our hook sees `Win+V` first, fires our show-clipboard
-//! handler, and returns `LRESULT(1)` to swallow the keystroke before the
-//! shell ever sees it. This is the same approach Ditto and other clipboard
-//! managers use to override the native shortcut.
+//! to `Win+V`) with our own. `RegisterHotKey` can't take either chord — the
+//! Windows shell already owns `Win+V`, and on managed corporate machines
+//! `Win+Shift+V` is frequently claimed by DLP / EDR agents, both of which
+//! cause `RegisterHotKey` to fail with `ERROR_HOTKEY_ALREADY_REGISTERED`.
+//! `SetWindowsHookEx(WH_KEYBOARD_LL)` runs *before* hotkey dispatch, so our
+//! hook sees the chord first, fires the show-clipboard handler, and returns
+//! `LRESULT(1)` to swallow the keystroke before the shell (or any other
+//! registered hotkey owner) ever sees it. This is the same approach Ditto
+//! and other clipboard managers use to override system shortcuts.
 //!
-//! We only intercept `Win+V` with Shift *not* held, so `Win+Shift+V` (used by
-//! PowerToys Advanced Paste, etc.) continues to work normally.
+//! Both `Win+V` and `Win+Shift+V` are intercepted here. The Shift modifier
+//! selects the initial filter (`None` = all entries, `Some("pinned")` =
+//! pinned only) so a single hook handles both chords without races.
 //!
 //! Implementation notes:
 //! - WH_KEYBOARD_LL does not require DLL injection; the hook callback fires
@@ -83,17 +86,19 @@ mod win {
             let msg = wparam.0 as u32;
             if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
                 let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-                if info.vkCode == VK_V.0 as u32 && win_held() && !shift_held() {
+                if info.vkCode == VK_V.0 as u32 && win_held() {
+                    let filter: Option<&'static str> = if shift_held() { Some("pinned") } else { None };
                     if let Some(app) = APP.get() {
                         let app = app.clone();
                         // Run the actual show off the hook thread so we
                         // return well under the LowLevelHooksTimeout (300ms).
                         tauri::async_runtime::spawn(async move {
-                            crate::clipboard::show_clipboard_window(&app);
+                            crate::clipboard::show_clipboard_window(&app, filter);
                         });
                     }
                     // Swallow the chord so the Windows shell's native Win+V
-                    // (clipboard history) doesn't also fire.
+                    // (clipboard history) and any other registered owner of
+                    // Win+Shift+V (DLP agents etc.) don't also fire.
                     return LRESULT(1);
                 }
             }

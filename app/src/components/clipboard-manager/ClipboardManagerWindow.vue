@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useClipboardManager, type Filter } from "@/composables/useClipboardManager";
 import ClipboardEntryRow from "./ClipboardEntryRow.vue";
+import TestUsersPanel from "./TestUsersPanel.vue";
 import { isTauri, onClipboardWindowShown } from "@/lib/tauri";
 
 const {
@@ -27,6 +28,7 @@ const {
 const searchInput = ref<HTMLInputElement | null>(null);
 const listEl = ref<HTMLUListElement | null>(null);
 const showSettings = ref(false);
+const showTestUsers = ref(false);
 
 const filters: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
@@ -96,8 +98,18 @@ function onKey(e: KeyboardEvent) {
   }
   if (e.key === "Enter") {
     e.preventDefault();
-    // Ctrl/Cmd+Enter = copy only (no auto-paste); plain Enter = paste back.
-    void paste({ simulate: !(e.ctrlKey || e.metaKey) });
+    // Modifier matrix for Enter:
+    //   Enter                 -> paste obfuscated (or original if non-sensitive), simulate
+    //   Ctrl+Enter            -> copy obfuscated to OS clipboard only (no paste)
+    //   Ctrl+Shift+Enter      -> paste ORIGINAL (reveal-token gated), simulate
+    //   Ctrl+Alt+Enter        -> copy ORIGINAL to OS clipboard only
+    // Plain Shift+Enter is reserved for future use.
+    const ctrl = e.ctrlKey || e.metaKey;
+    const original = ctrl && (e.shiftKey || e.altKey);
+    const simulate = !ctrl || (ctrl && e.shiftKey && !e.altKey);
+    // ^ Shift+Ctrl => paste original (simulate); Alt+Ctrl => copy original only.
+    // For non-original branches, Ctrl alone is copy-only.
+    void paste({ simulate, original });
     return;
   }
 
@@ -187,7 +199,9 @@ function formatBytes(n: number): string {
     <header class="header" @mousedown="startDrag">
       <div class="title-group">
         <span class="title">Clipboard</span>
-        <span class="hint">Enter = paste, Ctrl+Enter = copy only, P = pin, Del = remove</span>
+        <span class="hint">
+          Enter = paste · Ctrl+Enter = copy · Ctrl+Shift+Enter = paste original · P = pin · Del = remove
+        </span>
       </div>
       <div class="header-actions">
         <button class="icon-btn" title="Settings" @click.stop="showSettings = !showSettings">
@@ -222,9 +236,13 @@ function formatBytes(n: number): string {
     </nav>
 
     <div v-if="showSettings" class="settings-row" @mousedown.stop>
+      <button class="text-btn" @click="showTestUsers = true">Test Users…</button>
       <button class="text-btn" @click="clearAll(false)">Clear non-pinned</button>
       <button class="text-btn danger" @click="clearAll(true)">Clear everything</button>
     </div>
+
+    <TestUsersPanel v-if="showTestUsers" @close="showTestUsers = false" />
+
 
     <main class="body">
       <ul v-if="entries.length" ref="listEl" class="list" @mousedown.stop>
@@ -236,7 +254,10 @@ function formatBytes(n: number): string {
           @select="selectedId = entry.id"
           @togglePin="togglePin(entry.id)"
           @delete="remove(entry.id)"
-          @open="paste({ simulate: true })"
+          @open="paste({ simulate: true, original: false })"
+          @pasteOriginal="paste({ simulate: true, original: true })"
+          @copyObfuscated="paste({ simulate: false, original: false })"
+          @copyOriginal="paste({ simulate: false, original: true })"
         />
       </ul>
       <div v-else-if="loading" class="empty">Loading…</div>
@@ -255,9 +276,18 @@ function formatBytes(n: number): string {
         </div>
         <div v-if="detailLoading" class="dim">Loading content…</div>
         <div v-else-if="!detail" class="dim">No content.</div>
-        <div v-else-if="detail.sensitive" class="dim italic">
-          Sensitive content hidden. Press Enter to reveal and paste.
-        </div>
+        <template v-else-if="detail.sensitive">
+          <div v-if="detail.piiKinds && detail.piiKinds.length" class="pii-chip-row">
+            <span class="pii-chip" v-for="k in detail.piiKinds" :key="k">{{ k }}</span>
+          </div>
+          <pre v-if="detail.obfuscatedText" class="detail-text obf">{{ detail.obfuscatedText }}</pre>
+          <div v-else class="dim italic">
+            Sensitive (OS-marked). Original hidden — Ctrl+Shift+Enter to reveal and paste.
+          </div>
+          <div class="dim safe-paste-hint">
+            Enter pastes this safe version. Ctrl+Shift+Enter pastes the captured original.
+          </div>
+        </template>
         <img
           v-else-if="detail.kind === 'image' && detail.imageBase64"
           class="detail-image"
@@ -466,6 +496,29 @@ function formatBytes(n: number): string {
   max-height: 200px;
   display: block;
   border-radius: 4px;
+}
+.pii-chip-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.pii-chip {
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(255, 200, 130, 0.16);
+  color: rgba(255, 200, 130, 0.95);
+  border-radius: 999px;
+}
+.detail-text.obf {
+  border-left: 2px solid rgba(255, 200, 130, 0.5);
+  background: rgba(255, 200, 130, 0.06);
+}
+.safe-paste-hint {
+  margin-top: 6px;
+  font-size: 11px;
 }
 
 .error-bar {

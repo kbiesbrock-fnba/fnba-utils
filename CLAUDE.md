@@ -56,11 +56,12 @@ A separate `Win+Shift+C` window tracks Claude Code sessions launched **from** th
 - **Persistent state** in `app/src-tauri/src/state/`:
   - `owned_sessions.rs` — `OwnedSession { session_id, cwd, pid, label, claude_home, worktree_path, tmux_session, generation }`, persisted to `~/.claude/fnba-mc/owned-sessions.json`. Liveness derived from `tmux list-sessions` (cached 2 s).
   - `projects.rs` — `Project { cwd, displayName, pinned, lastUsedAt, notes }`, persisted to `~/.claude/fnba-mc/projects.json`. Drives the launcher's pinned+MRU autocomplete and the `Win+Shift+N` MRU hotkey. `start_new_claude_session` calls `record_project_used` on every successful spawn.
-- **Global shortcuts** (registered in `lib.rs`):
+- **Global shortcuts** (registered in `lib.rs` via `tauri_plugin_global_shortcut` / `RegisterHotKey`):
   - `Win+Shift+F` — command palette
   - `Win+Shift+C` — Mission Control panel
   - `Win+Shift+N` — launch a session in the most-recently-used project (emits `mc-mru-launch`, handled in `useMissionControl.ts`)
   - `Ctrl+Shift+Tab` — cycle focus through open `session-detail:*` windows (pure Rust, sorts by label hash for stable order)
+- **Low-level keyboard hook** (`app/src-tauri/src/clipboard/hotkey.rs`, `WH_KEYBOARD_LL`): intercepts `Win+V` and `Win+Shift+V` before shell dispatch and swallows the keystroke with `LRESULT(1)`. Used instead of `RegisterHotKey` because the Windows shell already owns `Win+V` and corporate DLP agents commonly claim `Win+Shift+V`, both of which make `RegisterHotKey` fail. Shift-held selects the initial filter (`Some("pinned")`); no Shift = full history (`None`).
 
 ### Data sources
 - `data/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`
