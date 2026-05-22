@@ -11,7 +11,7 @@
 
 use crate::clipboard::pii::PiiSubject;
 use rand::seq::SliceRandom;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
