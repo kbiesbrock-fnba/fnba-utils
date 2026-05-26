@@ -1,9 +1,8 @@
 //! Persistent registry of working directories the user launches Claude
 //! sessions into. Replaces the localStorage MRU and adds pinned favorites.
 //!
-//! Persistence: `<wsl_home>/.claude/fnba-mc/projects.json` if available,
-//! otherwise `dirs::data_dir()`. Same store-path strategy as
-//! `owned_sessions.rs` so backups can grab both files at once.
+//! Persistence: `%LOCALAPPDATA%\fnba-utils\projects.json`. Same store-path
+//! strategy as `owned_sessions.rs` so backups can grab both files at once.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -176,16 +175,5 @@ fn default_display_name(cwd: &str) -> String {
 }
 
 fn resolve_store_path() -> PathBuf {
-    let wsl_root = PathBuf::from(r"\\wsl.localhost\Ubuntu\home");
-    if let Ok(entries) = std::fs::read_dir(&wsl_root) {
-        for entry in entries.flatten() {
-            if entry.path().join(".claude").is_dir() {
-                return entry.path().join(".claude").join("fnba-mc").join("projects.json");
-            }
-        }
-    }
-    if let Some(data) = dirs::data_dir() {
-        return data.join("fnba-utils").join("projects.json");
-    }
-    PathBuf::from("projects.json")
+    crate::state::paths::data_file("projects.json")
 }

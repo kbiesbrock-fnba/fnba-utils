@@ -86,24 +86,22 @@ pub fn load_all_connections() -> Result<(String, Vec<IdentityConnection>), Strin
 
     let mut all_connections = defaults.connections;
 
-    if let Some(home) = dirs::home_dir() {
-        let custom_path = home.join(".assumeIdentity.json");
-        if custom_path.exists() {
-            let contents = std::fs::read_to_string(&custom_path)
-                .map_err(|e| format!("Failed to read ~/.assumeIdentity.json: {e}"))?;
-            let custom: CustomData = serde_json::from_str(&contents)
-                .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
-            for conn in custom.connections {
-                if !all_connections
-                    .iter()
-                    .any(|c| c.server.eq_ignore_ascii_case(&conn.server))
-                {
-                    all_connections.push(IdentityConnection {
-                        label: conn.label,
-                        server: conn.server,
-                        is_custom: true,
-                    });
-                }
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
+    if custom_path.exists() {
+        let contents = std::fs::read_to_string(&custom_path)
+            .map_err(|e| format!("Failed to read {}: {e}", custom_path.display()))?;
+        let custom: CustomData = serde_json::from_str(&contents)
+            .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?;
+        for conn in custom.connections {
+            if !all_connections
+                .iter()
+                .any(|c| c.server.eq_ignore_ascii_case(&conn.server))
+            {
+                all_connections.push(IdentityConnection {
+                    label: conn.label,
+                    server: conn.server,
+                    is_custom: true,
+                });
             }
         }
     }
@@ -145,14 +143,14 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
 
     let mut all_users = defaults.users;
 
-    // Merge custom imposters and users from ~/.assumeIdentity.json
-    if let Some(home) = dirs::home_dir() {
-        let custom_path = home.join(".assumeIdentity.json");
+    // Merge custom imposters and users from assumeIdentity.json
+    {
+        let custom_path = crate::state::paths::data_file("assumeIdentity.json");
         if custom_path.exists() {
             let contents = std::fs::read_to_string(&custom_path)
-                .map_err(|e| format!("Failed to read ~/.assumeIdentity.json: {e}"))?;
+                .map_err(|e| format!("Failed to read {}: {e}", custom_path.display()))?;
             let custom: CustomData = serde_json::from_str(&contents)
-                .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
+                .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?;
             for imp in custom.imposters {
                 if !imposters
                     .iter()
@@ -265,14 +263,13 @@ pub async fn save_custom_entry(
     connection_label: Option<String>,
     imposter: Option<String>,
 ) -> Result<SaveResult, String> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    let custom_path = home.join(".assumeIdentity.json");
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
 
     let mut data: CustomData = if custom_path.exists() {
         let contents =
             std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
         serde_json::from_str(&contents).map_err(|e| {
-            format!("Custom config ~/.assumeIdentity.json is malformed: {e}")
+            format!("Custom config {} is malformed: {e}", custom_path.display())
         })?
     } else {
         CustomData::default()
@@ -366,8 +363,7 @@ pub async fn delete_custom_entry(
     connection: Option<String>,
     imposter: Option<String>,
 ) -> Result<DeleteResult, String> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    let custom_path = home.join(".assumeIdentity.json");
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
 
     if !custom_path.exists() {
         return Ok(DeleteResult {
@@ -380,7 +376,7 @@ pub async fn delete_custom_entry(
     let contents =
         std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
     let mut data: CustomData = serde_json::from_str(&contents)
-        .map_err(|e| format!("Custom config ~/.assumeIdentity.json is malformed: {e}"))?;
+        .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?;
 
     let mut deleted_user = false;
     let mut deleted_connection = false;

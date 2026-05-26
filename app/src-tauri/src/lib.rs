@@ -30,6 +30,15 @@ pub mod clipboard_listener {
     pub use crate::clipboard::listener::{install_test_user_picker, spawn, ClipboardEventSender};
 }
 
+/// Re-exported so the daemon can run the same legacy-file migration the UI
+/// process runs. Today both processes resolve the same legacy and new paths
+/// for `clipboard.db`, so the migration sweep is just orphan cleanup — but
+/// keeping the call symmetrical means a future state file added to the
+/// daemon won't silently miss migration if the daemon starts before the UI.
+pub mod app_paths {
+    pub use crate::state::paths::{app_data_dir, data_file, migrate_legacy_files};
+}
+
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -96,6 +105,11 @@ fn run_pii_watcher(handle: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Must run before any State::load() below — those loaders read from the
+    // new `%LOCALAPPDATA%\fnba-utils\` location and we want them to find any
+    // files left behind by older builds.
+    state::paths::migrate_legacy_files();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())

@@ -54,8 +54,8 @@ A separate `Win+Shift+C` window tracks Claude Code sessions launched **from** th
 - **Terminal UI**: `ChatPane.vue` embeds `xterm.js`. Keystrokes → `write_session_pty`; PTY drain bytes → `pty` events → `xterm.write`. No bubble UI; no JSONL→DOM translation. Stats panel still reads JSONL for token/cost counts.
 - **Disconnect vs Kill**: closing the panel calls `disconnect_session` (drops PTY, keeps tmux alive — session resumable). Explicit Kill calls `stop_claude_session` (kill tmux, remove from state, remove worktree). Drain-thread EOF cleanup probes `tmux has-session` to distinguish the two cases. Each `ClaudeIoSession` carries a generation tag so a stale drain can't evict a newer attach.
 - **Persistent state** in `app/src-tauri/src/state/`:
-  - `owned_sessions.rs` — `OwnedSession { session_id, cwd, pid, label, claude_home, worktree_path, tmux_session, generation }`, persisted to `~/.claude/fnba-mc/owned-sessions.json`. Liveness derived from `tmux list-sessions` (cached 2 s).
-  - `projects.rs` — `Project { cwd, displayName, pinned, lastUsedAt, notes }`, persisted to `~/.claude/fnba-mc/projects.json`. Drives the launcher's pinned+MRU autocomplete and the `Win+Shift+N` MRU hotkey. `start_new_claude_session` calls `record_project_used` on every successful spawn.
+  - `owned_sessions.rs` — `OwnedSession { session_id, cwd, pid, label, claude_home, worktree_path, tmux_session, generation }`, persisted to `%LOCALAPPDATA%\fnba-utils\owned-sessions.json`. Liveness derived from `tmux list-sessions` (cached 2 s).
+  - `projects.rs` — `Project { cwd, displayName, pinned, lastUsedAt, notes }`, persisted to `%LOCALAPPDATA%\fnba-utils\projects.json`. Drives the launcher's pinned+MRU autocomplete and the `Win+Shift+N` MRU hotkey. `start_new_claude_session` calls `record_project_used` on every successful spawn.
 - **Global shortcuts** (registered in `lib.rs` via `tauri_plugin_global_shortcut` / `RegisterHotKey`):
   - `Win+Shift+F` — command palette
   - `Win+Shift+C` — Mission Control panel
@@ -64,10 +64,15 @@ A separate `Win+Shift+C` window tracks Claude Code sessions launched **from** th
 - **Low-level keyboard hook** (`app/src-tauri/src/clipboard/hotkey.rs`, `WH_KEYBOARD_LL`): intercepts `Win+V` and `Win+Shift+V` before shell dispatch and swallows the keystroke with `LRESULT(1)`. Used instead of `RegisterHotKey` because the Windows shell already owns `Win+V` and corporate DLP agents commonly claim `Win+Shift+V`, both of which make `RegisterHotKey` fail. Shift-held selects the initial filter (`Some("pinned")`); no Shift = full history (`None`).
 
 ### Data sources
+All persistent app state lives under `%LOCALAPPDATA%\fnba-utils\` (resolved via `app/src-tauri/src/state/paths.rs`). The main process and the `fnba-clipd` daemon both call `migrate_legacy_files()` at startup to sweep files written by earlier builds (which lived at `~/.fnba-utils/`, `~/.assumeIdentity.json`, `~/.claude/fnba-mc/`, the exe's `resources/` sibling, or `%APPDATA%\Roaming\fnba-utils\`) into the new root.
+
 - `data/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`
-- `~/.assumeIdentity.json` -- user-added custom entries, merged at runtime
-- `~/.claude/fnba-mc/owned-sessions.json` -- MC's persisted Claude session registry
-- `~/.claude/fnba-mc/projects.json` -- MC's project registry (pinned + MRU)
+- `%LOCALAPPDATA%\fnba-utils\assumeIdentity.json` -- user-added custom entries, merged at runtime
+- `%LOCALAPPDATA%\fnba-utils\owned-sessions.json` -- MC's persisted Claude session registry
+- `%LOCALAPPDATA%\fnba-utils\projects.json` -- MC's project registry (pinned + MRU)
+- `%LOCALAPPDATA%\fnba-utils\clipboard.db` -- SQLite clipboard history (shared between main and daemon)
+- `%LOCALAPPDATA%\fnba-utils\config.yaml` -- standup configuration
+- `%LOCALAPPDATA%\fnba-utils\standup.db` + `standup-last-run.json` -- standup state and last-run record
 - `localStorage` -- a few small UI prefs (chat debug toggle, panel pin state). Recent projects moved to the backend registry above.
 
 ### Shell extensions

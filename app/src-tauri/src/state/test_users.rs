@@ -314,13 +314,7 @@ fn map_db(e: rusqlite::Error) -> String {
 }
 
 fn resolve_db_path() -> PathBuf {
-    if let Some(data) = dirs::data_local_dir() {
-        return data.join("fnba-utils").join("clipboard.db");
-    }
-    if let Some(data) = dirs::data_dir() {
-        return data.join("fnba-utils").join("clipboard.db");
-    }
-    PathBuf::from("clipboard.db")
+    crate::state::paths::data_file("clipboard.db")
 }
 
 // --- Seed data ---

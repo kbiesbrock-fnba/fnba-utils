@@ -104,7 +104,7 @@ useKeyLayer(
   <template v-else-if="step === 'preview' && result">
     <StandupReportView :result="result" />
     <div v-if="!teamsConfigured" class="config-hint warn">
-      Set <code>standup.teams_webhook_url</code> in <code>~/.fnba-utils/config.yaml</code>
+      Set <code>standup.teams_webhook_url</code> in <code>%LOCALAPPDATA%\fnba-utils\config.yaml</code>
       to enable posting.
     </div>
     <div class="action-row">
@@ -129,7 +129,7 @@ useKeyLayer(
   <template v-else-if="step === 'posted' && result">
     <StandupReportView :result="result" />
     <div v-if="!teamsChannelUrl" class="config-hint">
-      Set <code>standup.teams_channel_url</code> in <code>~/.fnba-utils/config.yaml</code>
+      Set <code>standup.teams_channel_url</code> in <code>%LOCALAPPDATA%\fnba-utils\config.yaml</code>
       to auto-open the channel after posting.
     </div>
     <div class="action-row single">

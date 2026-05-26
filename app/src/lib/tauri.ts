@@ -985,7 +985,7 @@ async function mockInvoke<T>(
           hasCredentials: true,
           jiraDomain: "fnba.atlassian.net",
           teamsConfigured: true,
-          configPath: "~/.fnba-utils/config.yaml",
+          configPath: "%LOCALAPPDATA%\\fnba-utils\\config.yaml",
         },
       } as T;
     }

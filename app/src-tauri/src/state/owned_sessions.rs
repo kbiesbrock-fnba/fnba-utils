@@ -4,9 +4,8 @@
 //! claude processes (IntelliJ plugin, plain WSL terminals) are not shown. This
 //! state is the source of truth for "what sessions exist."
 //!
-//! Persistence: `<wsl_home>/.claude/fnba-mc/owned-sessions.json` if available,
-//! otherwise the native Windows `dirs::data_dir()`. Survives Tauri app
-//! restart; sessions whose PIDs are no longer alive are dropped on load.
+//! Persistence: `%LOCALAPPDATA%\fnba-utils\owned-sessions.json`. Survives
+//! Tauri app restart; sessions whose PIDs are no longer alive are dropped on load.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -241,24 +240,7 @@ impl OwnedSessionsState {
 }
 
 fn resolve_store_path() -> PathBuf {
-    // Prefer WSL's user home — that's where claude actually lives, and keeping
-    // the state file next to `~/.claude/` makes it easy to inspect / back up.
-    // Multi-user hosts are uncommon for this app; pick the first home we find.
-    let wsl_root = PathBuf::from(r"\\wsl.localhost\Ubuntu\home");
-    if let Ok(entries) = std::fs::read_dir(&wsl_root) {
-        for entry in entries.flatten() {
-            let candidate = entry.path().join(".claude").join("fnba-mc").join("owned-sessions.json");
-            // Use this even if it doesn't exist yet — we'll create it on first persist.
-            if entry.path().join(".claude").is_dir() {
-                return candidate;
-            }
-        }
-    }
-    // Fallback: native Windows app-data.
-    if let Some(data) = dirs::data_dir() {
-        return data.join("fnba-utils").join("owned-sessions.json");
-    }
-    PathBuf::from("owned-sessions.json")
+    crate::state::paths::data_file("owned-sessions.json")
 }
 
 /// Snapshot of currently-running tmux session names, served from the shared

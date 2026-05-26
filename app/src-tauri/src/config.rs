@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// On-disk YAML config. Lives at `~/.fnba-utils/config.yaml`.
+/// On-disk YAML config. Lives at `%LOCALAPPDATA%\fnba-utils\config.yaml`.
 /// Missing file = empty config (all features off). This is the entire opt-in mechanism.
 #[derive(Debug, Default, Deserialize)]
 pub struct AppConfig {
@@ -64,12 +64,8 @@ impl AppConfig {
         }
     }
 
-    pub fn config_dir() -> Option<PathBuf> {
-        dirs::home_dir().map(|h| h.join(".fnba-utils"))
-    }
-
     pub fn config_path() -> Option<PathBuf> {
-        Self::config_dir().map(|d| d.join("config.yaml"))
+        Some(crate::state::paths::data_file("config.yaml"))
     }
 
     /// True only when standup is explicitly enabled AND both credentials are present.
@@ -83,17 +79,6 @@ impl AppConfig {
             None => false,
         }
     }
-}
-
-/// `<exe_dir>/resources/` — sibling directory next to the running binary.
-/// Used for app-managed state (SQLite DB, run history JSON) so the portable exe
-/// stays self-contained and copying exe + resources is enough to move installs.
-pub fn resources_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let parent = exe.parent()?.to_path_buf();
-    let dir = parent.join("resources");
-    let _ = std::fs::create_dir_all(&dir);
-    Some(dir)
 }
 
 /// Redacted view sent to the frontend. Never includes the API token or webhook URL.

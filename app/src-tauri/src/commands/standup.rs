@@ -88,7 +88,10 @@ fn standup_config(cfg: &AppConfig) -> Result<&crate::config::StandupConfig, Stri
     let s = cfg
         .standup
         .as_ref()
-        .ok_or_else(|| "Standup is not configured (~/.fnba-utils/config.yaml missing)".to_string())?;
+        .ok_or_else(|| {
+            "Standup is not configured (%LOCALAPPDATA%/fnba-utils/config.yaml missing)"
+                .to_string()
+        })?;
     if !s.enabled {
         return Err("Standup is disabled in config (set standup.enabled: true)".to_string());
     }
@@ -463,7 +466,7 @@ async fn post_to_teams(webhook: &str, card: &Value) -> Result<(), String> {
 }
 
 fn last_run_path() -> Option<PathBuf> {
-    crate::config::resources_dir().map(|d| d.join("standup-last-run.json"))
+    Some(crate::state::paths::data_file("standup-last-run.json"))
 }
 
 fn save_last_run(record: &StandupLastRun) {

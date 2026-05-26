@@ -1,8 +1,7 @@
 //! SQLite-backed clipboard history.
 //!
-//! Persistence: `<wsl_home>/.claude/fnba-mc/clipboard.db` (same parent dir as
-//! the other Mission Control state files), falling back to native Windows
-//! app-data if no WSL home is reachable. Schema is migrated on first open.
+//! Persistence: `%LOCALAPPDATA%\fnba-utils\clipboard.db` (same parent dir as
+//! the other Mission Control state files). Schema is migrated on first open.
 //!
 //! Images are stored inline as PNG BLOBs alongside a small thumbnail BLOB so
 //! the list view can render previews without a second round-trip. Entries are
@@ -613,15 +612,5 @@ fn preview(text: &str, max_chars: usize) -> String {
 }
 
 fn resolve_db_path() -> PathBuf {
-    // SQLite + SMB (\\wsl.localhost\...) is unreliable — locks aren't honored
-    // and migrations fail with "database is locked". Keep the DB on the
-    // native Windows volume; the JSON registries in `owned_sessions.rs` and
-    // `projects.rs` can live in WSL because they don't rely on file locking.
-    if let Some(data) = dirs::data_local_dir() {
-        return data.join("fnba-utils").join("clipboard.db");
-    }
-    if let Some(data) = dirs::data_dir() {
-        return data.join("fnba-utils").join("clipboard.db");
-    }
-    PathBuf::from("clipboard.db")
+    crate::state::paths::data_file("clipboard.db")
 }

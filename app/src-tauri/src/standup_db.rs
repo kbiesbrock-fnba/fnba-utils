@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 /// SQLite database for standup state.
 ///
-/// `~/.fnba-utils/standup.db` holds:
+/// `%LOCALAPPDATA%\fnba-utils\standup.db` holds:
 ///   - `issue_state` — per-key hide flag + first/last-seen timestamps
 ///   - `run_history` — one row per run_standup() invocation
 ///   - `run_snapshot` — denormalized issue list for each run (lets us answer
@@ -16,7 +16,7 @@ pub struct StandupDb {
 }
 
 fn db_path() -> Option<PathBuf> {
-    crate::config::resources_dir().map(|d| d.join("standup.db"))
+    Some(crate::state::paths::data_file("standup.db"))
 }
 
 impl StandupDb {
