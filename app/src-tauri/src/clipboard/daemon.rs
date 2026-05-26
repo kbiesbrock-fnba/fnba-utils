@@ -28,8 +28,35 @@ pub fn ensure_running_and_registered() -> Result<(), String> {
     register_autostart(&exe)?;
     #[cfg(all(windows, debug_assertions))]
     let _ = unregister_autostart();
+    // Kill any already-running daemon so the build we just shipped wins the
+    // singleton. The daemon is intentionally long-lived (survives fnba-utils
+    // restarts via a port-bind singleton), but that means an OLD fnba-clipd.exe
+    // — e.g. one auto-started from a previous install's Run key — keeps the
+    // port and the freshly built/installed daemon exits immediately on launch.
+    // Without this, daemon-side fixes and the "FNBA Clipd" Task Manager label
+    // wouldn't take effect until the user logged out. The brief capture gap
+    // while the replacement spawns is acceptable.
+    #[cfg(windows)]
+    kill_existing_daemon();
     spawn_detached(&exe)?;
     Ok(())
+}
+
+/// Force-kill any running `fnba-clipd.exe` and wait briefly for the OS to
+/// release its singleton port + open file handles before the caller spawns a
+/// replacement. Safe to call from fnba-utils: it only targets the daemon image
+/// name, never the host process.
+#[cfg(windows)]
+fn kill_existing_daemon() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/IM", "fnba-clipd.exe", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(150));
 }
 
 fn locate_daemon_exe() -> Result<PathBuf, String> {
@@ -51,17 +78,30 @@ fn locate_daemon_exe() -> Result<PathBuf, String> {
 #[cfg(windows)]
 fn spawn_detached(exe: &PathBuf) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
-    // DETACHED_PROCESS (0x00000008) — no console window, no parent stdio
-    // inheritance. CREATE_NEW_PROCESS_GROUP (0x00000200) — survives our exit.
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    std::process::Command::new(exe)
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+    // De-parent the daemon by launching it through `cmd /c start`, which spawns
+    // fnba-clipd.exe and then exits — orphaning the daemon so its parent is no
+    // longer fnba-utils.exe.
+    //
+    // Confirmed necessary by experiment: with a plain DETACHED_PROCESS spawn the
+    // daemon stays a child of fnba-utils.exe (itself a child of cargo.exe in
+    // dev), and Windows 11 Task Manager's *Processes* tab nests it under that
+    // parent chain — displaying the group name ("FNBA Utils" / "cargo.exe")
+    // instead of the daemon's own "FNBA Clipd" FileDescription. (Same reason the
+    // WebView2 helpers show as "FNBA Utils".) Orphaning makes fnba-clipd.exe a
+    // standalone background process so Task Manager renders its real name.
+    //
+    // CREATE_NO_WINDOW keeps the transient cmd hidden; `/b` keeps `start` from
+    // opening a console for the (GUI-subsystem) daemon.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "FNBA Clipd", "/b"])
+        .arg(exe)
+        .creation_flags(CREATE_NO_WINDOW)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("spawn fnba-clipd: {e}"))?;
+        .map_err(|e| format!("spawn fnba-clipd via cmd start: {e}"))?;
     Ok(())
 }
 
