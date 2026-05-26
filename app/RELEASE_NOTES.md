@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.12.4 — 2026-05-26
+
+Per-window code splitting + vendor chunking: each Tauri window (Mission Control, Standup, Clipboard Manager, SQL Query, Session Detail, Issue Detail, command palette) now loads only its own Vue component instead of the full 552 kB bundle every window inherited before. `@xterm/*`, `@tauri-apps/*`, and Vue itself sit in named long-lived vendor chunks so they're cached across windows. First-open latency drops correspondingly.
+
 ## v1.12 — 2026-05-22
 
 ### Clipboard Manager: PII protection
