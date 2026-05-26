@@ -9,6 +9,14 @@
 
 ## [Unreleased]
 
+## v1.12.6 — 2026-05-26
+
+Follow-ups to the v1.12.5 storage + daemon work:
+
+- **`Win+V` / `Win+Shift+V` reliably opens the clipboard window.** Opening the Pinned view (`Win+Shift+V`) with no pinned entries could leave the window in a state where the next `Win+V` appeared to do nothing until you triggered another window. The window now always comes to the front.
+- **The clipboard daemon shows as "FNBA Clipd" in Task Manager**, as a distinct standalone process rather than being grouped under "FNBA Utils". A freshly built/installed daemon now also reliably replaces an older one still running from a previous launch.
+- **About FNBA Utils now lists the clipboard daemon version** (tray → About). The daemon carries its own version, independent of the app.
+
 ## v1.12.5 — 2026-05-26
 
 All persistent state files now live under `%LOCALAPPDATA%\fnba-utils\` (config, standup DB, identity overrides, MC sessions, MC projects, clipboard DB). On first launch the app migrates files from their old locations (`~/.fnba-utils/`, `~/.assumeIdentity.json`, `~/.claude/fnba-mc/`, the exe's `resources/` sibling, `%APPDATA%\fnba-utils\`) into the new directory — no manual data move required. Claude Code's own `~/.claude/` directory is left untouched.
