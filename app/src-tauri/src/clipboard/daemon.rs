@@ -59,6 +59,62 @@ fn kill_existing_daemon() {
     std::thread::sleep(std::time::Duration::from_millis(150));
 }
 
+/// Version of the `fnba-clipd.exe` that is (or is about to be) running, read
+/// from the binary's embedded VERSIONINFO. `ensure_running_and_registered`
+/// kill-respawns the daemon to match this on-disk binary on every fnba-utils
+/// launch, so the file's version is the running daemon's version. Returns
+/// `None` if the binary can't be found or carries no version resource.
+#[cfg(windows)]
+pub fn daemon_version() -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
+    };
+
+    let exe = locate_daemon_exe().ok()?;
+    let wide: Vec<u16> = exe
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let path = PCWSTR(wide.as_ptr());
+
+    unsafe {
+        let size = GetFileVersionInfoSizeW(path, None);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        GetFileVersionInfoW(path, 0, size, buf.as_mut_ptr() as *mut core::ffi::c_void).ok()?;
+
+        let mut value_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut value_len: u32 = 0;
+        let root: Vec<u16> = "\\".encode_utf16().chain(std::iter::once(0)).collect();
+        let ok = VerQueryValueW(
+            buf.as_ptr() as *const core::ffi::c_void,
+            PCWSTR(root.as_ptr()),
+            &mut value_ptr,
+            &mut value_len,
+        );
+        if !ok.as_bool() || value_ptr.is_null() {
+            return None;
+        }
+        let info = &*(value_ptr as *const VS_FIXEDFILEINFO);
+        let ms = info.dwFileVersionMS;
+        let ls = info.dwFileVersionLS;
+        let major = (ms >> 16) & 0xffff;
+        let minor = ms & 0xffff;
+        let patch = (ls >> 16) & 0xffff;
+        Some(format!("{major}.{minor}.{patch}"))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn daemon_version() -> Option<String> {
+    None
+}
+
 fn locate_daemon_exe() -> Result<PathBuf, String> {
     let here = std::env::current_exe()
         .map_err(|e| format!("current_exe: {e}"))?;

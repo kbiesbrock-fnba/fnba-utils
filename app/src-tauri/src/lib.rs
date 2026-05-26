@@ -127,12 +127,20 @@ pub fn run() {
         .setup(|app| {
             // --- System Tray ---
             let show = MenuItem::with_id(app, "show", "Show Palette", true, None::<&str>)?;
+            // Surface the clipboard daemon's version (independent of the app's,
+            // see clipd/Cargo.toml) by reading the on-disk fnba-clipd.exe — the
+            // binary the daemon runs from after the launch-time respawn.
+            let clipd_line = match clipboard::daemon::daemon_version() {
+                Some(v) => format!("Clipboard daemon (fnba-clipd): v{v}"),
+                None => "Clipboard daemon (fnba-clipd): not detected".to_string(),
+            };
             let about = PredefinedMenuItem::about(
                 app,
                 Some("About FNBA Utils"),
                 Some(AboutMetadata {
                     name: Some("FNBA Utils".to_string()),
                     version: Some(env!("APP_VERSION").to_string()),
+                    comments: Some(clipd_line),
                     copyright: Some("FNBA".to_string()),
                     ..Default::default()
                 }),
