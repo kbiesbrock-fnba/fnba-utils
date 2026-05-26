@@ -561,6 +561,11 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "open_app_data_folder": {
+      console.log("[mock] open_app_data_folder — no-op in browser");
+      return undefined as T;
+    }
+
     case "get_all_rights": {
       await delay(800);
       return [
@@ -1766,6 +1771,10 @@ export function deleteCustomEntry(
 
 export function hideWindow(): Promise<void> {
   return invoke<void>("hide_window");
+}
+
+export function openAppDataFolder(): Promise<void> {
+  return invoke<void>("open_app_data_folder");
 }
 
 export function getAllRights(server: string): Promise<RightInfo[]> {

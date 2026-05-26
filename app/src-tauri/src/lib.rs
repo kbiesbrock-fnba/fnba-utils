@@ -387,6 +387,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::hide_window,
+            commands::open_app_data_folder,
             config::get_app_config,
             commands::standup::run_standup,
             commands::standup::preview_standup,

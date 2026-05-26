@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import { usePalette } from "@/composables/usePalette";
 import { useKeyLayer, KEY_PRIORITY } from "@/composables/useKeyLayer";
+import { openAppDataFolder } from "@/lib/tauri";
 import CommandInput from "./CommandInput.vue";
 import CommandList from "./CommandList.vue";
 import StatusBar from "./StatusBar.vue";
@@ -27,6 +28,15 @@ const activeBreadcrumbIndex = computed(() => {
   if (!crumbs || !step) return -1;
   return crumbs.findIndex((b) => b.steps.includes(step));
 });
+
+async function openDataFolder() {
+  try {
+    await openAppDataFolder();
+    dismiss();
+  } catch (e) {
+    console.error("Failed to open app data folder", e);
+  }
+}
 
 useKeyLayer(
   [
@@ -63,6 +73,16 @@ useKeyLayer(
 <template>
   <div class="palette">
     <template v-if="mode === 'browsing'">
+      <button
+        class="settings-btn"
+        title="Open app data folder (%LOCALAPPDATA%\fnba-utils)"
+        @click="openDataFolder"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
       <CommandInput
         :value="searchQuery"
         placeholder="Type a command..."
@@ -114,6 +134,7 @@ useKeyLayer(
 
 <style scoped>
 .palette {
+  position: relative;
   width: 100%;
   max-width: 632px;
   background: var(--bg-primary);
@@ -127,6 +148,29 @@ useKeyLayer(
   display: flex;
   flex-direction: column;
   animation: palette-in 0.15s ease-out;
+}
+
+.settings-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-placeholder);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.settings-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 @keyframes palette-in {
