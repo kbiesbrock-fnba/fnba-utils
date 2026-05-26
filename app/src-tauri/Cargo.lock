@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "fnba-clipd"
-version = "1.12.5"
+version = "1.0.0"
 dependencies = [
  "embed-resource 2.5.2",
  "fnba-utils",

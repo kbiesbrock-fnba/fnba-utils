@@ -1,6 +1,9 @@
 [package]
 name = "fnba-clipd"
-version = "1.12.5"
+# Independent of the fnba-utils app version: the daemon is a stable,
+# rarely-changing component, so it carries its own version line. build.rs
+# reads CARGO_PKG_VERSION into the VERSIONINFO, so Task Manager shows this.
+version = "1.0.0"
 description = "FNBA Utils clipboard capture daemon"
 authors = ["kbiesbrock"]
 edition = "2021"
