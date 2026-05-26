@@ -92,7 +92,16 @@ mod win {
                         let app = app.clone();
                         // Run the actual show off the hook thread so we
                         // return well under the LowLevelHooksTimeout (300ms).
-                        tauri::async_runtime::spawn(async move {
+                        //
+                        // Use a plain OS thread, not `tauri::async_runtime::spawn`:
+                        // the hook fires very early in app startup, before
+                        // `.run()` has entered the tokio event loop, and futures
+                        // scheduled in that window can sit un-polled until the
+                        // user triggers some other code path that yields control
+                        // to the runtime (e.g. pressing `Win+Shift+F`). Tauri's
+                        // window methods are thread-safe and internally post to
+                        // the UI thread, so a sync std thread is fine.
+                        std::thread::spawn(move || {
                             crate::clipboard::show_clipboard_window(&app, filter);
                         });
                     }

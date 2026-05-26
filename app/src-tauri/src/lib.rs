@@ -143,8 +143,20 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // --- Global Hotkey: Win+V / Win+Shift+V (Clipboard Manager) ---
+            // Installed FIRST in setup so a downstream `RegisterHotKey`
+            // failure (DLP/EDR agents on managed machines commonly claim
+            // `Win+Shift+*` chords) doesn't short-circuit setup before the
+            // LL hook is in place. Uses a `WH_KEYBOARD_LL` hook rather than
+            // `RegisterHotKey` — see `clipboard::hotkey` for rationale.
+            clipboard::hotkey::spawn(app.handle().clone());
+
             // --- Global Shortcut: Win+Shift+F (command palette) ---
-            app.global_shortcut().on_shortcut(
+            // All `on_shortcut` calls below are best-effort: a single failure
+            // (typically a corporate DLP agent owning the chord) must NOT
+            // take down the rest of setup — that regression is what broke
+            // Win+V on managed machines historically.
+            if let Err(e) = app.global_shortcut().on_shortcut(
                 "Super+Shift+F",
                 move |app: &AppHandle, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -169,7 +181,9 @@ pub fn run() {
                         }
                     }
                 },
-            )?;
+            ) {
+                eprintln!("Failed to register Super+Shift+F: {e}");
+            }
 
             // --- Global Shortcut: Win+Shift+N (launch into MRU project) ---
             // Looks up the most-recently-used project from ProjectsState and
@@ -179,7 +193,7 @@ pub fn run() {
             //
             // No-op (silently) if the registry is empty; user can use
             // Win+Shift+F → "new claude" to seed the registry.
-            app.global_shortcut().on_shortcut(
+            if let Err(e) = app.global_shortcut().on_shortcut(
                 "Super+Shift+N",
                 move |app: &AppHandle, _shortcut, event| {
                     if event.state != ShortcutState::Pressed {
@@ -205,13 +219,15 @@ pub fn run() {
                         }
                     }
                 },
-            )?;
+            ) {
+                eprintln!("Failed to register Super+Shift+N: {e}");
+            }
 
             // --- Global Shortcut: Ctrl+Shift+Tab (cycle session-detail windows) ---
             // When you're juggling multiple session-detail panels, this is the
             // fast path to "focus the next one." Order = label asc, which is
             // stable per session_id hash.
-            app.global_shortcut().on_shortcut(
+            if let Err(e) = app.global_shortcut().on_shortcut(
                 "Control+Shift+Tab",
                 move |app: &AppHandle, _shortcut, event| {
                     if event.state != ShortcutState::Pressed {
@@ -237,10 +253,12 @@ pub fn run() {
                         let _ = w.set_focus();
                     }
                 },
-            )?;
+            ) {
+                eprintln!("Failed to register Control+Shift+Tab: {e}");
+            }
 
             // --- Global Shortcut: Win+Shift+C (Mission Control) ---
-            app.global_shortcut().on_shortcut(
+            if let Err(e) = app.global_shortcut().on_shortcut(
                 "Super+Shift+C",
                 move |app: &AppHandle, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -279,7 +297,9 @@ pub fn run() {
                         }
                     }
                 },
-            )?;
+            ) {
+                eprintln!("Failed to register Super+Shift+C: {e}");
+            }
 
             // --- Clipboard daemon (fnba-clipd.exe) ---
             // Capture lives in a separate background process so it keeps
@@ -289,13 +309,6 @@ pub fn run() {
             if let Err(e) = clipboard::daemon::ensure_running_and_registered() {
                 eprintln!("fnba-clipd auto-launch failed: {e}");
             }
-
-            // --- Global Hotkey: Win+V (Clipboard Manager) ---
-            // Replaces the native Windows clipboard history. Uses a
-            // WH_KEYBOARD_LL hook (not RegisterHotKey) so we see Win+V before
-            // the shell does and can swallow it. See `clipboard::hotkey` for
-            // rationale.
-            clipboard::hotkey::spawn(app.handle().clone());
 
             // --- PII Protection Watcher ---
             // The daemon process auto-replaces the OS clipboard when it
@@ -318,7 +331,7 @@ pub fn run() {
             // --- Global Shortcut: Win+Shift+D (Standup Panel) ---
             // Registered unconditionally; the panel window only exists when the
             // standup feature is enabled, so the shortcut is a no-op otherwise.
-            app.global_shortcut().on_shortcut(
+            if let Err(e) = app.global_shortcut().on_shortcut(
                 "Super+Shift+D",
                 move |app: &AppHandle, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -352,7 +365,9 @@ pub fn run() {
                         }
                     }
                 },
-            )?;
+            ) {
+                eprintln!("Failed to register Super+Shift+D: {e}");
+            }
 
             Ok(())
         })
