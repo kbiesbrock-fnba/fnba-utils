@@ -43,7 +43,13 @@ cd "$APP_DIR/src-tauri"
 # Build the clipboard daemon up front so fnba-utils can spawn it on startup.
 # `cargo tauri dev` only builds the Tauri binary; sibling bins aren't compiled
 # automatically, and a missing fnba-clipd.exe means no capture happens.
+#
+# Kill any running daemon first: it's a persistent singleton (and survives as
+# an orphaned process), so it holds an exclusive lock on fnba-clipd.exe and the
+# rebuild would fail with "Access is denied", silently leaving a stale binary
+# (e.g. one still labelled "FNBA Utils").
 echo "Building fnba-clipd (clipboard capture daemon)..."
+taskkill.exe /IM fnba-clipd.exe /F >/dev/null 2>&1 || true
 "$CARGO_WIN" build -p fnba-clipd
 
 "$CARGO_WIN" tauri dev

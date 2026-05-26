@@ -8,9 +8,10 @@
     "dev:with-clipd": "npm run build:clipd && vite",
     "build": "vue-tsc --noEmit && vite build",
     "build:clipd": "node scripts/build-clipd.mjs",
+    "build:clipd:release": "node scripts/build-clipd.mjs --release",
     "preview": "vite preview",
     "tauri": "tauri",
-    "package": "tauri build --no-bundle && node ../scripts/package-portable.mjs",
+    "package": "tauri build --no-bundle && npm run build:clipd:release && node ../scripts/package-portable.mjs",
     "deploy": "npm run package"
   },
   "dependencies": {

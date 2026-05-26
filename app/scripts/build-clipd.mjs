@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { platform } from "node:os";
 
 const isWindows = platform() === "win32";
+const release = process.argv.includes("--release");
 
 function killDaemon() {
   if (!isWindows) return; // daemon is Windows-only
@@ -34,11 +35,9 @@ function killDaemon() {
 }
 
 function buildDaemon() {
-  const r = spawnSync(
-    "cargo",
-    ["build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "fnba-clipd"],
-    { stdio: "inherit", shell: true },
-  );
+  const args = ["build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "fnba-clipd"];
+  if (release) args.push("--release");
+  const r = spawnSync("cargo", args, { stdio: "inherit", shell: true });
   process.exit(r.status ?? 1);
 }
 
