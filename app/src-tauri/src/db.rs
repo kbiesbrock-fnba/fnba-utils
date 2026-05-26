@@ -20,9 +20,13 @@ pub async fn connect_to(server: &str, database: &str) -> Result<SqlClient, Strin
     config.port(1433);
     config.database(database);
     config.authentication(AuthMethod::Integrated);
-    if cfg!(debug_assertions) {
-        config.trust_cert();
-    }
+    // FNBA SQL Servers present an internal-CA-signed cert that the local
+    // Windows trust store doesn't anchor (the corporate root isn't pushed to
+    // every dev box). `trust_cert()` is required in BOTH debug and release
+    // for the app to connect — gating it to debug-only (commit 8773377) was
+    // a regression that surfaces as "Unable to connect to API
+    // (self-signed certificate detected)" in release builds.
+    config.trust_cert();
 
     let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect((server, 1433u16)))
         .await
