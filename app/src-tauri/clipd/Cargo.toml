@@ -1,6 +1,6 @@
 [package]
 name = "fnba-clipd"
-version = "1.12.4"
+version = "1.12.5"
 description = "FNBA Utils clipboard capture daemon"
 authors = ["kbiesbrock"]
 edition = "2021"

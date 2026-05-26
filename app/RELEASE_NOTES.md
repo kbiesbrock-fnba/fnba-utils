@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.12.5 — 2026-05-26
+
+All persistent state files now live under `%LOCALAPPDATA%\fnba-utils\` (config, standup DB, identity overrides, MC sessions, MC projects, clipboard DB). On first launch the app migrates files from their old locations (`~/.fnba-utils/`, `~/.assumeIdentity.json`, `~/.claude/fnba-mc/`, the exe's `resources/` sibling, `%APPDATA%\fnba-utils\`) into the new directory — no manual data move required. Claude Code's own `~/.claude/` directory is left untouched.
+
+A new ⚙ settings button in the command palette's top-right opens that folder in Explorer, so finding `config.yaml` or `assumeIdentity.json` for hand-editing is a single click.
+
+The clipboard daemon (`fnba-clipd.exe`) now embeds its own Windows version info, so Task Manager labels it **FNBA Clipd** instead of inheriting **FNBA Utils** from the main process.
+
+Two corporate-machine regressions fixed: `Win+V` and `Win+Shift+V` work again on machines where a DLP/EDR agent owns `Win+Shift+F/N/C/D` (the LL keyboard hook is now installed before the failure-prone `RegisterHotKey` calls, and each registration is best-effort instead of aborting the rest of setup), and SQL connections to FNBA servers no longer fail with "self-signed certificate" in release builds — `trust_cert()` is unconditional again (matches the corporate cert reality).
+
 ## v1.12.4 — 2026-05-26
 
 Per-window code splitting + vendor chunking: each Tauri window (Mission Control, Standup, Clipboard Manager, SQL Query, Session Detail, Issue Detail, command palette) now loads only its own Vue component instead of the full 552 kB bundle every window inherited before. `@xterm/*`, `@tauri-apps/*`, and Vue itself sit in named long-lived vendor chunks so they're cached across windows. First-open latency drops correspondingly.
