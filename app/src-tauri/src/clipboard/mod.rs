@@ -73,7 +73,10 @@ pub fn show_clipboard_window(app: &AppHandle, initial_filter: Option<&str>) {
             }
         }
     }
-    if !w.is_visible().unwrap_or(false) {
+    // Only (re)center when bringing the window up from hidden, so a window the
+    // user has dragged elsewhere isn't yanked back to center on every chord.
+    let was_visible = w.is_visible().unwrap_or(false);
+    if !was_visible {
         if let Ok(Some(monitor)) = w.current_monitor() {
             let mon_size = monitor.size();
             let mon_pos = monitor.position();
@@ -86,8 +89,17 @@ pub fn show_clipboard_window(app: &AppHandle, initial_filter: Option<&str>) {
                 tauri::PhysicalPosition::new(x, y),
             ));
         }
-        let _ = w.show();
     }
+    // Always show + unminimize + focus, even when `is_visible()` already
+    // reports true. A prior show that never gained the foreground — e.g.
+    // Win+Shift+V landing on an empty Pinned view the user never pasted from —
+    // leaves the window marked visible; the old `if !visible { show }` guard
+    // then skipped the show on the next chord and a bare `set_focus()` can't
+    // pull a backgrounded window forward, wedging Win+V until some other
+    // window (Win+Shift+F) reset the foreground. Forcing show+focus every
+    // time makes each chord deterministically surface the window.
+    let _ = w.unminimize();
+    let _ = w.show();
     let _ = w.set_focus();
     let _ = app.emit(
         "clipboard-window-shown",
