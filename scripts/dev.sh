@@ -44,7 +44,7 @@ cd "$APP_DIR/src-tauri"
 # `cargo tauri dev` only builds the Tauri binary; sibling bins aren't compiled
 # automatically, and a missing fnba-clipd.exe means no capture happens.
 echo "Building fnba-clipd (clipboard capture daemon)..."
-"$CARGO_WIN" build --bin fnba-clipd
+"$CARGO_WIN" build -p fnba-clipd
 
 "$CARGO_WIN" tauri dev
 

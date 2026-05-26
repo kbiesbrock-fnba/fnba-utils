@@ -1,0 +1,21 @@
+[package]
+name = "fnba-clipd"
+version = "1.12.4"
+description = "FNBA Utils clipboard capture daemon"
+authors = ["kbiesbrock"]
+edition = "2021"
+
+# Separate package so `tauri_build::build()` in the parent doesn't link its
+# VERSIONINFO into this binary (which would conflict with the one embedded by
+# this package's own build.rs and break Task Manager labelling).
+
+[[bin]]
+name = "fnba-clipd"
+path = "src/main.rs"
+
+[dependencies]
+fnba-utils = { path = ".." }
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+
+[build-dependencies]
+embed-resource = "2.5"

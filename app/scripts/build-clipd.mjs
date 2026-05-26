@@ -36,7 +36,7 @@ function killDaemon() {
 function buildDaemon() {
   const r = spawnSync(
     "cargo",
-    ["build", "--manifest-path", "src-tauri/Cargo.toml", "--bin", "fnba-clipd"],
+    ["build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "fnba-clipd"],
     { stdio: "inherit", shell: true },
   );
   process.exit(r.status ?? 1);

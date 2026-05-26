@@ -929,6 +929,20 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "embed-resource"
+version = "2.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d506610004cfc74a6f5ee7e8c632b355de5eca1f03ee5e5e0ec11b77d4eb3d61"
+dependencies = [
+ "cc",
+ "memchr",
+ "rustc_version",
+ "toml 0.8.2",
+ "vswhom",
+ "winreg 0.52.0",
+]
+
+[[package]]
+name = "embed-resource"
 version = "3.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63a1d0de4f2249aa0ff5884d7080814f446bb241a559af6c170a41e878ed2d45"
@@ -1108,8 +1122,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fnba-clipd"
+version = "1.12.5"
+dependencies = [
+ "embed-resource 2.5.2",
+ "fnba-utils",
+ "tokio",
+]
+
+[[package]]
 name = "fnba-utils"
-version = "1.12.3"
+version = "1.12.5"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -4728,7 +4751,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1087b111fe2b005e42dbdc1990fc18593234238d47453b0c99b7de1c9ab2c1e0"
 dependencies = [
  "dunce",
- "embed-resource",
+ "embed-resource 3.0.8",
  "toml 0.9.12+spec-1.1.0",
 ]
 

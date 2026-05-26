@@ -20,7 +20,7 @@ pub type ClipboardEventSender = UnboundedSender<NewClipboardEntry>;
 
 /// Callback the host process installs so the listener thread can pick a test
 /// user without depending on Tauri State. Set once at startup by either
-/// `bin/clipd.rs` (daemon) or `lib.rs` (UI process).
+/// `clipd/src/main.rs` (daemon) or `lib.rs` (UI process).
 type TestUserPicker = Box<dyn Fn() -> Option<TestUser> + Send + Sync>;
 static TEST_USER_PICKER: OnceLock<TestUserPicker> = OnceLock::new();
 

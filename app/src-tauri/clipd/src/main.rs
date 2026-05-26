@@ -11,9 +11,14 @@
 //! up-to-date — even when fnba-utils itself isn't running. fnba-utils owns
 //! the display/UI surface and reads from the same DB.
 //!
-//! Singleton: takes a named mutex (`Global\fnba-clipd-singleton`) on startup;
-//! a second instance sees `ERROR_ALREADY_EXISTS` and exits cleanly so that
-//! "ensure daemon running" callers can spawn unconditionally.
+//! Lives in its own workspace member (not as a `[[bin]]` of the main package)
+//! so `tauri_build::build()` in the parent doesn't co-embed its VERSIONINFO
+//! resource into this binary — that would collide with the "FNBA Clipd"
+//! resource emitted by `build.rs` and break Task Manager labelling.
+//!
+//! Singleton: binds a fixed loopback TCP port; a second instance fails the
+//! bind and exits cleanly so that "ensure daemon running" callers can spawn
+//! unconditionally.
 
 #[cfg(not(windows))]
 fn main() {
@@ -26,6 +31,11 @@ fn main() {
         Some(s) => s,
         None => return, // another instance already capturing; exit silently
     };
+
+    // Mirror the UI process's startup sweep so the daemon doesn't load state
+    // from `%LOCALAPPDATA%\fnba-utils\` while a legacy file still sits at the
+    // old path. Idempotent: re-running it is just orphan cleanup.
+    fnba_utils_lib::app_paths::migrate_legacy_files();
 
     let history = fnba_utils_lib::clipboard_state::load();
     let test_users = std::sync::Arc::new(fnba_utils_lib::test_users_state::load());
@@ -85,9 +95,6 @@ fn main() {
 /// alive). Loopback-only, high port chosen to minimize collision risk.
 #[cfg(windows)]
 fn acquire_singleton() -> Option<std::net::TcpListener> {
-    // Port choice: fixed-but-unusual loopback port. If something else is
-    // already on it, treat as "another daemon is running" and exit. The
-    // user can override by killing whatever else owns the port.
     const SINGLETON_PORT: u16 = 53_217;
     std::net::TcpListener::bind(("127.0.0.1", SINGLETON_PORT)).ok()
 }

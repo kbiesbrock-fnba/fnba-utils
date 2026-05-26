@@ -1,3 +1,10 @@
+[workspace]
+# fnba-clipd lives in its own package so tauri_build's VERSIONINFO embed
+# (which fires for every `[[bin]]` in the parent package) doesn't collide
+# with the daemon-specific VERSIONINFO compiled in clipd/build.rs.
+members = ["clipd"]
+resolver = "2"
+
 [package]
 name = "fnba-utils"
 version = "1.12.4"
@@ -41,10 +48,6 @@ winreg = "0.52"
 regex = "1"
 once_cell = "1"
 rand = "0.8"
-
-[[bin]]
-name = "fnba-clipd"
-path = "src/bin/clipd.rs"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
