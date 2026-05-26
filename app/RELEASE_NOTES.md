@@ -1,5 +1,14 @@
 # Release Notes
 
+<!--
+  Accumulate notes for the next release under [Unreleased]. At release time,
+  rename that heading to `## vX.Y.Z — YYYY-MM-DD` and add a fresh empty
+  [Unreleased] above it. CI publishes every version section added since the
+  previous tag as the GitHub Release body; the [Unreleased] section is skipped.
+-->
+
+## [Unreleased]
+
 ## v1.12.5 — 2026-05-26
 
 All persistent state files now live under `%LOCALAPPDATA%\fnba-utils\` (config, standup DB, identity overrides, MC sessions, MC projects, clipboard DB). On first launch the app migrates files from their old locations (`~/.fnba-utils/`, `~/.assumeIdentity.json`, `~/.claude/fnba-mc/`, the exe's `resources/` sibling, `%APPDATA%\fnba-utils\`) into the new directory — no manual data move required. Claude Code's own `~/.claude/` directory is left untouched.

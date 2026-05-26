@@ -47,12 +47,43 @@ jobs:
 
       # Bind the tag name to an env var (never inline `${{ ... }}` in `run:`
       # commands -- a malicious tag name could be parsed as shell syntax).
+      # Build the release body from RELEASE_NOTES.md: every `## ` section above
+      # the previous tag's heading — i.e. everything added since the last
+      # release — so the GitHub Release shows only what's new instead of the
+      # whole cumulative changelog. The in-repo file stays cumulative; we only
+      # slice it here. Assumes each released version has a `## <tag>` heading
+      # (e.g. `## v1.12.6`); the previous tag's heading is the stop marker.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
+          # Previous tag by commit ancestry; empty on the first release.
+          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            # Print from the first version heading down to (but not including)
+            # the previous release's heading. Skips the `# Release Notes` title,
+            # any preamble, and the `## [Unreleased]` staging section.
+            awk -v prev="$prev" '
+              /^## / {
+                if ($2 == "[Unreleased]") next
+                started = 1
+                if ($2 == prev) exit
+              }
+              started { print }
+            ' app/RELEASE_NOTES.md > release-body.md
+          else
+            cp app/RELEASE_NOTES.md release-body.md
+          fi
+          # Fall back to the full file if the slice came out empty (e.g. the
+          # previous tag has no matching heading), so a release never ships
+          # with blank notes.
+          if [ ! -s release-body.md ]; then
+            cp app/RELEASE_NOTES.md release-body.md
+          fi
+          echo "----- release body for $TAG -----"
+          cat release-body.md
           gh release create "$TAG" releases/*.zip \
             --title "$TAG" \
-            --notes-file app/RELEASE_NOTES.md
+            --notes-file release-body.md
