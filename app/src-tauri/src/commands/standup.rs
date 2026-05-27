@@ -250,13 +250,25 @@ fn build_report(issues: Vec<JiraIssue>) -> StandupReport {
     }
 }
 
-/// Build an Adaptive Card (v1.4 — Teams Workflows compatible).
+/// Build a compact Adaptive Card: a single markdown `TextBlock`.
 ///
-/// Layout:
-///   1. Header row: date + total issue count + total points.
-///   2. For each group (excluding `Attention`, which is panel-only):
-///        a. emphasis-styled Container header with label + count + total points.
-///        b. one ColumnSet per issue: [emoji][KEY][summary stretch][status][pts right].
+/// The configured Teams webhook is a Power Automate Workflows endpoint, which only
+/// accepts an `AdaptiveCard` envelope — so we keep the wrapper but collapse the body to
+/// one markdown block (bold group headers, `[KEY](url)` links, emoji icons). No colored
+/// containers or per-issue ColumnSets; it renders as a plain compact markdown message
+/// rather than card chrome.
+///
+/// Layout (grouped headings, points appended):
+/// ```text
+///   🗓 **Standup — <date>** · N issues · P pts
+///
+///   💻 **In Progress** (n)
+///   - [KEY](url) summary · X pt
+///   ...
+/// ```
+///
+/// Line breaks: Teams `TextBlock` markdown ignores a bare `\n`, so groups are separated
+/// by `\n\n` (paragraph break) and the bullets within a group by `\r` (soft break).
 fn build_adaptive_card(report: &StandupReport) -> Value {
     let now = Local::now();
     let date_label = format!(
@@ -274,149 +286,47 @@ fn build_adaptive_card(report: &StandupReport) -> Value {
         .map(|g| g.issues.len())
         .sum();
 
-    let mut body: Vec<Value> = vec![
-        json!({
-            "type": "TextBlock",
-            "text": format!("🗓 Standup — {}", date_label),
-            "weight": "Bolder",
-            "size": "Large",
-            "wrap": true,
-        }),
-        json!({
-            "type": "TextBlock",
-            "text": format!(
-                "{} issue{} · {} pt{}",
-                visible_count,
-                if visible_count == 1 { "" } else { "s" },
-                format_points(total_points),
-                if (total_points - 1.0).abs() < f64::EPSILON { "" } else { "s" },
-            ),
-            "isSubtle": true,
-            "spacing": "None",
-            "wrap": true,
-        }),
-    ];
+    let mut md = format!(
+        "🗓 **Standup — {}** · {} issue{} · {} pt{}",
+        date_label,
+        visible_count,
+        if visible_count == 1 { "" } else { "s" },
+        format_points(total_points),
+        if (total_points - 1.0).abs() < f64::EPSILON { "" } else { "s" },
+    );
 
     for group in &report.groups {
         if group.group == StatusGroup::Attention {
             continue; // panel-only, not surfaced in Teams
         }
 
-        let header = json!({
-            "type": "Container",
-            "style": container_style(group.group),
-            "spacing": "Medium",
-            "bleed": true,
-            "items": [{
-                "type": "ColumnSet",
-                "columns": [
-                    {
-                        "type": "Column",
-                        "width": "stretch",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": format!("{} **{}**  ({})", group.emoji, group.label, group.issues.len()),
-                            "wrap": true,
-                            "size": "Medium",
-                        }],
-                    },
-                    {
-                        "type": "Column",
-                        "width": "auto",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": format!("{} pt", format_points(group.total_points)),
-                            "horizontalAlignment": "Right",
-                            "isSubtle": true,
-                            "wrap": false,
-                        }],
-                    },
-                ],
-            }],
-        });
-        body.push(header);
+        md.push_str("\n\n");
+        md.push_str(&format!(
+            "{} **{}** ({})",
+            group.emoji,
+            group.label,
+            group.issues.len()
+        ));
 
         for issue in &group.issues {
-            let row = json!({
-                "type": "ColumnSet",
-                "spacing": "Small",
-                "columns": [
-                    {
-                        "type": "Column",
-                        "width": "auto",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": status_emoji(&issue.status),
-                            "wrap": false,
-                        }],
-                    },
-                    {
-                        "type": "Column",
-                        "width": "auto",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": format!("[{}]({})", issue.key, issue.url),
-                            "weight": "Bolder",
-                            "wrap": false,
-                        }],
-                    },
-                    {
-                        "type": "Column",
-                        "width": "stretch",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": issue.summary.clone(),
-                            "wrap": true,
-                        }],
-                    },
-                    {
-                        "type": "Column",
-                        "width": "auto",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": issue.status.clone(),
-                            "isSubtle": true,
-                            "wrap": false,
-                        }],
-                    },
-                    {
-                        "type": "Column",
-                        "width": "auto",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": issue
-                                .story_points
-                                .map(format_points)
-                                .unwrap_or_else(|| "—".to_string()),
-                            "horizontalAlignment": "Right",
-                            "weight": "Bolder",
-                            "wrap": false,
-                        }],
-                    },
-                ],
-            });
-            body.push(row);
+            md.push('\r');
+            md.push_str(&format!("- [{}]({}) {}", issue.key, issue.url, issue.summary));
+            if let Some(pts) = issue.story_points {
+                md.push_str(&format!(" · {} pt", format_points(pts)));
+            }
         }
     }
 
-    // Bare Adaptive Card payload — matches the format the user's existing Workflows
-    // webhook accepts (same shape the old standup.js posted).
     json!({
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
         "version": "1.4",
-        "body": body,
+        "body": [{
+            "type": "TextBlock",
+            "text": md,
+            "wrap": true,
+        }],
     })
-}
-
-fn container_style(g: StatusGroup) -> &'static str {
-    match g {
-        StatusGroup::InProgress => "accent",
-        StatusGroup::Review => "warning",
-        StatusGroup::Todo => "emphasis",
-        StatusGroup::Attention => "attention",
-        StatusGroup::Done => "good",
-    }
 }
 
 fn format_points(pts: f64) -> String {
