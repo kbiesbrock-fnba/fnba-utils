@@ -39,6 +39,50 @@ fn current_test_user() -> Option<TestUser> {
     TEST_USER_PICKER.get().and_then(|p| p())
 }
 
+/// Cross-process self-write registry hook. The process that runs the listener
+/// (the daemon) installs closures backed by the shared clipboard DB, so a
+/// clipboard write performed in *either* process — PII substitution here, or a
+/// paste from the manager in the UI process — is recognized as our own echo
+/// and not re-captured. The DB is the channel because the listener and the
+/// paste command live in different processes; an in-process marker (the old
+/// approach) was invisible across that boundary.
+struct SelfWriteStore {
+    mark: Box<dyn Fn(&str) + Send + Sync>,
+    is_self: Box<dyn Fn(&str) -> bool + Send + Sync>,
+}
+static SELF_WRITE_STORE: OnceLock<SelfWriteStore> = OnceLock::new();
+
+/// Install the self-write store. First call wins (mirrors
+/// [`install_test_user_picker`]).
+pub fn install_self_write_store<M, T>(mark: M, is_self: T)
+where
+    M: Fn(&str) + Send + Sync + 'static,
+    T: Fn(&str) -> bool + Send + Sync + 'static,
+{
+    let _ = SELF_WRITE_STORE.set(SelfWriteStore {
+        mark: Box::new(mark),
+        is_self: Box::new(is_self),
+    });
+}
+
+/// Record a clipboard write we just performed so the listener ignores its echo.
+/// No-op until a store is installed (the daemon does so at startup).
+pub fn mark_self_write(hash: String) {
+    if let Some(store) = SELF_WRITE_STORE.get() {
+        (store.mark)(&hash);
+    }
+}
+
+/// True if this clipboard update is an echo of a write we made (and so should
+/// be ignored). Non-consuming — see `ClipboardHistoryState::is_self_write`.
+#[allow(dead_code)] // Only called from the windows-only `read_clipboard_snapshot`.
+fn is_self_write(hash: &str) -> bool {
+    SELF_WRITE_STORE
+        .get()
+        .map(|store| (store.is_self)(hash))
+        .unwrap_or(false)
+}
+
 /// Run PII scan + substitution on a captured text projection. Returns
 /// `(is_pii, obfuscated_text, test_user_id, pii_kinds)`. When PII is detected
 /// we **also replace the OS clipboard** with the obfuscated text — that way
@@ -67,7 +111,7 @@ fn scan_and_substitute(text: &str) -> (bool, Option<String>, Option<i64>, Vec<St
 #[cfg(windows)]
 fn replace_clipboard_with_obfuscated(obfuscated: &str) {
     let hash = win::compute_text_hash(obfuscated);
-    win::mark_self_write(hash);
+    mark_self_write(hash);
     if let Ok(mut cb) = arboard::Clipboard::new() {
         let _ = cb.set_text(obfuscated);
     }
@@ -116,28 +160,6 @@ mod win {
     };
 
     static SENDER: OnceLock<ClipboardEventSender> = OnceLock::new();
-    static OUR_HASH: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
-
-    /// Called by the paste path to tell the listener "we just wrote this hash
-    /// ourselves; ignore the next update if it matches." Prevents the listener
-    /// from echoing user-initiated paste-backs as fresh captures.
-    pub fn mark_self_write(hash: String) {
-        let cell = OUR_HASH.get_or_init(|| std::sync::Mutex::new(None));
-        if let Ok(mut g) = cell.lock() {
-            *g = Some(hash);
-        }
-    }
-
-    fn check_and_clear_self_write(hash: &str) -> bool {
-        let cell = OUR_HASH.get_or_init(|| std::sync::Mutex::new(None));
-        if let Ok(mut g) = cell.lock() {
-            if g.as_deref() == Some(hash) {
-                *g = None;
-                return true;
-            }
-        }
-        false
-    }
 
     pub fn run_listener_thread(tx: ClipboardEventSender) {
         let _ = SENDER.set(tx);
@@ -209,10 +231,12 @@ mod win {
     extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if msg == WM_CLIPBOARDUPDATE {
             if let Some(tx) = SENDER.get() {
+                // Self-write filtering happens inside read_clipboard_snapshot,
+                // per content kind, BEFORE the PII scan — so the echo of our
+                // own obfuscation can't be re-scanned and re-substituted in a
+                // loop. A snapshot that's our own echo comes back as None.
                 if let Some(entry) = read_clipboard_snapshot() {
-                    if !check_and_clear_self_write(&entry.content_hash) {
-                        let _ = tx.send(entry);
-                    }
+                    let _ = tx.send(entry);
                 }
             }
             return LRESULT(0);
@@ -257,6 +281,11 @@ mod win {
             if has_image {
                 if let Some((png, thumb, w, h, byte_size)) = read_image_via_arboard() {
                     let hash = hash_bytes(&[b"img:", &png]);
+                    // Ignore the echo of an image we wrote ourselves (e.g. a
+                    // paste-back from the manager).
+                    if super::is_self_write(&hash) {
+                        return None;
+                    }
                     return Some(NewClipboardEntry {
                         kind: ClipboardKind::Image,
                         text_content: None,
@@ -277,10 +306,15 @@ mod win {
             }
 
             if let Some(html_raw) = html {
+                let hash = hash_bytes(&[b"html:", html_raw.as_bytes()]);
+                // Ignore the echo of our own clipboard write before scanning
+                // (see the text branch below for why the ordering matters).
+                if super::is_self_write(&hash) {
+                    return None;
+                }
                 let plain = text.clone().unwrap_or_else(|| strip_html(&html_raw));
                 let (has_pii, obfuscated, test_user_id, pii_kinds) =
                     super::scan_and_substitute(&plain);
-                let hash = hash_bytes(&[b"html:", html_raw.as_bytes()]);
                 let byte_size = html_raw.len() as i64;
                 return Some(NewClipboardEntry {
                     kind: ClipboardKind::Html,
@@ -304,9 +338,19 @@ mod win {
                 if t.trim().is_empty() {
                     return None;
                 }
+                let hash = hash_bytes(&[b"txt:", t.as_bytes()]);
+                // Ignore the echo of our own clipboard write. This MUST run
+                // before scan_and_substitute: the substituted "safe" value can
+                // itself match the PII detectors (a test SSN is still
+                // ###-##-####), so re-scanning it would re-substitute and
+                // re-write the clipboard in an infinite loop — each iteration
+                // also firing a "Clipboard protected" toast. Bailing here also
+                // keeps an explicit paste-of-original from being re-obfuscated.
+                if super::is_self_write(&hash) {
+                    return None;
+                }
                 let (has_pii, obfuscated, test_user_id, pii_kinds) =
                     super::scan_and_substitute(&t);
-                let hash = hash_bytes(&[b"txt:", t.as_bytes()]);
                 let byte_size = t.len() as i64;
                 return Some(NewClipboardEntry {
                     kind: ClipboardKind::Text,
@@ -531,11 +575,8 @@ mod win {
     }
 }
 
-#[cfg(not(windows))]
-pub fn mark_self_write(_hash: String) {}
-
 #[cfg(windows)]
-pub use win::{compute_text_hash, mark_self_write};
+pub use win::compute_text_hash;
 
 #[cfg(not(windows))]
 pub fn compute_text_hash(_text: &str) -> String {

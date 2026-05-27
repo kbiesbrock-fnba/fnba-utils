@@ -9,6 +9,11 @@
 
 ## [Unreleased]
 
+- **PII-protection toasts now actually appear.** When a copy is detected as sensitive and the clipboard is swapped for safe test data, Windows now pops a "Clipboard protected" notification telling you what was found and how to recover the original (`Win+V`, then `Ctrl+Shift+Enter`). These were already wired up but never showed on the portable build because Windows won't surface a toast for an app it doesn't recognize; the app now registers itself with Windows on startup so the notifications come through. The toast is now raised by the clipboard daemon (which does the actual protection), so it fires even when the main FNBA Utils window is closed.
+- **The clipboard manager reopens at the top of the list.** Opening it again no longer leaves you scrolled where you were last time — it lands on the freshest entry, ready to paste.
+- **Clipboard timestamps show the actual copy time once they're over an hour old.** Recent entries still read `just now` / `12m`; anything older shows the wall-clock time it was copied (e.g. `2:34 PM`, or `May 26 2:34 PM` for earlier days) instead of a vague `3h` / `2d`. Re-copying the same text continues to move that one entry to the top with a refreshed time rather than adding a duplicate.
+- **Fixed PII detection rewriting the clipboard in a loop.** Because the safe test data swapped in can itself look like PII (a test SSN is still formatted like an SSN), the protected value was being re-scanned and re-substituted over and over — thrashing the clipboard and firing a stream of notifications. The app's own clipboard writes — both the automatic protection and pasting an entry from the clipboard manager — are now reliably recognized and skipped on re-capture, so a detected copy is protected exactly once and pasting the original from history is no longer re-obfuscated.
+
 ## v1.12.6 — 2026-05-26
 
 Follow-ups to the v1.12.5 storage + daemon work:

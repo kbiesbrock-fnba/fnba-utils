@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "fnba-clipd"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "embed-resource 2.5.2",
  "fnba-utils",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "fnba-utils"
-version = "1.12.6"
+version = "1.12.7"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -1157,6 +1157,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-notification",
  "tauri-plugin-shell",
+ "tauri-winrt-notification",
  "tiberius",
  "tokio",
  "tokio-util",

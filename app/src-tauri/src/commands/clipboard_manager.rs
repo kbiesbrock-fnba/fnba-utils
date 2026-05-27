@@ -145,18 +145,17 @@ pub async fn paste_clipboard_entry(
         if use_obfuscated {
             // SAFETY: use_obfuscated only true when obfuscated_text is Some.
             let obfuscated = entry.obfuscated_text.as_deref().unwrap_or("");
-            // Mark our own write so the listener doesn't re-capture this as a
-            // fresh entry. Hash uses the same `txt:` prefix the listener uses
-            // for plain-text captures.
-            crate::clipboard::listener::mark_self_write(
-                crate::clipboard::listener::compute_text_hash(obfuscated),
-            );
+            // Mark our own write so the daemon's listener doesn't re-capture
+            // (or re-scan) this as a fresh entry. Recorded in the shared DB
+            // because the listener runs in the daemon process, not here. Hash
+            // uses the same `txt:` prefix the listener uses for plain-text.
+            state.mark_self_write(&crate::clipboard::listener::compute_text_hash(obfuscated));
             let mut cb = arboard::Clipboard::new()
                 .map_err(|e| format!("clipboard open: {e}"))?;
             cb.set_text(obfuscated)
                 .map_err(|e| format!("set obfuscated text: {e}"))?;
         } else {
-            crate::clipboard::listener::mark_self_write(entry.content_hash.clone());
+            state.mark_self_write(&entry.content_hash);
             crate::clipboard::paste::set_clipboard(&entry)?;
         }
         if options.simulate_paste {

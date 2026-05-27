@@ -1,3 +1,4 @@
+mod aumid;
 mod clipboard;
 mod commands;
 mod config;
@@ -27,7 +28,17 @@ pub mod test_users_state {
 }
 
 pub mod clipboard_listener {
-    pub use crate::clipboard::listener::{install_test_user_picker, spawn, ClipboardEventSender};
+    pub use crate::clipboard::listener::{
+        install_self_write_store, install_test_user_picker, spawn, ClipboardEventSender,
+    };
+}
+
+/// Re-exported for the `fnba-clipd` daemon. The daemon registers the toast
+/// AppUserModelID for its own process and raises the PII-protection toast
+/// itself — it captures + substitutes the clipboard and runs even when the
+/// fnba-utils UI process is closed, so it (not the UI) owns the notification.
+pub mod notifications {
+    pub use crate::aumid::{ensure_registered, show_pii_protected};
 }
 
 /// Re-exported so the daemon can run the same legacy-file migration the UI
@@ -45,63 +56,6 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tauri_plugin_notification::NotificationExt;
-
-/// Polls the shared clipboard DB and fires a toast notification each time a
-/// new PII-protected entry lands. Detects "new" via captured_at watermarking
-/// — the same entry being touched (recopied) bumps its captured_at, which we
-/// treat as a fresh notification trigger because the user just copied that
-/// sensitive content again.
-fn run_pii_watcher(handle: AppHandle) {
-    let mut last_seen: i64 = 0;
-    // Skip the first tick — we want to ignore whatever was already in the DB
-    // when the app started.
-    let mut initialized = false;
-    loop {
-        std::thread::sleep(std::time::Duration::from_millis(1200));
-        let Some(history) = handle.try_state::<state::clipboard_history::ClipboardHistoryState>()
-        else {
-            continue;
-        };
-        let latest = history.max_captured_at().unwrap_or(0);
-        if !initialized {
-            last_seen = latest;
-            initialized = true;
-            continue;
-        }
-        if latest <= last_seen {
-            continue;
-        }
-        // Pull the most recent entry and check whether it was auto-protected
-        // (sensitive AND pii_kinds non-empty). pii_kinds is only populated
-        // when our PII detector fired — OS-marker-only sensitivity leaves it
-        // empty, and we don't want to notify on those.
-        let rows = match history.list(None, None, false, 1, 0) {
-            Ok(r) => r,
-            Err(_) => {
-                last_seen = latest;
-                continue;
-            }
-        };
-        last_seen = latest;
-        let Some(top) = rows.into_iter().next() else {
-            continue;
-        };
-        if !top.sensitive || top.pii_kinds.is_empty() {
-            continue;
-        }
-        let kinds = top.pii_kinds.join(", ");
-        let _ = handle
-            .notification()
-            .builder()
-            .title("Clipboard protected")
-            .body(format!(
-                "Detected PII ({kinds}). Clipboard replaced with safe test data. \
-                 Win+V then Ctrl+Shift+Enter for the original."
-            ))
-            .show();
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -109,6 +63,12 @@ pub fn run() {
     // new `%LOCALAPPDATA%\fnba-utils\` location and we want them to find any
     // files left behind by older builds.
     state::paths::migrate_legacy_files();
+
+    // Register our AppUserModelID before any window or notification is created.
+    // The portable build has no installer-created Start Menu shortcut, so
+    // without this Windows silently drops the PII-protection toast. See
+    // `aumid` for the full rationale.
+    aumid::ensure_registered();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -330,24 +290,6 @@ pub fn run() {
             // login. See `clipboard::daemon`.
             if let Err(e) = clipboard::daemon::ensure_running_and_registered() {
                 eprintln!("fnba-clipd auto-launch failed: {e}");
-            }
-
-            // --- PII Protection Watcher ---
-            // The daemon process auto-replaces the OS clipboard when it
-            // detects PII in a fresh capture. This thread (in the UI process)
-            // polls the shared DB and fires a Windows toast notification
-            // every time a new PII-protected entry lands, so the user knows
-            // the clipboard was replaced before they paste. The original is
-            // still in history — Win+V then Ctrl+Shift+Enter retrieves it.
-            //
-            // Notification only fires when fnba-utils.exe is open. The
-            // protection itself runs unconditionally in the daemon.
-            {
-                let handle = app.handle().clone();
-                std::thread::Builder::new()
-                    .name("fnba-pii-watcher".into())
-                    .spawn(move || run_pii_watcher(handle))
-                    .expect("failed to spawn pii watcher");
             }
 
             // --- Global Shortcut: Win+Shift+D (Standup Panel) ---

@@ -204,6 +204,11 @@ export function useClipboardManager() {
       // initialFilter="pinned" to land directly on the pinned view.
       query.value = "";
       filter.value = p?.initialFilter === "pinned" ? "pinned" : "all";
+      // Drop the prior selection so the reload selects the top (freshest)
+      // entry. The window is only hidden — not destroyed — so its list keeps
+      // the old scroll offset across opens; re-selecting the first row makes
+      // the selection-scroll watch pull the list back to the top.
+      selectedId.value = null;
       void load();
     });
   });

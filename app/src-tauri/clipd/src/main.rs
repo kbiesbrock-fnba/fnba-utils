@@ -37,7 +37,13 @@ fn main() {
     // old path. Idempotent: re-running it is just orphan cleanup.
     fnba_utils_lib::app_paths::migrate_legacy_files();
 
-    let history = fnba_utils_lib::clipboard_state::load();
+    // Register our toast AppUserModelID for this process. The daemon
+    // auto-starts at login independently of fnba-utils, so it can't rely on
+    // the UI process having registered the AUMID — without this its toasts
+    // would silently fail (see fnba_utils_lib::aumid for the full rationale).
+    fnba_utils_lib::notifications::ensure_registered();
+
+    let history = std::sync::Arc::new(fnba_utils_lib::clipboard_state::load());
     let test_users = std::sync::Arc::new(fnba_utils_lib::test_users_state::load());
 
     // Install the test-user picker BEFORE spawning the listener so the very
@@ -48,6 +54,21 @@ fn main() {
         fnba_utils_lib::clipboard_listener::install_test_user_picker(move || {
             pool.pick_random_enabled().ok().flatten()
         });
+    }
+
+    // Install the self-write registry BEFORE spawning the listener. The
+    // listener consumes a mark on each clipboard update to skip the echo of a
+    // write we made ourselves — both the daemon's own PII substitution and a
+    // paste from the UI's clipboard manager (which records its mark in the
+    // same shared DB). Without this, the substituted "safe" value would be
+    // re-scanned, re-substituted, and re-written in an infinite loop.
+    {
+        let h_mark = history.clone();
+        let h_check = history.clone();
+        fnba_utils_lib::clipboard_listener::install_self_write_store(
+            move |hash: &str| h_mark.mark_self_write(hash),
+            move |hash: &str| h_check.is_self_write(hash),
+        );
     }
 
     let (tx, mut rx) =
@@ -78,11 +99,26 @@ fn main() {
                     continue;
                 }
             }
+            // Capture the toast trigger before `entry` is moved into the
+            // insert. We only notify on auto-protected content: `pii_kinds` is
+            // populated solely when our detector matched, so OS-marker-only
+            // sensitivity (empty kinds) is skipped. Both a fresh insert and a
+            // re-copy (Touched) count as a deliberate copy worth notifying on.
+            let pii_kinds = (entry.sensitive && !entry.pii_kinds.is_empty())
+                .then(|| entry.pii_kinds.join(", "));
+
             match history.insert_or_touch(entry) {
                 Ok(fnba_utils_lib::clipboard_state::InsertOutcome::Inserted(_)) => {
                     let _ = history.prune(&settings);
+                    if let Some(kinds) = pii_kinds {
+                        fnba_utils_lib::notifications::show_pii_protected(&kinds);
+                    }
                 }
-                Ok(fnba_utils_lib::clipboard_state::InsertOutcome::Touched(_)) => {}
+                Ok(fnba_utils_lib::clipboard_state::InsertOutcome::Touched(_)) => {
+                    if let Some(kinds) = pii_kinds {
+                        fnba_utils_lib::notifications::show_pii_protected(&kinds);
+                    }
+                }
                 Err(e) => eprintln!("fnba-clipd insert failed: {e}"),
             }
         }

@@ -17,6 +17,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const DEFAULT_TEXT_CAP: u32 = 5_000;
 pub const DEFAULT_IMAGE_CAP: u32 = 500;
 
+/// How long a self-write mark suppresses re-capture of that exact content.
+/// A single clipboard write can echo more than once — the OS write itself,
+/// plus apps like IntelliJ (idea64) that re-assert clipboard ownership when
+/// the contents change — so the mark must outlive the first echo, yet stay
+/// short enough not to swallow a genuine later copy of the same value. Stale
+/// marks are also swept on access so the table can't grow.
+const SELF_WRITE_TTL_MS: i64 = 5_000;
+
 fn epoch_ms_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -199,6 +207,17 @@ impl ClipboardHistoryState {
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            -- Cross-process self-write registry. When either process writes the
+            -- OS clipboard itself (PII substitution in the daemon, or a paste
+            -- from the manager in the UI), it records the content hash here so
+            -- the daemon's clipboard listener ignores the resulting echo rather
+            -- than re-capturing / re-scanning it. Shared via the DB because the
+            -- listener and the paste command run in different processes.
+            CREATE TABLE IF NOT EXISTS self_writes (
+                hash       TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL
+            );
             ",
         )?;
 
@@ -218,6 +237,56 @@ impl ClipboardHistoryState {
             }
         }
         Ok(())
+    }
+
+    /// Record a clipboard write we performed ourselves so the listener can
+    /// ignore its echo. Cross-process: the daemon (PII substitution) and the
+    /// UI (paste from the manager) both write here; the daemon's listener
+    /// checks it via [`Self::is_self_write`]. Best-effort — a failure just
+    /// means the echo gets re-captured, not a crash.
+    pub fn mark_self_write(&self, hash: &str) {
+        if let Ok(conn) = self.conn.lock() {
+            let now = epoch_ms_now();
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO self_writes(hash, created_at) VALUES(?1, ?2)",
+                params![hash, now],
+            );
+            // Drop marks whose echo window has passed so the table can't grow.
+            let _ = conn.execute(
+                "DELETE FROM self_writes WHERE created_at < ?1",
+                params![now - SELF_WRITE_TTL_MS],
+            );
+        }
+    }
+
+    /// Returns true if `hash` was registered by [`Self::mark_self_write`]
+    /// within the last [`SELF_WRITE_TTL_MS`], meaning this clipboard update is
+    /// an echo of our own write and should be ignored.
+    ///
+    /// Deliberately does NOT consume the mark: a single write often echoes
+    /// more than once (the OS write, then apps like IntelliJ re-asserting
+    /// clipboard ownership), and every one of those must be ignored. The mark
+    /// ages out via the TTL instead, which also garbage-collects it.
+    pub fn is_self_write(&self, hash: &str) -> bool {
+        if let Ok(conn) = self.conn.lock() {
+            let now = epoch_ms_now();
+            // Sweep stale marks first so an expired one can't suppress a fresh
+            // copy of the same content.
+            let _ = conn.execute(
+                "DELETE FROM self_writes WHERE created_at < ?1",
+                params![now - SELF_WRITE_TTL_MS],
+            );
+            return conn
+                .query_row(
+                    "SELECT 1 FROM self_writes WHERE hash = ?1",
+                    params![hash],
+                    |_| Ok(()),
+                )
+                .optional()
+                .unwrap_or(None)
+                .is_some();
+        }
+        false
     }
 
     /// Insert a new clipboard entry, or — if the content_hash already exists —

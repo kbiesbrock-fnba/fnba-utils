@@ -70,12 +70,18 @@ function runAction(action: "open" | "pasteOriginal" | "copyObfuscated" | "copyOr
 }
 
 function humanAgo(epoch: number): string {
-  const m = Math.floor((Date.now() - epoch) / 60_000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  const now = Date.now();
+  const mins = Math.floor((now - epoch) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  // Past an hour, a coarse "3h"/"2d" is less useful than the actual wall-clock
+  // time it was copied. Same-day copies show just the time; older ones include
+  // the date so a day-old copy isn't ambiguous.
+  const when = new Date(epoch);
+  const time = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (when.toDateString() === new Date(now).toDateString()) return time;
+  const date = when.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${date} ${time}`;
 }
 </script>
 
