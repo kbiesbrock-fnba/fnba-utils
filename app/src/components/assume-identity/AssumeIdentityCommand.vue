@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
-import { useAssumeIdentity, prefillUsername } from "@/composables/useAssumeIdentity";
+import { useAssumeIdentity } from "@/composables/useAssumeIdentity";
 import { useCommandKeys } from "@/composables/useCommandKeys";
 import StatusBar from "../StatusBar.vue";
 import LoadingView from "../LoadingView.vue";
@@ -9,6 +9,7 @@ import ImposterPicker from "./ImposterPicker.vue";
 import UserPicker from "./UserPicker.vue";
 import ConnectionPicker from "./ConnectionPicker.vue";
 import AssumeIdentityResult from "./AssumeIdentityResult.vue";
+import AssociateRightsResult from "./AssociateRightsResult.vue";
 
 const emit = defineEmits<{
   back: [];
@@ -25,15 +26,22 @@ const {
   selectedConnection,
   result,
   error,
+  loading,
   recentUsers,
+  searchServer,
+  inspectedAssociate,
+  inspectedRights,
   loadData,
   reset,
   selectImposter,
   selectUser,
   selectConnection,
-  execute,
+  pinUser,
+  unpinFavorite,
   removeRecentUser,
-  deleteCustomUser,
+  viewRights,
+  assumeInspected,
+  execute,
   deleteCustomConnection,
   deleteCustomImposter,
   goBack,
@@ -48,14 +56,6 @@ const selectedUserLabels = computed(() => {
 onMounted(async () => {
   reset();
   await loadData();
-  if (prefillUsername.value) {
-    const username = prefillUsername.value;
-    prefillUsername.value = null;
-    const existing = users.value.find(
-      (u) => u.username.toLowerCase() === username.toLowerCase(),
-    );
-    selectUser(existing ?? { username, label: "Custom" });
-  }
 });
 
 onUnmounted(() => reset());
@@ -77,6 +77,7 @@ useCommandKeys({
   emitDismiss: () => emit("dismiss"),
   escapeDismissSteps: ["error"],
   enterActions: {
+    userRights: () => assumeInspected(),
     confirm: () => execute(),
     result: () => emit("dismiss"),
     error: () => emit("dismiss"),
@@ -93,8 +94,28 @@ defineExpose({ step });
   </template>
 
   <template v-else-if="step === 'user'">
-    <UserPicker :users="users" :recent-users="recentUsers" @select="selectUser" @remove-recent="removeRecentUser" @delete-custom="deleteCustomUser" />
-    <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
+    <UserPicker
+      :users="users"
+      :recent-users="recentUsers"
+      :search-server="searchServer"
+      @select="selectUser"
+      @remove-favorite="unpinFavorite"
+      @remove-recent="removeRecentUser"
+      @pin="pinUser"
+      @view-rights="viewRights"
+    />
+    <StatusBar hint="↑↓ Navigate  ←→ Scope  ⇥ Rights  1–9 Quick  ⏎ Select  ⎋ Back" />
+  </template>
+
+  <template v-else-if="step === 'userRights'">
+    <LoadingView v-if="loading && inspectedRights.length === 0" message="Loading rights…" />
+    <AssociateRightsResult
+      v-else-if="inspectedAssociate"
+      :associate="inspectedAssociate"
+      :rights="inspectedRights"
+      @assume="assumeInspected"
+    />
+    <StatusBar hint="↑↓ Scroll  ⏎ Assume  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'connection'">

@@ -1,11 +1,11 @@
 import { ref, watch, nextTick, type Ref } from "vue";
-import { useKeyLayer, KEY_PRIORITY, type KeyBinding, type KeyHandler } from "./useKeyLayer";
+import { useKeyLayer, KEY_PRIORITY, type KeyBinding } from "./useKeyLayer";
 
 interface ListNavigationOptions {
   itemCount: Ref<number> | (() => number);
   onSelect?: (index: number) => void;
   onEnterEmpty?: () => void;
-  extraKeys?: Array<{ key: string; handler: KeyHandler }>;
+  extraKeys?: KeyBinding[];
   listRef?: Ref<HTMLElement | null>;
   scrollStrategy?: "data-index" | "children" | "selected-class";
   priority?: number;

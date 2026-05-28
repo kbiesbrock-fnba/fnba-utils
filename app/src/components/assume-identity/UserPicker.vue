@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import type { IdentityUser } from "@/lib/tauri";
+import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import type { IdentityUser, RightInfo, RightAssociate } from "@/lib/tauri";
 import type { RecentEntry } from "@/composables/useAssumeIdentity";
+import {
+  recentRights,
+  recordRecentRight,
+  removeRecentRight,
+  loadRights,
+  filterRights,
+  searchPeople,
+  holdersOfRight,
+} from "@/composables/useDirectorySearch";
 import { useListNavigation } from "@/composables/useListNavigation";
 import CommandInput from "../CommandInput.vue";
 import LabelPrompt from "./LabelPrompt.vue";
@@ -9,202 +18,641 @@ import LabelPrompt from "./LabelPrompt.vue";
 const props = defineProps<{
   users: IdentityUser[];
   recentUsers: RecentEntry[];
+  searchServer: string;
 }>();
 
 const emit = defineEmits<{
   select: [user: IdentityUser];
-  removeRecent: [username: string];
-  deleteCustom: [username: string];
+  removeFavorite: [label: string, username: string];
+  removeRecent: [label: string, username: string];
+  pin: [username: string, label: string];
+  viewRights: [assoc: RightAssociate];
 }>();
 
+type Scope = "people" | "rights";
+const scope = ref<Scope>("people");
 const query = ref("");
 const listRef = ref<HTMLElement | null>(null);
-const labelMode = ref<{ username: string } | null>(null);
 
-type DisplayRow =
-  | { kind: "header"; title: string }
-  | { kind: "user"; user: IdentityUser; displayLabel: string; flatIndex: number; isRecent: boolean; isCustom: boolean };
+// Pin offer shown after selecting a person who isn't already a favorite.
+const pinMode = ref<{ username: string; defaultLabel: string } | null>(null);
 
-const displayData = computed(() => {
-  const q = query.value.toLowerCase();
-  const matching = q
-    ? props.users.filter(
-        (u) =>
-          u.username.toLowerCase().includes(q) ||
-          u.label.toLowerCase().includes(q),
-      )
-    : props.users;
+// Rights scope
+const allRights = ref<RightInfo[]>([]);
+const rightDrill = ref<RightInfo | null>(null);
+const holders = ref<RightAssociate[]>([]);
+const holdersLoading = ref(false);
 
-  const rows: DisplayRow[] = [];
-  let flatIndex = 0;
+// People directory search (debounced)
+const directory = ref<RightAssociate[]>([]);
+const searching = ref(false);
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let searchVersion = 0;
 
-  // Recently used section
-  if (props.recentUsers.length > 0) {
-    const recentItems: { user: IdentityUser; displayLabel: string }[] = [];
-    for (const recent of props.recentUsers) {
-      const entries = matching.filter((u) => u.username === recent.username);
-      const matchesQuery = !q || recent.username.toLowerCase().includes(q) || recent.label.toLowerCase().includes(q);
-      if (entries.length > 0 || matchesQuery) {
-        const user = entries.length > 0
-          ? entries[0]
-          : { username: recent.username, label: recent.label };
-        const userLabels = entries.length > 0
-          ? [...new Set(entries.map((e) => e.label))].sort().join(" / ")
-          : recent.label;
-        const connPart = recent.connectionLabel || recent.connectionServer;
-        const displayLabel = connPart ? `${userLabels} · ${connPart}` : userLabels;
-        recentItems.push({ user, displayLabel });
-      }
-    }
-    if (recentItems.length > 0) {
-      rows.push({ kind: "header", title: "Recently Used" });
-      for (const item of recentItems) {
+onMounted(async () => {
+  try {
+    allRights.value = await loadRights(props.searchServer);
+  } catch {
+    allRights.value = [];
+  }
+});
+onUnmounted(() => {
+  if (debounceTimer) clearTimeout(debounceTimer);
+});
+
+// --- Row model (single shape to keep template type-checking simple) ---
+interface Row {
+  kind: "header" | "person" | "right" | "searching" | "empty";
+  text?: string; // header label / empty text
+  flatIndex?: number; // selectable position (drives digit / arrow selection)
+  badge?: string; // 1–9 hot-pick digit
+  // person
+  username?: string | null;
+  roleLabel?: string;
+  primary?: string;
+  secondary?: string;
+  isFavoriteRow?: boolean; // row came from props.users — removable via Delete
+  isRecentUser?: boolean; // row came from props.recentUsers — transient, removable via Delete
+  noLogin?: boolean;
+  isRecent?: boolean; // used by right rows (recent rights, in the Rights scope)
+  assoc?: RightAssociate; // present for directory / holder rows (enables "view rights")
+  // right
+  right?: RightInfo;
+}
+
+function badgeFor(idx: number): string | undefined {
+  return idx < 9 ? String(idx + 1) : undefined;
+}
+
+// Reset the list scroll so a freshly-rendered view (e.g. drilling into a
+// right's holders) starts at the top with row 0 visible, rather than keeping
+// the previous view's scroll position.
+function scrollListTop() {
+  nextTick(() => {
+    if (listRef.value) listRef.value.scrollTop = 0;
+  });
+}
+
+function personLabel(a: RightAssociate): string {
+  return a.jobTitle || a.department || "Search";
+}
+function personPrimary(a: RightAssociate): string {
+  return a.nickname || a.login || `#${a.assocId}`;
+}
+function personSecondary(a: RightAssociate): string {
+  const name = [a.firstName, a.lastName].filter(Boolean).join(" ");
+  const role = a.jobTitle || a.department || "";
+  return [name, role].filter(Boolean).join(" · ");
+}
+
+/** Composite (label, username) favorite check — drives the pin-offer decision
+ *  and lets us hide recents that have since been pinned under the same label. */
+function isFavComposite(label: string, username: string): boolean {
+  const lo = label.toLowerCase();
+  const un = username.toLowerCase();
+  return props.users.some(
+    (u) => u.label.toLowerCase() === lo && u.username.toLowerCase() === un,
+  );
+}
+
+function buildPeopleRows(): { rows: Row[]; selectable: number } {
+  const rows: Row[] = [];
+  let idx = 0;
+  const q = query.value.trim().toLowerCase();
+  const seen = new Set<string>();
+
+  if (!q) {
+    if (props.users.length) {
+      rows.push({ kind: "header", text: "Favorites" });
+      for (const u of props.users) {
+        const fi = idx++;
+        seen.add(u.username.toLowerCase());
         rows.push({
-          kind: "user",
-          user: item.user,
-          displayLabel: item.displayLabel,
-          flatIndex: flatIndex++,
-          isRecent: true,
-          isCustom: !!item.user.isCustom,
+          kind: "person",
+          flatIndex: fi,
+          badge: badgeFor(fi),
+          username: u.username,
+          roleLabel: u.label,
+          primary: u.username,
+          secondary: u.label,
+          isFavoriteRow: true,
         });
       }
     }
+
+    // Recently Used — last N unpinned assumes. Filter out any that have since
+    // been pinned (composite match against favorites). Numbering continues from
+    // favorites, so digit 1–9 spans both sections in display order.
+    const visibleRecents = props.recentUsers.filter(
+      (r) => !isFavComposite(r.label, r.username),
+    );
+    if (visibleRecents.length) {
+      rows.push({ kind: "header", text: "Recently Used" });
+      for (const r of visibleRecents) {
+        const fi = idx++;
+        seen.add(r.username.toLowerCase());
+        rows.push({
+          kind: "person",
+          flatIndex: fi,
+          badge: badgeFor(fi),
+          username: r.username,
+          roleLabel: r.label,
+          primary: r.username,
+          secondary: r.label,
+          isRecentUser: true,
+        });
+      }
+    }
+
+    if (idx === 0) {
+      rows.push({ kind: "empty", text: "No favorites yet — type to search the directory" });
+    }
+    return { rows, selectable: idx };
   }
 
-  // Group by label, alphabetically
-  const groups = new Map<string, IdentityUser[]>();
-  for (const u of matching) {
-    const arr = groups.get(u.label) ?? [];
-    arr.push(u);
-    groups.set(u.label, arr);
-  }
-  for (const arr of groups.values()) {
-    arr.sort((a, b) => a.username.localeCompare(b.username));
-  }
-  const sortedLabels = [...groups.keys()].sort((a, b) =>
-    a.localeCompare(b),
+  const favMatches = props.users.filter(
+    (u) => u.username.toLowerCase().includes(q) || u.label.toLowerCase().includes(q),
   );
-
-  for (const label of sortedLabels) {
-    rows.push({ kind: "header", title: label });
-    for (const user of groups.get(label)!) {
+  if (favMatches.length) {
+    rows.push({ kind: "header", text: "Favorites" });
+    for (const u of favMatches) {
+      const fi = idx++;
+      seen.add(u.username.toLowerCase());
       rows.push({
-        kind: "user",
-        user,
-        displayLabel: "",
-        flatIndex: flatIndex++,
-        isRecent: false,
-        isCustom: !!user.isCustom,
+        kind: "person",
+        flatIndex: fi,
+        badge: badgeFor(fi),
+        username: u.username,
+        roleLabel: u.label,
+        primary: u.username,
+        secondary: u.label,
+        isFavoriteRow: true,
       });
     }
   }
 
-  return { rows, totalItems: flatIndex };
-});
-
-function getRowAtIndex(index: number) {
-  for (const row of displayData.value.rows) {
-    if (row.kind === "user" && row.flatIndex === index) return row;
+  // Matching Recents (between favorites and Directory). Skip ones that match
+  // a favorite, ones already shown by username via the directory dedupe, and
+  // anything that doesn't match the query.
+  const recentMatches = props.recentUsers.filter(
+    (r) =>
+      !isFavComposite(r.label, r.username) &&
+      !seen.has(r.username.toLowerCase()) &&
+      (r.username.toLowerCase().includes(q) || r.label.toLowerCase().includes(q)),
+  );
+  if (recentMatches.length) {
+    rows.push({ kind: "header", text: "Recently Used" });
+    for (const r of recentMatches) {
+      const fi = idx++;
+      seen.add(r.username.toLowerCase());
+      rows.push({
+        kind: "person",
+        flatIndex: fi,
+        badge: badgeFor(fi),
+        username: r.username,
+        roleLabel: r.label,
+        primary: r.username,
+        secondary: r.label,
+        isRecentUser: true,
+      });
+    }
   }
-  return undefined;
+
+  rows.push({ kind: "header", text: "Directory" });
+  if (searching.value) {
+    rows.push({ kind: "searching" });
+  } else if (q.length < 2) {
+    rows.push({ kind: "empty", text: "Keep typing to search…" });
+  } else {
+    const dir = directory.value.filter((a) => !a.login || !seen.has(a.login.toLowerCase()));
+    if (dir.length === 0) {
+      rows.push({ kind: "empty", text: "No directory matches" });
+    } else {
+      for (const a of dir) {
+        if (a.login) {
+          const fi = idx++;
+          seen.add(a.login.toLowerCase());
+          rows.push({
+            kind: "person",
+            flatIndex: fi,
+            badge: badgeFor(fi),
+            username: a.login,
+            roleLabel: personLabel(a),
+            primary: personPrimary(a),
+            secondary: personSecondary(a),
+            assoc: a,
+          });
+        } else {
+          rows.push({
+            kind: "person",
+            username: null,
+            roleLabel: personLabel(a),
+            primary: personPrimary(a),
+            secondary: personSecondary(a),
+            noLogin: true,
+            assoc: a,
+          });
+        }
+      }
+    }
+  }
+  return { rows, selectable: idx };
+}
+
+function buildRightsRows(): { rows: Row[]; selectable: number } {
+  const rows: Row[] = [];
+  let idx = 0;
+  const q = query.value.trim();
+
+  if (rightDrill.value) {
+    rows.push({ kind: "header", text: `Holders of ${rightDrill.value.rightName}` });
+    if (holdersLoading.value) {
+      rows.push({ kind: "searching" });
+    } else if (holders.value.length === 0) {
+      rows.push({ kind: "empty", text: "No holders found" });
+    } else {
+      for (const a of holders.value) {
+        if (a.login) {
+          const fi = idx++;
+          rows.push({
+            kind: "person",
+            flatIndex: fi,
+            badge: badgeFor(fi),
+            username: a.login,
+            roleLabel: personLabel(a),
+            primary: personPrimary(a),
+            secondary: personSecondary(a),
+            assoc: a,
+          });
+        } else {
+          rows.push({
+            kind: "person",
+            username: null,
+            roleLabel: personLabel(a),
+            primary: personPrimary(a),
+            secondary: personSecondary(a),
+            noLogin: true,
+            assoc: a,
+          });
+        }
+      }
+    }
+    return { rows, selectable: idx };
+  }
+
+  if (!q) {
+    if (recentRights.value.length) {
+      rows.push({ kind: "header", text: "Recent Rights" });
+      for (const r of recentRights.value) {
+        const fi = idx++;
+        rows.push({
+          kind: "right",
+          flatIndex: fi,
+          badge: badgeFor(fi),
+          right: { rightId: r.rightId, rightName: r.rightName },
+          isRecent: true,
+        });
+      }
+    } else {
+      rows.push({ kind: "empty", text: "Type to search rights" });
+    }
+    return { rows, selectable: idx };
+  }
+
+  const matches = filterRights(allRights.value, q);
+  if (matches.length === 0) {
+    rows.push({ kind: "empty", text: "No matching rights" });
+  } else {
+    rows.push({ kind: "header", text: `Rights matching "${q}"` });
+    for (const r of matches) {
+      const fi = idx++;
+      rows.push({ kind: "right", flatIndex: fi, badge: badgeFor(fi), right: r });
+    }
+  }
+  return { rows, selectable: idx };
+}
+
+const displayData = computed(() =>
+  scope.value === "people" ? buildPeopleRows() : buildRightsRows(),
+);
+const totalSelectable = computed(() => displayData.value.selectable);
+
+function rowAtIndex(i: number): Row | undefined {
+  return displayData.value.rows.find(
+    (r) => (r.kind === "person" || r.kind === "right") && r.flatIndex === i,
+  );
+}
+
+function selectAtIndex(i: number) {
+  const row = rowAtIndex(i);
+  if (!row) return;
+  if (row.kind === "right" && row.right) {
+    selectRight(row.right);
+  } else if (row.kind === "person" && row.username) {
+    selectPerson(row.username, row.roleLabel ?? "Custom");
+  }
+}
+
+function selectPerson(username: string, label: string) {
+  // Assume directly. Non-favorite assumes flow into Recently Used (via the
+  // composable's execute()). Pinning is now an explicit side-action — see
+  // startPin() / the row's pin button — not something that ever interrupts
+  // the assume path.
+  emit("select", { username, label });
+}
+
+/** Open the label prompt to pin a row to favorites. Triggered by the row's
+ *  pin button (mouse) — explicit, never accidental. */
+function startPin(username: string, label: string) {
+  pinMode.value = { username, defaultLabel: label };
+}
+
+async function selectRight(right: RightInfo) {
+  rightDrill.value = right;
+  recordRecentRight(right);
+  resetIndex();
+  scrollListTop();
+  holders.value = [];
+  holdersLoading.value = true;
+  try {
+    holders.value = await holdersOfRight(props.searchServer, right);
+  } catch {
+    holders.value = [];
+  } finally {
+    holdersLoading.value = false;
+    // Re-anchor on the first holder now that the list has populated.
+    resetIndex();
+    scrollListTop();
+  }
+}
+
+function exitDrill() {
+  rightDrill.value = null;
+  resetIndex();
+  scrollListTop();
+}
+
+function onPinConfirm(label: string) {
+  const pm = pinMode.value;
+  if (!pm) return;
+  pinMode.value = null;
+  // Pin only — do NOT emit select. Pinning is a side-action; the user remains
+  // on the picker view, where the just-pinned entry has now moved into
+  // Favorites (at the top, because pinUser also stamps LastUsed).
+  emit("pin", pm.username, label);
+}
+function onPinCancel() {
+  pinMode.value = null;
+}
+
+function switchScope(s: Scope) {
+  if (scope.value === s && !(s === "rights" && rightDrill.value)) return;
+  scope.value = s;
+  resetIndex();
+  scrollListTop();
+  if (s === "rights") {
+    rightDrill.value = null;
+  } else if (query.value.trim().length >= 2) {
+    scheduleSearch(query.value);
+  }
+}
+
+async function runPeopleSearch(v: string, version: number) {
+  try {
+    const res = await searchPeople(props.searchServer, v);
+    if (version === searchVersion) directory.value = res;
+  } catch {
+    if (version === searchVersion) directory.value = [];
+  } finally {
+    if (version === searchVersion) searching.value = false;
+  }
+}
+
+function scheduleSearch(value: string) {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  const v = value.trim();
+  const version = ++searchVersion;
+  if (v.length >= 2) {
+    searching.value = true;
+    debounceTimer = setTimeout(() => runPeopleSearch(v, version), 250);
+  } else {
+    directory.value = [];
+    searching.value = false;
+  }
+}
+
+function onUpdate(value: string) {
+  query.value = value;
+  resetIndex();
+  if (scope.value === "people") scheduleSearch(value);
 }
 
 const { selectedIndex, resetIndex } = useListNavigation({
-  itemCount: () => labelMode.value ? 0 : displayData.value.totalItems,
-  onSelect: (i) => {
-    const row = getRowAtIndex(i);
-    if (row) emit("select", row.user);
-  },
+  itemCount: () => (pinMode.value ? 0 : totalSelectable.value),
+  onSelect: selectAtIndex,
   onEnterEmpty: () => {
-    if (query.value.trim()) {
-      labelMode.value = { username: query.value.trim() };
+    if (pinMode.value) return;
+    if (scope.value === "people" && query.value.trim()) {
+      selectPerson(query.value.trim(), "Custom");
     }
   },
   extraKeys: [
     {
+      key: "ArrowRight",
+      preventDefault: false,
+      handler: (e) => {
+        if (pinMode.value) return false;
+        e.preventDefault();
+        if (scope.value === "people") switchScope("rights");
+      },
+    },
+    {
+      key: "ArrowLeft",
+      preventDefault: false,
+      handler: (e) => {
+        if (pinMode.value) return false;
+        e.preventDefault();
+        if (scope.value === "rights" && rightDrill.value) {
+          exitDrill();
+        } else if (scope.value === "rights") {
+          switchScope("people");
+        }
+      },
+    },
+    {
+      key: "Escape",
+      handler: () => {
+        if (pinMode.value) return false; // LabelPrompt owns Escape while open
+        if (scope.value === "rights" && rightDrill.value) {
+          exitDrill();
+          return; // consumed
+        }
+        return false; // let the command step back to the imposter picker
+      },
+    },
+    {
       key: "Delete",
       handler: () => {
-        if (labelMode.value) return false;
-        if (displayData.value.totalItems === 0) return false;
-        const row = getRowAtIndex(selectedIndex.value);
-        if (row?.isRecent) {
-          emit("removeRecent", row.user.username);
+        if (pinMode.value) return false;
+        const row = rowAtIndex(selectedIndex.value);
+        if (!row) return false;
+        if (row.kind === "right" && row.isRecent && row.right) {
+          removeRecentRight(row.right.rightId);
           return;
         }
-        if (row?.isCustom) {
-          emit("deleteCustom", row.user.username);
+        if (
+          row.kind === "person" &&
+          row.isFavoriteRow &&
+          row.username &&
+          row.roleLabel
+        ) {
+          emit("removeFavorite", row.roleLabel, row.username);
+          return;
+        }
+        if (
+          row.kind === "person" &&
+          row.isRecentUser &&
+          row.username &&
+          row.roleLabel
+        ) {
+          emit("removeRecent", row.roleLabel, row.username);
           return;
         }
         return false;
       },
     },
+    {
+      // View the highlighted person's rights (the "what can they do" audit).
+      key: "Tab",
+      handler: () => {
+        if (pinMode.value) return false;
+        const row = rowAtIndex(selectedIndex.value);
+        if (row?.assoc) emit("viewRights", row.assoc);
+      },
+    },
+    ...["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => ({
+      key: d,
+      preventDefault: false,
+      handler: (e: KeyboardEvent) => {
+        if (pinMode.value) return false;
+        // In the rights list, digits type into the search box (search by id).
+        // Elsewhere (people / a right's holders) they quick-select the Nth row.
+        if (scope.value === "rights" && !rightDrill.value) return false;
+        e.preventDefault();
+        const n = parseInt(d, 10) - 1;
+        if (n < totalSelectable.value) selectAtIndex(n);
+      },
+    })),
   ],
   listRef,
-  scrollStrategy: "data-index",
+  scrollStrategy: "selected-class",
 });
-
-function onUpdate(value: string) {
-  query.value = value;
-  resetIndex();
-}
-
-function onLabelConfirm(label: string) {
-  if (!labelMode.value) return;
-  emit("select", { username: labelMode.value.username, label });
-  labelMode.value = null;
-}
-
-function onLabelCancel() {
-  labelMode.value = null;
-}
 </script>
 
 <template>
   <LabelPrompt
-    v-if="labelMode"
-    :value="labelMode.username"
+    v-if="pinMode"
+    :value="pinMode.username"
+    :initial="pinMode.defaultLabel"
     default-label="Other"
-    @confirm="onLabelConfirm"
-    @cancel="onLabelCancel"
+    :placeholder="`Role label for ${pinMode.username} (edit or press Enter)…`"
+    @confirm="onPinConfirm"
+    @cancel="onPinCancel"
   />
   <template v-else>
-    <CommandInput key="query" :value="query" placeholder="Select user..." @update="onUpdate" />
+    <CommandInput
+      :value="query"
+      :placeholder="scope === 'people' ? 'Search people…' : 'Search rights…'"
+      @update="onUpdate"
+    />
+    <div class="segmented">
+      <button class="seg" :class="{ active: scope === 'people' }" @click="switchScope('people')">
+        People
+      </button>
+      <button class="seg" :class="{ active: scope === 'rights' }" @click="switchScope('rights')">
+        Rights
+      </button>
+      <span class="seg-hint">←/→ switch</span>
+    </div>
     <div class="picker-divider" />
     <div ref="listRef" class="picker-list">
-      <div v-if="displayData.totalItems === 0 && query.trim()" class="empty use-custom">
-        Press Enter to use <strong>{{ query.trim() }}</strong>
-      </div>
-      <div v-else-if="displayData.totalItems === 0" class="empty">No matching users</div>
       <template v-for="(row, i) in displayData.rows" :key="i">
-        <div v-if="row.kind === 'header'" class="section-header">
-          {{ row.title }}
+        <div v-if="row.kind === 'header'" class="section-header">{{ row.text }}</div>
+
+        <div v-else-if="row.kind === 'empty'" class="empty">{{ row.text }}</div>
+
+        <div v-else-if="row.kind === 'searching'" class="searching-row">
+          <div class="mini-spinner" />
+          <span>Searching…</span>
         </div>
+
+        <div
+          v-else-if="row.kind === 'right'"
+          class="picker-item right-item"
+          :class="{ selected: row.flatIndex === selectedIndex }"
+          @click="row.right && selectRight(row.right)"
+          @mouseenter="row.flatIndex !== undefined && (selectedIndex = row.flatIndex)"
+        >
+          <span v-if="row.badge" class="kbd">{{ row.badge }}</span>
+          <span class="picker-name">{{ row.right?.rightName }}</span>
+          <span class="picker-id">#{{ row.right?.rightId }}</span>
+          <button
+            v-if="row.isRecent && row.right"
+            class="remove-btn"
+            title="Remove from recent (Del)"
+            @click.stop="removeRecentRight(row.right.rightId)"
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
+              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
+        </div>
+
         <div
           v-else
           class="picker-item"
-          :class="{ selected: row.flatIndex === selectedIndex }"
-          :data-index="row.flatIndex"
-          @click="emit('select', row.user)"
-          @mouseenter="selectedIndex = row.flatIndex"
+          :class="{
+            selected: row.flatIndex !== undefined && row.flatIndex === selectedIndex,
+            'no-login': row.noLogin,
+          }"
+          @click="row.username && selectPerson(row.username, row.roleLabel ?? 'Custom')"
+          @mouseenter="row.flatIndex !== undefined && (selectedIndex = row.flatIndex)"
         >
-          <span class="picker-name">{{ row.user.username }}</span>
-          <span v-if="row.displayLabel" class="picker-labels">{{ row.displayLabel }}</span>
-          <span v-if="row.isCustom && !row.displayLabel" class="picker-labels custom-badge">custom</span>
+          <span v-if="row.badge" class="kbd">{{ row.badge }}</span>
+          <span class="picker-name">{{ row.primary }}</span>
+          <span v-if="row.secondary" class="picker-labels">{{ row.secondary }}</span>
+          <span v-if="row.noLogin" class="custom-badge">no login</span>
           <button
-            v-if="row.isRecent"
+            v-if="row.assoc"
+            class="rights-btn"
+            title="View this person's rights (Tab)"
+            @click.stop="row.assoc && emit('viewRights', row.assoc)"
+          >
+            rights
+          </button>
+          <button
+            v-if="row.isRecentUser && row.username && row.roleLabel"
+            class="rights-btn"
+            title="Pin to favorites"
+            @click.stop="row.username && row.roleLabel && startPin(row.username, row.roleLabel)"
+          >
+            pin
+          </button>
+          <button
+            v-if="row.isFavoriteRow && row.username && row.roleLabel"
             class="remove-btn"
-            title="Remove from recent (Del)"
-            @click.stop="emit('removeRecent', row.user.username)"
+            title="Remove from favorites (Del)"
+            @click.stop="row.roleLabel && row.username && emit('removeFavorite', row.roleLabel, row.username)"
           >
             <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
               <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
             </svg>
           </button>
           <button
-            v-if="row.isCustom && !row.isRecent"
+            v-else-if="row.isRecentUser && row.username && row.roleLabel"
             class="remove-btn"
-            title="Delete custom entry (Del)"
-            @click.stop="emit('deleteCustom', row.user.username)"
+            title="Dismiss from recently used (Del)"
+            @click.stop="row.roleLabel && row.username && emit('removeRecent', row.roleLabel, row.username)"
           >
             <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12">
               <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
@@ -216,4 +664,127 @@ function onLabelCancel() {
   </template>
 </template>
 
-<style src="./picker-shared.css" scoped></style>
+<style scoped>
+@import "./picker-shared.css";
+
+.segmented {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+
+.seg {
+  padding: 3px 12px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.seg.active {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+  background: var(--bg-selected);
+}
+
+.seg-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.picker-item {
+  justify-content: flex-start;
+}
+
+.kbd {
+  flex-shrink: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.picker-labels {
+  margin-left: auto;
+}
+
+.right-item .picker-id {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.rights-btn {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.picker-item:hover .rights-btn,
+.picker-item.selected .rights-btn {
+  opacity: 1;
+}
+
+.rights-btn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.no-login {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.no-login:hover {
+  background: transparent;
+}
+
+.searching-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.mini-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>

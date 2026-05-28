@@ -7,7 +7,7 @@ resolver = "2"
 
 [package]
 name = "fnba-utils"
-version = "1.12.8"
+version = "1.13.0"
 description = "FNBA Utils command palette"
 authors = ["kbiesbrock"]
 edition = "2021"

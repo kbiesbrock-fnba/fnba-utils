@@ -1,4 +1,4 @@
+pub mod directory;
 pub mod identity;
 pub mod mission_control;
-pub mod right_lookup;
 pub mod standup;

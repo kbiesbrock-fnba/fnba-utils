@@ -1,9 +1,9 @@
 pub mod assume_identity;
 pub mod claude_io;
 pub mod clipboard_manager;
+pub mod directory;
 pub mod mission_control;
 pub mod projects;
-pub mod right_lookup;
 pub mod standup;
 
 #[tauri::command]

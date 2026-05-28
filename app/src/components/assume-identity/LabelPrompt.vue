@@ -8,6 +8,9 @@ const props = defineProps<{
   value: string;
   placeholder?: string;
   defaultLabel: string;
+  /** Pre-fill the input. Caller passes the auto-derived role here so pressing
+   *  Enter accepts it verbatim, while still allowing the user to edit it. */
+  initial?: string;
 }>();
 
 const emit = defineEmits<{
@@ -15,7 +18,7 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
-const query = ref("");
+const query = ref(props.initial ?? "");
 
 useListNavigation({
   itemCount: () => 0,

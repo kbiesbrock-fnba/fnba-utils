@@ -3,6 +3,7 @@ use crate::models::identity::{
     AssumeIdentityResult, IdentityConnection, IdentityData, IdentityImposter, IdentityState,
     IdentityUser,
 };
+use std::collections::{HashMap, HashSet};
 
 const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json");
 
@@ -31,6 +32,42 @@ struct CustomData {
         deserialize_with = "deserialize_connections"
     )]
     connections: Vec<IdentityConnection>,
+    /// Composite `label␟username` keys for shipped-default favorites the user
+    /// has removed from view. Custom favorites are deleted outright rather
+    /// than hidden, so they don't appear here.
+    #[serde(rename = "HiddenFavorites", default)]
+    hidden_favorites: Vec<String>,
+    /// Last-assumed timestamp per favorite (epoch millis), keyed by composite
+    /// `label␟username`. Drives the recency-based hot-pick ordering — the
+    /// most-recently-assumed favorite renders as #1. Defaults at 0 sort by
+    /// their original position in `identity-defaults.json` (stable sort).
+    #[serde(rename = "LastUsed", default)]
+    last_used: HashMap<String, i64>,
+}
+
+/// Stable key identifying one favorite. A username can appear under several
+/// labels in the defaults (e.g. `mbeyers` is both BSA and Customer Service),
+/// so ordering keys on the `label`+`username` pair, not the username alone.
+/// Must match the frontend's key (`${label}${username}`).
+fn fav_key(label: &str, username: &str) -> String {
+    format!("{label}\u{1f}{username}")
+}
+
+/// Sort favorites by recency of use, most recent first. Items never assumed
+/// keep their input order (stable sort), so a fresh install renders the
+/// shipped defaults in their `identity-defaults.json` sequence.
+fn sort_favorites_by_recency(users: &mut [IdentityUser], last_used: &HashMap<String, i64>) {
+    users.sort_by(|a, b| {
+        let ta = last_used
+            .get(&fav_key(&a.label, &a.username))
+            .copied()
+            .unwrap_or(0);
+        let tb = last_used
+            .get(&fav_key(&b.label, &b.username))
+            .copied()
+            .unwrap_or(0);
+        tb.cmp(&ta)
+    });
 }
 
 fn deserialize_connections<'de, D>(deserializer: D) -> Result<Vec<IdentityConnection>, D::Error>
@@ -142,6 +179,8 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
     }
 
     let mut all_users = defaults.users;
+    let mut hidden_favorites: Vec<String> = Vec::new();
+    let mut last_used: HashMap<String, i64> = HashMap::new();
 
     // Merge custom imposters and users from assumeIdentity.json
     {
@@ -166,8 +205,21 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
                 user.is_custom = true;
                 all_users.push(user);
             }
+            hidden_favorites = custom.hidden_favorites;
+            last_used = custom.last_used;
         }
     }
+
+    // Filter out favorites the user has removed (shipped defaults; customs
+    // are already absent because remove_favorite deletes them outright).
+    if !hidden_favorites.is_empty() {
+        let hidden: HashSet<&str> = hidden_favorites.iter().map(|s| s.as_str()).collect();
+        all_users.retain(|u| !hidden.contains(fav_key(&u.label, &u.username).as_str()));
+    }
+
+    // Bubble the most-recently-assumed favorites to the top so the frontend's
+    // 1–9 hot-pick digits track real usage.
+    sort_favorites_by_recency(&mut all_users, &last_used);
 
     Ok(IdentityData {
         current_user,
@@ -414,5 +466,142 @@ pub async fn delete_custom_entry(
         deleted_connection,
         deleted_imposter,
     })
+}
+
+/// Explicitly pin a searched user to the distributable favorites list. Replaces
+/// the old auto-save-on-assume behavior now that the user picker is a live DB
+/// search — only users the operator deliberately pins are kept. Returns `true`
+/// if a new favorite was written, `false` if it already existed under `label`.
+#[tauri::command]
+pub async fn pin_favorite(username: String, label: String) -> Result<bool, String> {
+    let username = username.trim().to_string();
+    if username.is_empty() {
+        return Err("Username cannot be empty".into());
+    }
+    let label = {
+        let l = label.trim();
+        if l.is_empty() {
+            "Other".to_string()
+        } else {
+            l.to_string()
+        }
+    };
+
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
+    let mut data: CustomData = if custom_path.exists() {
+        let contents =
+            std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?
+    } else {
+        CustomData::default()
+    };
+
+    let defaults: DefaultsFile =
+        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
+
+    let already = |users: &[IdentityUser]| {
+        users.iter().any(|u| {
+            u.username.eq_ignore_ascii_case(&username) && u.label.eq_ignore_ascii_case(&label)
+        })
+    };
+    if already(&defaults.users) || already(&data.users) {
+        return Ok(false);
+    }
+
+    data.users.push(IdentityUser {
+        username,
+        label,
+        is_custom: true,
+    });
+
+    let json =
+        serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
+    std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    Ok(true)
+}
+
+/// Remove a favorite from view. If the entry exists in the user's custom list
+/// it's deleted outright; if it's a shipped default (which can't be edited),
+/// its composite key is added to `HiddenFavorites` so it stops appearing in
+/// `get_identity_data`. Idempotent — safe to call on an already-removed entry.
+#[tauri::command]
+pub async fn remove_favorite(label: String, username: String) -> Result<(), String> {
+    let label = label.trim().to_string();
+    let username = username.trim().to_string();
+    if label.is_empty() || username.is_empty() {
+        return Err("label and username are required".into());
+    }
+    let key = fav_key(&label, &username);
+
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
+    let mut data: CustomData = if custom_path.exists() {
+        let contents =
+            std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?
+    } else {
+        CustomData::default()
+    };
+
+    // Drop any matching custom user and its recency timestamp (re-pinning
+    // later should start fresh rather than float back up via a stale entry).
+    data.users.retain(|u| {
+        !(u.label.eq_ignore_ascii_case(&label) && u.username.eq_ignore_ascii_case(&username))
+    });
+    data.last_used.remove(&key);
+
+    // If the entry is in the shipped defaults, hide it (defaults can't be
+    // mutated). Custom-only entries are now gone above and need no hide.
+    let defaults: DefaultsFile =
+        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
+    let in_defaults = defaults
+        .users
+        .iter()
+        .any(|u| u.label.eq_ignore_ascii_case(&label) && u.username.eq_ignore_ascii_case(&username));
+    if in_defaults && !data.hidden_favorites.iter().any(|k| k == &key) {
+        data.hidden_favorites.push(key);
+    }
+
+    let json =
+        serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
+    std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    Ok(())
+}
+
+/// Stamp a favorite's `LastUsed` to "now" after a successful assume. This is
+/// what drives recency-based ordering: the next [`get_identity_data`] sees the
+/// updated timestamp and floats this favorite to #1. Safe to call even when
+/// the (label, username) isn't currently a favorite — the entry just sits in
+/// `LastUsed` and becomes active if the user later pins that pair.
+#[tauri::command]
+pub async fn mark_favorite_used(label: String, username: String) -> Result<(), String> {
+    let label = label.trim().to_string();
+    let username = username.trim().to_string();
+    if label.is_empty() || username.is_empty() {
+        return Err("label and username are required".into());
+    }
+    let key = fav_key(&label, &username);
+
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
+    let mut data: CustomData = if custom_path.exists() {
+        let contents =
+            std::fs::read_to_string(&custom_path).map_err(|e| format!("Read error: {e}"))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?
+    } else {
+        CustomData::default()
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    data.last_used.insert(key, now_ms);
+
+    let json =
+        serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
+    std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    Ok(())
 }
 

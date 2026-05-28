@@ -1,25 +1,43 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import {
   getIdentityData,
   executeAssumeIdentity,
   saveCustomEntry,
   deleteCustomEntry,
+  pinFavorite,
+  removeFavorite,
+  markFavoriteUsed,
   type IdentityUser,
   type IdentityConnection,
   type IdentityImposter,
   type AssumeIdentityResult,
+  type RightAssociate,
+  type RightInfo,
 } from "@/lib/tauri";
+import { resolveSearchServer, rightsForAssociate } from "@/composables/useDirectorySearch";
 
 export type AssumeIdentityStep =
   | "imposter"
   | "user"
+  | "userRights"
   | "connection"
   | "confirm"
   | "executing"
   | "result"
   | "error";
 
-// --- Recent-user tracking via localStorage ---
+// --- Favorites ordering ---
+// Composite key matching the Rust `fav_key` (label + U+001F + username). A
+// username can repeat across labels in the defaults, so the hot-pick order is
+// keyed on the pair, not the username alone.
+export function favoriteKey(label: string, username: string): string {
+  return `${label}${username}`;
+}
+
+// --- Recently Used (transient, localStorage) ---
+// Sibling section to Favorites: holds the last N unpinned assumes. New unpinned
+// assumes unshift to the front; the oldest drop off when the cap is hit. Pinning
+// a recent moves it to Favorites and clears it from here.
 
 const RECENT_KEY = "fnba-utils:recent-users";
 const MAX_RECENT = 5;
@@ -27,8 +45,6 @@ const MAX_RECENT = 5;
 export interface RecentEntry {
   username: string;
   label: string;
-  connectionServer: string;
-  connectionLabel: string;
   timestamp: number;
 }
 
@@ -52,33 +68,24 @@ function loadRecents(): RecentEntry[] {
   return readRecents().sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
 }
 
-function recordRecent(user: IdentityUser, connection: IdentityConnection) {
-  const entries = readRecents().filter((e) => e.username !== user.username);
-  entries.unshift({
-    username: user.username,
-    label: user.label,
-    connectionServer: connection.server,
-    connectionLabel: connection.label,
-    timestamp: Date.now(),
-  });
-  writeRecents(entries.slice(0, MAX_RECENT));
+function sameComposite(
+  a: { label: string; username: string },
+  label: string,
+  username: string,
+) {
+  return (
+    a.username.toLowerCase() === username.toLowerCase() &&
+    a.label.toLowerCase() === label.toLowerCase()
+  );
 }
-
-function deleteRecentUser(username: string) {
-  writeRecents(readRecents().filter((e) => e.username !== username));
-}
-
-// --- Cross-command bridge ---
-
-export const prefillUsername = ref<string | null>(null);
 
 // --- Shared state ---
 
 const step = ref<AssumeIdentityStep>("user");
 const imposters = ref<IdentityImposter[]>([]);
 const currentUser = ref("");
-const selectedImposter = ref<string | null>(null);  // stores the name string
-const users = ref<IdentityUser[]>([]);
+const selectedImposter = ref<string | null>(null); // stores the name string
+const users = ref<IdentityUser[]>([]); // favorites, in saved hot-pick order
 const connections = ref<IdentityConnection[]>([]);
 const selectedUser = ref<IdentityUser | null>(null);
 const selectedConnection = ref<IdentityConnection | null>(null);
@@ -87,6 +94,25 @@ const error = ref<string | null>(null);
 const loading = ref(false);
 const dataLoaded = ref(false);
 const recentUsers = ref<RecentEntry[]>(loadRecents());
+
+function recordRecentUser(label: string, username: string) {
+  const filtered = readRecents().filter((e) => !sameComposite(e, label, username));
+  filtered.unshift({ username, label, timestamp: Date.now() });
+  writeRecents(filtered.slice(0, MAX_RECENT));
+  recentUsers.value = loadRecents();
+}
+
+function removeRecentUser(label: string, username: string) {
+  writeRecents(readRecents().filter((e) => !sameComposite(e, label, username)));
+  recentUsers.value = loadRecents();
+}
+// Reverse "what rights does this person have" audit view (a person action).
+const inspectedAssociate = ref<RightAssociate | null>(null);
+const inspectedRights = ref<RightInfo[]>([]);
+
+// The directory datasource (always meleagris) that the live user/right search
+// queries — independent of the connection the assume ultimately runs on.
+const searchServer = computed(() => resolveSearchServer(connections.value));
 
 export function useAssumeIdentity() {
   async function loadData() {
@@ -117,10 +143,34 @@ export function useAssumeIdentity() {
     selectedImposter.value = currentUser.value || null;
     selectedUser.value = null;
     selectedConnection.value = null;
+    inspectedAssociate.value = null;
+    inspectedRights.value = [];
     result.value = null;
     error.value = null;
     loading.value = false;
-    recentUsers.value = loadRecents();
+  }
+
+  /** Audit a searched person's rights (the reverse "what can they do" view). */
+  async function viewRights(assoc: RightAssociate) {
+    inspectedAssociate.value = assoc;
+    inspectedRights.value = [];
+    step.value = "userRights";
+    loading.value = true;
+    try {
+      inspectedRights.value = await rightsForAssociate(searchServer.value, assoc.assocId);
+    } catch (e) {
+      error.value = String(e);
+      step.value = "error";
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  /** Assume the person currently being audited (jumps to the connection step). */
+  function assumeInspected() {
+    const a = inspectedAssociate.value;
+    if (!a || !a.login) return;
+    selectUser({ username: a.login, label: a.jobTitle ?? a.department ?? "Custom" });
   }
 
   function selectImposter(imp: string) {
@@ -138,6 +188,38 @@ export function useAssumeIdentity() {
     step.value = "confirm";
   }
 
+  /** Is this username already a favorite (under any label)? Drives the pin offer. */
+  function isFavorite(username: string): boolean {
+    return users.value.some(
+      (u) => u.username.toLowerCase() === username.toLowerCase(),
+    );
+  }
+
+  /** Explicitly pin a user to the distributable favorites list. Triggered by
+   *  the row's pin button — the user just used this person, so we also stamp
+   *  LastUsed so they land at #1 in Favorites rather than at the bottom. */
+  async function pinUser(username: string, label: string) {
+    await pinFavorite(username, label);
+    // Mark used so the new favorite floats to #1 (the user clearly wanted it
+    // top-of-mind — that's why they pinned it).
+    try {
+      await markFavoriteUsed(label, username);
+    } catch {
+      /* ignore — pin succeeded, ranking is best-effort */
+    }
+    await reloadData();
+    // Clear the matching recent if any — it's a favorite now, recents must not
+    // double-show it (the display filter would also catch this, but be explicit).
+    removeRecentUser(label, username);
+  }
+
+  /** Remove a favorite — custom or default — from view. */
+  async function unpinFavorite(label: string, username: string) {
+    await removeFavorite(label, username);
+    await reloadData();
+  }
+
+
   async function execute() {
     if (!selectedImposter.value || !selectedUser.value || !selectedConnection.value) return;
     step.value = "executing";
@@ -145,11 +227,10 @@ export function useAssumeIdentity() {
 
     const user = selectedUser.value;
     const conn = selectedConnection.value;
-
     const imp = selectedImposter.value;
-    const isNewUser = !users.value.some(
-      (u) => u.username.toLowerCase() === user.username.toLowerCase(),
-    );
+
+    // Users are no longer auto-saved — favorites are explicit (see pinUser).
+    // Connections/imposters typed inline are still remembered.
     const isNewConnection = !connections.value.some(
       (c) => c.server.toLowerCase() === conn.server.toLowerCase(),
     );
@@ -158,24 +239,18 @@ export function useAssumeIdentity() {
     );
 
     try {
-      result.value = await executeAssumeIdentity(
-        selectedImposter.value!,
-        user.username,
-        conn.server,
-      );
+      result.value = await executeAssumeIdentity(imp, user.username, conn.server);
 
-      // Save custom entries only after a successful execution
-      if (isNewUser || isNewConnection || isNewImposter) {
+      if (isNewConnection || isNewImposter) {
         try {
           const saved = await saveCustomEntry(
-            isNewUser ? user.username : undefined,
-            isNewUser ? user.label : undefined,
+            undefined,
+            undefined,
             isNewConnection ? conn.server : undefined,
             isNewConnection ? conn.label : undefined,
             isNewImposter ? imp : undefined,
           );
           const parts: string[] = [];
-          if (saved.addedUser) parts.push(user.username);
           if (saved.addedConnection) parts.push(conn.server);
           if (saved.addedImposter) parts.push(imp);
           if (parts.length > 0) {
@@ -195,8 +270,30 @@ export function useAssumeIdentity() {
         }
       }
 
-      recordRecent(user, conn);
-      recentUsers.value = loadRecents();
+      // Bubble this favorite to #1 — but only if the *exact* (label, username)
+      // pair is currently a favorite. One-off assumes from directory search
+      // never become "recents" and never reorder favorites; the favorites list
+      // stays a curated thing the user opts into via pinning. (A pin done in
+      // the same flow lands before this check, because pinUser awaits
+      // reloadData before the user reaches the connection step.)
+      const isExactFav = users.value.some(
+        (u) =>
+          u.username.toLowerCase() === user.username.toLowerCase() &&
+          u.label.toLowerCase() === user.label.toLowerCase(),
+      );
+      if (isExactFav) {
+        try {
+          await markFavoriteUsed(user.label, user.username);
+          await reloadData();
+        } catch {
+          /* ignore — assume already succeeded */
+        }
+      } else {
+        // Unpinned assume → drop it in Recently Used (FIFO cap 5). The user
+        // can pin it later from the recents row; until then it cycles out
+        // naturally as new unpinned assumes push it down.
+        recordRecentUser(user.label, user.username);
+      }
       step.value = "result";
     } catch (e) {
       error.value = String(e);
@@ -204,16 +301,6 @@ export function useAssumeIdentity() {
     } finally {
       loading.value = false;
     }
-  }
-
-  function removeRecentUser(username: string) {
-    deleteRecentUser(username);
-    recentUsers.value = loadRecents();
-  }
-
-  async function deleteCustomUser(username: string) {
-    await deleteCustomEntry(username);
-    await reloadData();
   }
 
   async function deleteCustomConnection(server: string) {
@@ -230,6 +317,11 @@ export function useAssumeIdentity() {
     switch (step.value) {
       case "user":
         step.value = "imposter";
+        return true;
+      case "userRights":
+        step.value = "user";
+        inspectedAssociate.value = null;
+        inspectedRights.value = [];
         return true;
       case "connection":
         step.value = "user";
@@ -257,14 +349,21 @@ export function useAssumeIdentity() {
     error,
     loading,
     recentUsers,
+    searchServer,
+    inspectedAssociate,
+    inspectedRights,
     loadData,
     reset,
     selectImposter,
     selectUser,
     selectConnection,
-    execute,
+    isFavorite,
+    pinUser,
+    unpinFavorite,
     removeRecentUser,
-    deleteCustomUser,
+    viewRights,
+    assumeInspected,
+    execute,
     deleteCustomConnection,
     deleteCustomImposter,
     goBack,

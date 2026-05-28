@@ -62,6 +62,12 @@ export interface RightAssociate {
   nickname: string | null;
   firstName: string | null;
   lastName: string | null;
+  /** Bare Windows username to assume (no `DOMAIN\`); null if no login row. */
+  login: string | null;
+  /** associate.job_title — preferred prefill for the favorite label. */
+  jobTitle: string | null;
+  /** department.name — fallback prefill when jobTitle is empty. */
+  department: string | null;
 }
 
 export interface SubagentInfo {
@@ -583,32 +589,64 @@ async function mockInvoke<T>(
     }
 
     case "get_right_associates": {
-      await delay(1500);
+      await delay(1200);
       return [
-        { assocId: 1001, nickname: "jsmith", firstName: "John", lastName: "Smith" },
-        { assocId: 1002, nickname: "jdoe", firstName: "Jane", lastName: "Doe" },
-        { assocId: 1003, nickname: "mbrown", firstName: "Mike", lastName: "Brown" },
-        { assocId: 1004, nickname: "agarcia", firstName: "Ana", lastName: "Garcia" },
-        { assocId: 1005, nickname: null, firstName: null, lastName: null },
+        { assocId: 1001, nickname: "jsmith", firstName: "John", lastName: "Smith", login: "jsmith", jobTitle: "Underwriter", department: "Underwriting" },
+        { assocId: 1002, nickname: "jdoe", firstName: "Jane", lastName: "Doe", login: "jdoe", jobTitle: "Processor", department: "Operations" },
+        { assocId: 1003, nickname: "mbrown", firstName: "Mike", lastName: "Brown", login: "mbrown", jobTitle: "Accountant", department: "Accounting" },
+        { assocId: 1004, nickname: "agarcia", firstName: "Ana", lastName: "Garcia", login: "agarcia", jobTitle: null, department: "Reporting" },
+        { assocId: 1005, nickname: null, firstName: null, lastName: null, login: null, jobTitle: null, department: null },
       ] as T;
     }
 
     case "search_associates": {
       const q = ((args?.query as string) ?? "").toLowerCase();
-      await delay(600);
+      await delay(400);
       const all = [
-        { assocId: 1001, nickname: "jsmith", firstName: "John", lastName: "Smith" },
-        { assocId: 1002, nickname: "jdoe", firstName: "Jane", lastName: "Doe" },
-        { assocId: 1003, nickname: "mbrown", firstName: "Mike", lastName: "Brown" },
-        { assocId: 1004, nickname: "agarcia", firstName: "Ana", lastName: "Garcia" },
-        { assocId: 1006, nickname: "twilson", firstName: "Tom", lastName: "Wilson" },
+        { assocId: 1001, nickname: "jsmith", firstName: "John", lastName: "Smith", login: "jsmith", jobTitle: "Underwriter", department: "Underwriting" },
+        { assocId: 1002, nickname: "jdoe", firstName: "Jane", lastName: "Doe", login: "jdoe", jobTitle: "Processor", department: "Operations" },
+        { assocId: 1003, nickname: "mbrown", firstName: "Mike", lastName: "Brown", login: "mbrown", jobTitle: "Accountant", department: "Accounting" },
+        { assocId: 1004, nickname: "agarcia", firstName: "Ana", lastName: "Garcia", login: "agarcia", jobTitle: "Collections Specialist", department: "Collections" },
+        { assocId: 1006, nickname: "twilson", firstName: "Tom", lastName: "Wilson", login: "twilson", jobTitle: "Operations Manager", department: "Operations" },
       ];
       return all.filter(
         (a) =>
           a.nickname.includes(q) ||
           a.firstName.toLowerCase().includes(q) ||
-          a.lastName.toLowerCase().includes(q),
+          a.lastName.toLowerCase().includes(q) ||
+          a.login.includes(q),
       ) as T;
+    }
+
+    case "get_assume_login": {
+      await delay(150);
+      const id = args?.assocId as number;
+      const map: Record<number, string> = {
+        1001: "jsmith",
+        1002: "jdoe",
+        1003: "mbrown",
+        1004: "agarcia",
+        1006: "twilson",
+      };
+      return (map[id] ?? null) as T;
+    }
+
+    case "pin_favorite": {
+      await delay(50);
+      console.log("[mock] pin_favorite", args);
+      return true as T;
+    }
+
+    case "remove_favorite": {
+      await delay(50);
+      console.log("[mock] remove_favorite", args);
+      return undefined as T;
+    }
+
+    case "mark_favorite_used": {
+      await delay(50);
+      console.log("[mock] mark_favorite_used", args);
+      return undefined as T;
     }
 
     case "get_associate_rights": {
@@ -1799,6 +1837,32 @@ export function searchAssociates(server: string, query: string): Promise<RightAs
 
 export function getAssociateRights(server: string, assocId: number): Promise<RightInfo[]> {
   return invoke<RightInfo[]>("get_associate_rights", { server, assocId });
+}
+
+/** Resolve the bare Windows login for an associate (Right Lookup -> Assume). */
+export function getAssumeLogin(server: string, assocId: number): Promise<string | null> {
+  return invoke<string | null>("get_assume_login", { server, assocId });
+}
+
+/**
+ * Pin a user to the distributable favorites list under `label`.
+ * Resolves `true` if newly added, `false` if already a favorite.
+ */
+export function pinFavorite(username: string, label: string): Promise<boolean> {
+  return invoke<boolean>("pin_favorite", { username, label });
+}
+
+/**
+ * Remove a favorite from view. Deletes custom entries outright; hides
+ * shipped-default entries so they stop appearing in getIdentityData().
+ */
+export function removeFavorite(label: string, username: string): Promise<void> {
+  return invoke<void>("remove_favorite", { label, username });
+}
+
+/** Stamp a favorite's last-used time (drives the recency hot-pick order). */
+export function markFavoriteUsed(label: string, username: string): Promise<void> {
+  return invoke<void>("mark_favorite_used", { label, username });
 }
 
 export function getClaudeSessions(force = false): Promise<ClaudeSession[]> {

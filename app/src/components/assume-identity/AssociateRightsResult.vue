@@ -1,8 +1,5 @@
 <script setup lang="ts">
 import type { RightInfo, RightAssociate } from "@/lib/tauri";
-import { prefillUsername } from "@/composables/useAssumeIdentity";
-import { usePalette } from "@/composables/usePalette";
-import { assumeIdentityCommand } from "@/commands/assume-identity";
 import { useListNavigation } from "@/composables/useListNavigation";
 import { ref } from "vue";
 
@@ -11,14 +8,11 @@ const props = defineProps<{
   rights: RightInfo[];
 }>();
 
-const listRef = ref<HTMLElement | null>(null);
-const { selectCommand } = usePalette();
+const emit = defineEmits<{
+  assume: [];
+}>();
 
-function assumeIdentity() {
-  const nick = props.associate.nickname ?? String(props.associate.assocId);
-  prefillUsername.value = nick;
-  selectCommand(assumeIdentityCommand);
-}
+const listRef = ref<HTMLElement | null>(null);
 
 const { selectedIndex } = useListNavigation({
   itemCount: () => props.rights.length,
@@ -36,7 +30,7 @@ const { selectedIndex } = useListNavigation({
     </div>
     <div class="header-actions">
       <span class="badge">{{ rights.length }} right{{ rights.length !== 1 ? 's' : '' }}</span>
-      <button class="assume-btn" @click="assumeIdentity">Assume</button>
+      <button v-if="associate.login" class="assume-btn" @click="emit('assume')">Assume</button>
     </div>
   </div>
   <div class="picker-divider" />
