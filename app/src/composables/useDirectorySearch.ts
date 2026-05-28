@@ -42,7 +42,20 @@ export interface RecentRight {
 
 function readRecentRights(): RecentRight[] {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_RIGHTS_KEY) || "[]");
+    const raw = JSON.parse(localStorage.getItem(RECENT_RIGHTS_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    // Validate shape — a stored `null`, non-array, or entry missing the
+    // expected fields would otherwise crash sort/filter at the call site
+    // (and these refs evaluate at module scope, so a crash here takes the
+    // whole command palette down with it).
+    return raw.filter(
+      (e): e is RecentRight =>
+        e != null &&
+        typeof e === "object" &&
+        typeof e.rightId === "number" &&
+        typeof e.rightName === "string" &&
+        typeof e.timestamp === "number",
+    );
   } catch {
     return [];
   }
@@ -89,14 +102,29 @@ export function removeRecentRight(rightId: number) {
 // cached fetch on connection select).
 const rightsCache = new Map<string, RightInfo[]>();
 
+// In-flight promises, keyed by server. Concurrent callers (e.g., UserPicker's
+// onMounted firing while a parent also kicks off a refresh) deduplicate onto
+// the same promise instead of each issuing their own getAllRights round-trip.
+const rightsInflight = new Map<string, Promise<RightInfo[]>>();
+
 export async function loadRights(server: string, force = false): Promise<RightInfo[]> {
   if (!force) {
     const cached = rightsCache.get(server);
     if (cached) return cached;
+    const inflight = rightsInflight.get(server);
+    if (inflight) return inflight;
   }
-  const list = await getAllRights(server);
-  rightsCache.set(server, list);
-  return list;
+  const promise = (async () => {
+    try {
+      const list = await getAllRights(server);
+      rightsCache.set(server, list);
+      return list;
+    } finally {
+      rightsInflight.delete(server);
+    }
+  })();
+  rightsInflight.set(server, promise);
+  return promise;
 }
 
 export function filterRights(rights: RightInfo[], query: string): RightInfo[] {
@@ -114,7 +142,10 @@ export function searchPeople(server: string, query: string): Promise<RightAssoci
 }
 
 export function holdersOfRight(server: string, right: RightInfo): Promise<RightAssociate[]> {
-  return getRightAssociates(server, right.rightName, null);
+  // Match by right_id, the canonical primary key in notedb.fnba.rights. The
+  // name isn't uniqueness-enforced, so passing rightName risked conflating
+  // holders of two rights that happened to share a label.
+  return getRightAssociates(server, null, right.rightId);
 }
 
 export function rightsForAssociate(server: string, assocId: number): Promise<RightInfo[]> {

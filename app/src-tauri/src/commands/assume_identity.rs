@@ -70,6 +70,21 @@ fn sort_favorites_by_recency(users: &mut [IdentityUser], last_used: &HashMap<Str
     });
 }
 
+/// Atomic JSON write: stage the new bytes to a sibling `.tmp` file, then
+/// `rename` it over the live file. A crash, AV interception, or power loss in
+/// the middle leaves either the old file or the new file — never a half-written
+/// one. The previous `std::fs::write` could truncate the file mid-write and
+/// then every subsequent `serde_json::from_str` would fail, hard-breaking the
+/// feature until a manual delete.
+fn write_atomic_json(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, contents).map_err(|e| format!("Write error: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Rename error: {e}")
+    })
+}
+
 fn deserialize_connections<'de, D>(deserializer: D) -> Result<Vec<IdentityConnection>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -391,7 +406,7 @@ pub async fn save_custom_entry(
     if added_user || added_connection || added_imposter {
         let json = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Serialization error: {e}"))?;
-        std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+        write_atomic_json(&custom_path, &json)?;
     }
 
     Ok(SaveResult {
@@ -458,7 +473,7 @@ pub async fn delete_custom_entry(
     if deleted_user || deleted_connection || deleted_imposter {
         let json = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Serialization error: {e}"))?;
-        std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+        write_atomic_json(&custom_path, &json)?;
     }
 
     Ok(DeleteResult {
@@ -500,24 +515,42 @@ pub async fn pin_favorite(username: String, label: String) -> Result<bool, Strin
     let defaults: DefaultsFile =
         serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
 
-    let already = |users: &[IdentityUser]| {
-        users.iter().any(|u| {
-            u.username.eq_ignore_ascii_case(&username) && u.label.eq_ignore_ascii_case(&label)
-        })
+    let matches = |u: &IdentityUser| -> bool {
+        u.username.eq_ignore_ascii_case(&username) && u.label.eq_ignore_ascii_case(&label)
     };
-    if already(&defaults.users) || already(&data.users) {
+    let in_defaults = defaults.users.iter().any(matches);
+    let in_custom = data.users.iter().any(matches);
+
+    if in_custom {
+        // Already an explicit favorite — nothing to do.
         return Ok(false);
     }
 
-    data.users.push(IdentityUser {
-        username,
-        label,
-        is_custom: true,
-    });
+    let key = fav_key(&label, &username);
+    let was_hidden = data.hidden_favorites.iter().any(|k| k == &key);
+
+    if in_defaults {
+        if !was_hidden {
+            // Default favorite is already visible — pin is a no-op.
+            return Ok(false);
+        }
+        // Restore a previously-hidden default by clearing the hide marker;
+        // without this, a default the user removed (via remove_favorite) can
+        // never be re-added through the UI — its key would stay in
+        // HiddenFavorites and get_identity_data would keep filtering it out.
+        data.hidden_favorites.retain(|k| k != &key);
+    } else {
+        // Brand-new favorite: persist under the user's custom list.
+        data.users.push(IdentityUser {
+            username,
+            label,
+            is_custom: true,
+        });
+    }
 
     let json =
         serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
-    std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    write_atomic_json(&custom_path, &json)?;
     Ok(true)
 }
 
@@ -565,7 +598,7 @@ pub async fn remove_favorite(label: String, username: String) -> Result<(), Stri
 
     let json =
         serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
-    std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    write_atomic_json(&custom_path, &json)?;
     Ok(())
 }
 
@@ -601,7 +634,7 @@ pub async fn mark_favorite_used(label: String, username: String) -> Result<(), S
 
     let json =
         serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
-    std::fs::write(&custom_path, json).map_err(|e| format!("Write error: {e}"))?;
+    write_atomic_json(&custom_path, &json)?;
     Ok(())
 }
 

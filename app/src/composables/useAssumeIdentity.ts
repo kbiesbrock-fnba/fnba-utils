@@ -50,7 +50,20 @@ export interface RecentEntry {
 
 function readRecents(): RecentEntry[] {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    const raw = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    // Validate shape — a stored `null`, non-array, or entry missing the
+    // expected fields would otherwise crash sort/filter at the call site.
+    // Module-scope refs evaluate eagerly here, so a crash takes the whole
+    // command palette down on init.
+    return raw.filter(
+      (e): e is RecentEntry =>
+        e != null &&
+        typeof e === "object" &&
+        typeof e.username === "string" &&
+        typeof e.label === "string" &&
+        typeof e.timestamp === "number",
+    );
   } catch {
     return [];
   }
@@ -109,6 +122,10 @@ function removeRecentUser(label: string, username: string) {
 // Reverse "what rights does this person have" audit view (a person action).
 const inspectedAssociate = ref<RightAssociate | null>(null);
 const inspectedRights = ref<RightInfo[]>([]);
+// Monotonic counter so a slow rightsForAssociate response for an earlier
+// Tab'd associate can't overwrite inspectedRights after the operator has
+// already moved on to a different person.
+let viewRightsVersion = 0;
 
 // The directory datasource (always meleagris) that the live user/right search
 // queries — independent of the connection the assume ultimately runs on.
@@ -152,17 +169,24 @@ export function useAssumeIdentity() {
 
   /** Audit a searched person's rights (the reverse "what can they do" view). */
   async function viewRights(assoc: RightAssociate) {
+    const version = ++viewRightsVersion;
     inspectedAssociate.value = assoc;
     inspectedRights.value = [];
     step.value = "userRights";
     loading.value = true;
     try {
-      inspectedRights.value = await rightsForAssociate(searchServer.value, assoc.assocId);
+      const res = await rightsForAssociate(searchServer.value, assoc.assocId);
+      // Drop the result if the operator has since Tab'd a different associate
+      // (or escaped out). Without this, a slow request for A can overwrite
+      // inspectedRights after B is on screen — wrong audit data shown silently.
+      if (version === viewRightsVersion) inspectedRights.value = res;
     } catch (e) {
-      error.value = String(e);
-      step.value = "error";
+      if (version === viewRightsVersion) {
+        error.value = String(e);
+        step.value = "error";
+      }
     } finally {
-      loading.value = false;
+      if (version === viewRightsVersion) loading.value = false;
     }
   }
 
@@ -170,7 +194,11 @@ export function useAssumeIdentity() {
   function assumeInspected() {
     const a = inspectedAssociate.value;
     if (!a || !a.login) return;
-    selectUser({ username: a.login, label: a.jobTitle ?? a.department ?? "Custom" });
+    // `||` (not `??`) so an empty-string job_title / department from the DB
+    // cascades to the next fallback. With `??`, "" propagated as the label
+    // and the row's pin / remove × buttons (gated on `row.roleLabel` being
+    // truthy) hid themselves, stranding the entry.
+    selectUser({ username: a.login, label: a.jobTitle || a.department || "Custom" });
   }
 
   function selectImposter(imp: string) {
@@ -261,7 +289,14 @@ export function useAssumeIdentity() {
               : `Saved ${added} for next time.`;
           }
           dataLoaded.value = false;
-          loadData();
+          // Fire-and-forget: the assume itself succeeded and step='result' is
+          // about to be set below — swallow any error from this background
+          // refresh so a transient DB blip in getIdentityData() can't clobber
+          // the success view with an error step. The next palette open will
+          // refetch.
+          loadData().catch(() => {
+            /* assume already succeeded; stale data refresh is best-effort */
+          });
         } catch (saveErr) {
           const existing = result.value!.message ?? "";
           result.value!.message = existing

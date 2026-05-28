@@ -119,6 +119,10 @@ function buildPeopleRows(): { rows: Row[]; selectable: number } {
   const rows: Row[] = [];
   let idx = 0;
   const q = query.value.trim().toLowerCase();
+  // Used only to dedup directory results against each other (within-section).
+  // Crucially NOT populated from favorites/recents — a person already pinned
+  // under one label should still appear in directory search so the operator
+  // can choose to pin them again under a different role label.
   const seen = new Set<string>();
 
   if (!q) {
@@ -126,7 +130,6 @@ function buildPeopleRows(): { rows: Row[]; selectable: number } {
       rows.push({ kind: "header", text: "Favorites" });
       for (const u of props.users) {
         const fi = idx++;
-        seen.add(u.username.toLowerCase());
         rows.push({
           kind: "person",
           flatIndex: fi,
@@ -150,7 +153,6 @@ function buildPeopleRows(): { rows: Row[]; selectable: number } {
       rows.push({ kind: "header", text: "Recently Used" });
       for (const r of visibleRecents) {
         const fi = idx++;
-        seen.add(r.username.toLowerCase());
         rows.push({
           kind: "person",
           flatIndex: fi,
@@ -177,7 +179,6 @@ function buildPeopleRows(): { rows: Row[]; selectable: number } {
     rows.push({ kind: "header", text: "Favorites" });
     for (const u of favMatches) {
       const fi = idx++;
-      seen.add(u.username.toLowerCase());
       rows.push({
         kind: "person",
         flatIndex: fi,
@@ -191,20 +192,17 @@ function buildPeopleRows(): { rows: Row[]; selectable: number } {
     }
   }
 
-  // Matching Recents (between favorites and Directory). Skip ones that match
-  // a favorite, ones already shown by username via the directory dedupe, and
-  // anything that doesn't match the query.
+  // Matching Recents (between favorites and Directory). Skip composite matches
+  // against favorites; allow same-username under a different label.
   const recentMatches = props.recentUsers.filter(
     (r) =>
       !isFavComposite(r.label, r.username) &&
-      !seen.has(r.username.toLowerCase()) &&
       (r.username.toLowerCase().includes(q) || r.label.toLowerCase().includes(q)),
   );
   if (recentMatches.length) {
     rows.push({ kind: "header", text: "Recently Used" });
     for (const r of recentMatches) {
       const fi = idx++;
-      seen.add(r.username.toLowerCase());
       rows.push({
         kind: "person",
         flatIndex: fi,
@@ -367,7 +365,13 @@ function startPin(username: string, label: string) {
   pinMode.value = { username, defaultLabel: label };
 }
 
+// Version counter for the holders-of-right fetch. Operators drill quickly
+// (especially while exploring) — a slow earlier response must not overwrite a
+// freshly-drilled right's holders.
+let drillVersion = 0;
+
 async function selectRight(right: RightInfo) {
+  const version = ++drillVersion;
   rightDrill.value = right;
   recordRecentRight(right);
   resetIndex();
@@ -375,14 +379,18 @@ async function selectRight(right: RightInfo) {
   holders.value = [];
   holdersLoading.value = true;
   try {
-    holders.value = await holdersOfRight(props.searchServer, right);
+    const res = await holdersOfRight(props.searchServer, right);
+    if (version !== drillVersion) return; // a newer drill superseded us
+    holders.value = res;
   } catch {
-    holders.value = [];
+    if (version === drillVersion) holders.value = [];
   } finally {
-    holdersLoading.value = false;
-    // Re-anchor on the first holder now that the list has populated.
-    resetIndex();
-    scrollListTop();
+    if (version === drillVersion) {
+      holdersLoading.value = false;
+      // Re-anchor on the first holder now that the list has populated.
+      resetIndex();
+      scrollListTop();
+    }
   }
 }
 
@@ -536,8 +544,13 @@ const { selectedIndex, resetIndex } = useListNavigation({
       handler: (e: KeyboardEvent) => {
         if (pinMode.value) return false;
         // In the rights list, digits type into the search box (search by id).
-        // Elsewhere (people / a right's holders) they quick-select the Nth row.
+        // Elsewhere (people / a right's holders) digits quick-select the Nth
+        // row — but only when the search box is empty. Once the operator is
+        // typing a query (e.g. a login or name containing a digit), digits
+        // must reach the input or they'd be hijacked into a wrong-row select.
+        // Mirrors ConnectionPicker's `query.value.trim()` guard.
         if (scope.value === "rights" && !rightDrill.value) return false;
+        if (query.value.trim()) return false;
         e.preventDefault();
         const n = parseInt(d, 10) - 1;
         if (n < totalSelectable.value) selectAtIndex(n);
