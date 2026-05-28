@@ -89,17 +89,20 @@ let initialised = false;
 let listening = false;
 
 const groupedQueries: ComputedRef<QuerySection[]> = computed(() => {
+  // Sort groups: pinned section first, alphabetical within each section.
+  // orderIdx is kept in the schema for a future manual-reorder affordance;
+  // until that ships, alphabetical is the only order users see.
   const sortedGroups = [...groups.value].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    if (a.orderIdx !== b.orderIdx) return a.orderIdx - b.orderIdx;
-    return a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
 
+  // Queries: alphabetical. lastUsedAt is still recorded for future "recently
+  // used" affordances but doesn't drive sort order.
   const sortQueries = (qs: SavedSqlQuery[]) =>
-    [...qs].sort((a, b) => {
-      if (a.lastUsedAt !== b.lastUsedAt) return b.lastUsedAt - a.lastUsedAt;
-      return a.name.localeCompare(b.name);
-    });
+    [...qs].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
 
   const sections: QuerySection[] = sortedGroups.map((g) => ({
     group: g,
