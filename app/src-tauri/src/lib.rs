@@ -80,6 +80,7 @@ pub fn run() {
         .manage(models::mission_control::SqlQueryState::new())
         .manage(state::owned_sessions::OwnedSessionsState::load())
         .manage(state::projects::ProjectsState::load())
+        .manage(state::saved_queries::SavedQueriesState::load())
         .manage(state::clipboard_history::ClipboardHistoryState::load())
         .manage(state::test_users::TestUsersState::load())
         .manage(clipboard::ForegroundCapture::default())
@@ -390,6 +391,20 @@ pub fn run() {
             commands::projects::update_project,
             commands::projects::remove_project,
             commands::projects::record_project_used,
+            commands::saved_queries::list_sql_groups,
+            commands::saved_queries::add_sql_group,
+            commands::saved_queries::rename_sql_group,
+            commands::saved_queries::set_sql_group_color,
+            commands::saved_queries::set_sql_group_pinned,
+            commands::saved_queries::reorder_sql_groups,
+            commands::saved_queries::remove_sql_group,
+            commands::saved_queries::list_sql_queries,
+            commands::saved_queries::add_sql_query,
+            commands::saved_queries::update_sql_query,
+            commands::saved_queries::move_sql_query_to_group,
+            commands::saved_queries::remove_sql_query,
+            commands::saved_queries::record_sql_query_used,
+            commands::saved_queries::migrate_legacy_sql_queries,
             commands::clipboard_manager::list_clipboard_entries,
             commands::clipboard_manager::get_clipboard_entry,
             commands::clipboard_manager::paste_clipboard_entry,

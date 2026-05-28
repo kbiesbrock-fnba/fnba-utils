@@ -14,11 +14,11 @@ import type {
 /** Window options keyed by panel kind. Used as `new WebviewWindow(label, { ...PANEL_DEFAULTS[kind], url })`. */
 export const PANEL_DEFAULTS: Record<PanelKind, Record<string, unknown>> = {
   "sql-query": {
-    width: 700,
-    height: 520,
-    minWidth: 400,
-    minHeight: 300,
-    resizable: false,
+    width: 1200,
+    height: 820,
+    minWidth: 600,
+    minHeight: 480,
+    resizable: true,
     decorations: false,
     shadow: false,
     transparent: true,

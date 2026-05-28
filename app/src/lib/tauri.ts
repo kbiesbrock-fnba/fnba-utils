@@ -198,6 +198,33 @@ export interface QueryResult {
   rowCount: number;
 }
 
+/** A user-created folder that organizes saved SQL queries. */
+export interface SqlGroup {
+  id: string;
+  name: string;
+  orderIdx: number;
+  color: string | null;
+  pinned: boolean;
+}
+
+/** A saved SQL query, optionally bound to a group via `groupId`. */
+export interface SavedSqlQuery {
+  id: string;
+  name: string;
+  sql: string;
+  database: string;
+  groupId: string | null;
+  lastUsedAt: number;
+  createdAt: number;
+}
+
+/** Shape of legacy localStorage entries handed to migrate_legacy_sql_queries. */
+export interface LegacySavedSqlQuery {
+  name: string;
+  sql: string;
+  database: string;
+}
+
 // --- Claude SDK (stream-json) session types ---
 
 /**
@@ -1474,6 +1501,116 @@ async function mockInvoke<T>(
       return undefined as T;
     }
 
+    case "list_sql_groups": {
+      await delay(40);
+      return [
+        { id: "grp-mock-loans", name: "Loan ops", orderIdx: 0, color: "#60a5fa", pinned: true },
+        { id: "grp-mock-reports", name: "Reporting", orderIdx: 1, color: null, pinned: false },
+      ] as T;
+    }
+
+    case "list_sql_queries": {
+      await delay(40);
+      const now = Date.now();
+      return [
+        {
+          id: "q-mock-1",
+          name: "Active loans (mock)",
+          sql: "SELECT TOP 10 loan_id, status FROM loans WHERE status = 'active';",
+          database: "loans",
+          groupId: "grp-mock-loans",
+          lastUsedAt: now - 5 * 60_000,
+          createdAt: now - 7 * 86_400_000,
+        },
+        {
+          id: "q-mock-2",
+          name: "Closed loans (mock)",
+          sql: "SELECT TOP 10 loan_id FROM loans WHERE status = 'closed';",
+          database: "loans",
+          groupId: "grp-mock-loans",
+          lastUsedAt: now - 60 * 60_000,
+          createdAt: now - 3 * 86_400_000,
+        },
+        {
+          id: "q-mock-3",
+          name: "Daily revenue (mock)",
+          sql: "SELECT SUM(amount) FROM payments WHERE DATEDIFF(day, paid_at, GETDATE()) = 0;",
+          database: "reporting",
+          groupId: "grp-mock-reports",
+          lastUsedAt: now - 24 * 60 * 60_000,
+          createdAt: now - 14 * 86_400_000,
+        },
+        {
+          id: "q-mock-4",
+          name: "Unfiled (mock)",
+          sql: "SELECT @@VERSION;",
+          database: "",
+          groupId: null,
+          lastUsedAt: 0,
+          createdAt: now - 1 * 86_400_000,
+        },
+      ] as T;
+    }
+
+    case "add_sql_group": {
+      await delay(30);
+      const name = (args?.name as string) ?? "New group";
+      window.dispatchEvent(new CustomEvent("mock-sql-queries-changed"));
+      return {
+        id: `grp-mock-${Date.now()}`,
+        name,
+        orderIdx: 99,
+        color: null,
+        pinned: false,
+      } as T;
+    }
+
+    case "add_sql_query": {
+      await delay(30);
+      const now = Date.now();
+      window.dispatchEvent(new CustomEvent("mock-sql-queries-changed"));
+      return {
+        id: `q-mock-${now}`,
+        name: (args?.name as string) ?? "",
+        sql: (args?.sql as string) ?? "",
+        database: (args?.database as string) ?? "",
+        groupId: (args?.groupId as string | null) ?? null,
+        lastUsedAt: 0,
+        createdAt: now,
+      } as T;
+    }
+
+    case "rename_sql_group":
+    case "set_sql_group_color":
+    case "set_sql_group_pinned":
+    case "reorder_sql_groups":
+    case "update_sql_query":
+    case "move_sql_query_to_group":
+    case "record_sql_query_used": {
+      await delay(20);
+      console.log(`[mock] ${cmd}`, args);
+      window.dispatchEvent(new CustomEvent("mock-sql-queries-changed"));
+      return undefined as T;
+    }
+
+    case "remove_sql_group":
+    case "remove_sql_query": {
+      await delay(20);
+      console.log(`[mock] ${cmd}`, args);
+      window.dispatchEvent(new CustomEvent("mock-sql-queries-changed"));
+      return true as T;
+    }
+
+    case "migrate_legacy_sql_queries": {
+      await delay(30);
+      const entries = (args?.entries as unknown[]) ?? [];
+      console.log(`[mock] migrate_legacy_sql_queries (${entries.length})`);
+      if (entries.length > 0) {
+        window.dispatchEvent(new CustomEvent("mock-sql-queries-changed"));
+      }
+      return entries.length as T;
+    }
+
     case "open_path_in_editor": {
       console.log("[mock] open_path_in_editor", args);
       return undefined as T;
@@ -1959,6 +2096,92 @@ export function removeProject(cwd: string): Promise<boolean> {
 
 export function recordProjectUsed(cwd: string): Promise<void> {
   return invoke<void>("record_project_used", { cwd });
+}
+
+/** Saved SQL queries + groups (SQLite-backed). */
+export function listSqlGroups(): Promise<SqlGroup[]> {
+  return invoke<SqlGroup[]>("list_sql_groups");
+}
+
+export function addSqlGroup(name: string): Promise<SqlGroup> {
+  return invoke<SqlGroup>("add_sql_group", { name });
+}
+
+export function renameSqlGroup(id: string, name: string): Promise<void> {
+  return invoke<void>("rename_sql_group", { id, name });
+}
+
+export function setSqlGroupColor(id: string, color: string | null): Promise<void> {
+  return invoke<void>("set_sql_group_color", { id, color });
+}
+
+export function setSqlGroupPinned(id: string, pinned: boolean): Promise<void> {
+  return invoke<void>("set_sql_group_pinned", { id, pinned });
+}
+
+export function reorderSqlGroups(ids: string[]): Promise<void> {
+  return invoke<void>("reorder_sql_groups", { ids });
+}
+
+export function removeSqlGroup(id: string): Promise<boolean> {
+  return invoke<boolean>("remove_sql_group", { id });
+}
+
+export function listSqlQueries(): Promise<SavedSqlQuery[]> {
+  return invoke<SavedSqlQuery[]>("list_sql_queries");
+}
+
+export function addSqlQuery(
+  name: string,
+  sql: string,
+  database: string,
+  groupId: string | null,
+): Promise<SavedSqlQuery> {
+  return invoke<SavedSqlQuery>("add_sql_query", { name, sql, database, groupId });
+}
+
+export function updateSqlQuery(
+  id: string,
+  name: string,
+  sql: string,
+  database: string,
+): Promise<void> {
+  return invoke<void>("update_sql_query", { id, name, sql, database });
+}
+
+export function moveSqlQueryToGroup(id: string, groupId: string | null): Promise<void> {
+  return invoke<void>("move_sql_query_to_group", { id, groupId });
+}
+
+export function removeSqlQuery(id: string): Promise<boolean> {
+  return invoke<boolean>("remove_sql_query", { id });
+}
+
+export function recordSqlQueryUsed(id: string): Promise<void> {
+  return invoke<void>("record_sql_query_used", { id });
+}
+
+export function migrateLegacySqlQueries(
+  entries: LegacySavedSqlQuery[],
+): Promise<number> {
+  return invoke<number>("migrate_legacy_sql_queries", { entries });
+}
+
+/**
+ * Fires whenever any SQL panel mutates the saved-queries DB — every open panel
+ * uses this to refresh its in-memory cache. The data is global, not scoped
+ * per-server, so all SQL panels need to stay in sync.
+ */
+export async function onSqlQueriesChanged(
+  handler: () => void,
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<null>("sql-queries-changed", () => handler());
+  }
+  const listener = () => handler();
+  window.addEventListener("mock-sql-queries-changed", listener);
+  return () => window.removeEventListener("mock-sql-queries-changed", listener);
 }
 
 /** Wave 4 session history. */

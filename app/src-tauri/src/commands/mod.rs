@@ -4,6 +4,7 @@ pub mod clipboard_manager;
 pub mod directory;
 pub mod mission_control;
 pub mod projects;
+pub mod saved_queries;
 pub mod standup;
 
 #[tauri::command]

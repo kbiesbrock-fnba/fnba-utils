@@ -1,9 +1,25 @@
-import { ref } from "vue";
+import { computed, ref, type ComputedRef } from "vue";
 import {
+  addSqlGroup,
+  addSqlQuery,
   executeSqlQuery,
   isTauri,
   killSqlQuery,
+  listSqlGroups,
+  listSqlQueries,
+  migrateLegacySqlQueries,
+  moveSqlQueryToGroup,
+  onSqlQueriesChanged,
+  recordSqlQueryUsed,
+  removeSqlGroup,
+  removeSqlQuery,
+  renameSqlGroup,
+  setSqlGroupPinned,
+  updateSqlQuery,
+  type LegacySavedSqlQuery,
   type QueryResult,
+  type SavedSqlQuery,
+  type SqlGroup,
 } from "@/lib/tauri";
 import {
   isPanelPinned,
@@ -13,30 +29,37 @@ import {
   type PinnedPanel,
 } from "@/lib/panelStorage";
 
-const SAVED_KEY = "fnba-utils:saved-sql-queries";
+const LEGACY_KEY = "fnba-utils:saved-sql-queries";
+const LEGACY_MIGRATED_KEY = "fnba-utils:saved-sql-queries:migrated";
+const COLLAPSE_KEY = "fnba-utils:sql-group-collapsed";
 
-export interface SavedQuery {
-  name: string;
-  sql: string;
-  database: string;
+/** A section in the sidebar — either a real group, or the synthetic "Ungrouped" bucket (group=null). */
+export interface QuerySection {
+  group: SqlGroup | null;
+  queries: SavedSqlQuery[];
 }
 
-function readSaved(): SavedQuery[] {
+function readCollapsed(): Set<string> {
   try {
-    const raw = localStorage.getItem(SAVED_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const raw = localStorage.getItem(COLLAPSE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? new Set(arr.map(String)) : new Set();
   } catch {
-    return [];
+    return new Set();
   }
 }
 
-function writeSaved(queries: SavedQuery[]) {
+function writeCollapsed(ids: Set<string>) {
   try {
-    localStorage.setItem(SAVED_KEY, JSON.stringify(queries));
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...ids]));
   } catch {
     /* ignore */
   }
 }
+
+/** Synthetic key used for the Ungrouped bucket's collapsed state. */
+const UNGROUPED_KEY = "__ungrouped__";
 
 const params = readHashParams();
 const initialServer = params.get("server") ?? "";
@@ -56,9 +79,110 @@ function ownPanel(): PinnedPanel {
 }
 
 const pinned = ref(server.value ? isPanelPinned(ownPanel()) : false);
-const savedQueries = ref<SavedQuery[]>(readSaved());
 
+const groups = ref<SqlGroup[]>([]);
+const queries = ref<SavedSqlQuery[]>([]);
+const collapsedGroupIds = ref<Set<string>>(readCollapsed());
+const loading = ref(false);
+
+let initialised = false;
 let listening = false;
+
+const groupedQueries: ComputedRef<QuerySection[]> = computed(() => {
+  const sortedGroups = [...groups.value].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    if (a.orderIdx !== b.orderIdx) return a.orderIdx - b.orderIdx;
+    return a.name.localeCompare(b.name);
+  });
+
+  const sortQueries = (qs: SavedSqlQuery[]) =>
+    [...qs].sort((a, b) => {
+      if (a.lastUsedAt !== b.lastUsedAt) return b.lastUsedAt - a.lastUsedAt;
+      return a.name.localeCompare(b.name);
+    });
+
+  const sections: QuerySection[] = sortedGroups.map((g) => ({
+    group: g,
+    queries: sortQueries(queries.value.filter((q) => q.groupId === g.id)),
+  }));
+
+  const ungroupedQueries = sortQueries(queries.value.filter((q) => q.groupId == null));
+  if (ungroupedQueries.length > 0 || sections.length === 0) {
+    sections.push({ group: null, queries: ungroupedQueries });
+  }
+  return sections;
+});
+
+async function migrateLegacyOnce() {
+  if (localStorage.getItem(LEGACY_MIGRATED_KEY)) return;
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(LEGACY_KEY);
+  } catch {
+    return;
+  }
+  if (!raw) {
+    localStorage.setItem(LEGACY_MIGRATED_KEY, "1");
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    localStorage.setItem(LEGACY_MIGRATED_KEY, "1");
+    return;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    localStorage.setItem(LEGACY_MIGRATED_KEY, "1");
+    return;
+  }
+  const entries: LegacySavedSqlQuery[] = parsed
+    .filter(
+      (e): e is { name: string; sql: string; database?: string } =>
+        !!e &&
+        typeof e === "object" &&
+        typeof (e as { name?: unknown }).name === "string" &&
+        typeof (e as { sql?: unknown }).sql === "string",
+    )
+    .map((e) => ({
+      name: e.name,
+      sql: e.sql,
+      database: typeof e.database === "string" ? e.database : "",
+    }));
+  if (entries.length === 0) {
+    localStorage.setItem(LEGACY_MIGRATED_KEY, "1");
+    return;
+  }
+  try {
+    await migrateLegacySqlQueries(entries);
+  } catch (e) {
+    // Don't set the migrated flag if the call failed — leave the localStorage
+    // entries in place so a future load can retry.
+    console.warn("[sql-query] legacy migration failed:", e);
+    return;
+  }
+  localStorage.setItem(LEGACY_MIGRATED_KEY, "1");
+}
+
+async function refresh() {
+  loading.value = true;
+  try {
+    const [g, q] = await Promise.all([listSqlGroups(), listSqlQueries()]);
+    groups.value = g;
+    queries.value = q;
+  } catch (e) {
+    console.warn("[sql-query] failed to load saved queries:", e);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function ensureLoaded() {
+  if (initialised) return;
+  initialised = true;
+  await migrateLegacyOnce();
+  await refresh();
+}
 
 async function startListening() {
   if (listening) return;
@@ -77,11 +201,25 @@ async function startListening() {
       }
     }
   });
+
+  // Saved queries + groups are global, not per-server. Every panel listens for
+  // changes so they all stay in sync after a save / delete / move in any one.
+  // Best-effort: a failure just means this panel relies on its optimistic
+  // local state until the next manual reload.
+  try {
+    await onSqlQueriesChanged(() => {
+      void refresh();
+    });
+  } catch (e) {
+    console.warn("[sql-query] failed to subscribe to sql-queries-changed:", e);
+  }
+
+  await ensureLoaded();
 }
 
 async function runQuery() {
-  const query = sql.value.trim();
-  if (!query || !server.value) return;
+  const queryText = sql.value.trim();
+  if (!queryText || !server.value) return;
 
   const queryId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -93,7 +231,7 @@ async function runQuery() {
   result.value = null;
 
   try {
-    result.value = await executeSqlQuery(server.value, database.value, query, queryId);
+    result.value = await executeSqlQuery(server.value, database.value, queryText, queryId);
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -112,26 +250,134 @@ async function cancelQuery() {
   }
 }
 
-function saveQuery(name: string) {
-  if (!name.trim() || !sql.value.trim()) return;
-  savedQueries.value.push({
-    name: name.trim(),
-    sql: sql.value.trim(),
-    database: database.value,
-  });
-  writeSaved(savedQueries.value);
+async function saveQuery(name: string, groupId: string | null) {
+  const trimmedName = name.trim();
+  const trimmedSql = sql.value.trim();
+  if (!trimmedName || !trimmedSql) return;
+  try {
+    const created = await addSqlQuery(trimmedName, trimmedSql, database.value, groupId);
+    queries.value = [created, ...queries.value];
+  } catch (e) {
+    error.value = String(e);
+  }
 }
 
-function removeQuery(index: number) {
-  savedQueries.value.splice(index, 1);
-  writeSaved(savedQueries.value);
+async function deleteQuery(id: string) {
+  try {
+    await removeSqlQuery(id);
+    queries.value = queries.value.filter((q) => q.id !== id);
+  } catch (e) {
+    error.value = String(e);
+  }
 }
 
-function loadQuery(index: number) {
-  const q = savedQueries.value[index];
+async function loadQuery(id: string) {
+  const q = queries.value.find((x) => x.id === id);
   if (!q) return;
   sql.value = q.sql;
-  database.value = q.database;
+  if (q.database) database.value = q.database;
+  recordSqlQueryUsed(id).then(
+    () => {
+      const now = Date.now();
+      queries.value = queries.value.map((x) =>
+        x.id === id ? { ...x, lastUsedAt: now } : x,
+      );
+    },
+    () => {
+      /* fire-and-forget */
+    },
+  );
+}
+
+async function moveQuery(queryId: string, groupId: string | null) {
+  try {
+    await moveSqlQueryToGroup(queryId, groupId);
+    queries.value = queries.value.map((q) =>
+      q.id === queryId ? { ...q, groupId } : q,
+    );
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+
+async function createGroup(name: string): Promise<SqlGroup | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  try {
+    const created = await addSqlGroup(trimmed);
+    groups.value = [...groups.value, created];
+    return created;
+  } catch (e) {
+    error.value = String(e);
+    return null;
+  }
+}
+
+async function renameGroup(id: string, name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  try {
+    await renameSqlGroup(id, trimmed);
+    groups.value = groups.value.map((g) => (g.id === id ? { ...g, name: trimmed } : g));
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+
+async function deleteGroup(id: string) {
+  try {
+    await removeSqlGroup(id);
+    groups.value = groups.value.filter((g) => g.id !== id);
+    // FK ON DELETE SET NULL in the DB demoted these to ungrouped server-side.
+    // Reflect that locally without a refetch.
+    queries.value = queries.value.map((q) =>
+      q.groupId === id ? { ...q, groupId: null } : q,
+    );
+    collapsedGroupIds.value.delete(id);
+    writeCollapsed(collapsedGroupIds.value);
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+
+async function renameQuery(id: string, name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const target = queries.value.find((q) => q.id === id);
+  if (!target) return;
+  try {
+    await updateSqlQuery(id, trimmed, target.sql, target.database);
+    queries.value = queries.value.map((q) =>
+      q.id === id ? { ...q, name: trimmed } : q,
+    );
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+
+async function toggleGroupPin(id: string) {
+  const target = groups.value.find((g) => g.id === id);
+  if (!target) return;
+  const next = !target.pinned;
+  try {
+    await setSqlGroupPinned(id, next);
+    groups.value = groups.value.map((g) => (g.id === id ? { ...g, pinned: next } : g));
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+
+function isCollapsed(groupId: string | null): boolean {
+  return collapsedGroupIds.value.has(groupId ?? UNGROUPED_KEY);
+}
+
+function toggleCollapsed(groupId: string | null) {
+  const key = groupId ?? UNGROUPED_KEY;
+  const next = new Set(collapsedGroupIds.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  collapsedGroupIds.value = next;
+  writeCollapsed(next);
 }
 
 function togglePin() {
@@ -156,13 +402,24 @@ export function useSqlQuery() {
     result,
     error,
     running,
-    savedQueries,
+    pinned,
+    loading,
+    groups,
+    queries,
+    groupedQueries,
     runQuery,
     cancelQuery,
-    pinned,
     saveQuery,
-    removeQuery,
+    deleteQuery,
     loadQuery,
+    moveQuery,
+    createGroup,
+    renameGroup,
+    renameQuery,
+    deleteGroup,
+    toggleGroupPin,
+    isCollapsed,
+    toggleCollapsed,
     togglePin,
     closeWindow,
   };
