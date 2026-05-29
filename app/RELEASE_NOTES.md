@@ -9,6 +9,7 @@
 
 ## [Unreleased]
 
+- **Standup no longer hijacks your clipboard.** Previewing standup used to silently overwrite whatever was on your clipboard with the plain-text task list. Now nothing is copied automatically — there's a **📋 Copy** button next to **Post to Teams** that does it on demand, and the "✓ Copied" badge only appears once you've actually clicked it (it auto-clears after a couple seconds so it can't outlive the report it described).
 - **Saved SQL queries can now be organized into Groups.** The SQL query panel's sidebar shows each group as a collapsible section with a count badge. Pin a group to keep it on top, double-click its name to rename, and the delete button moves its queries to "Ungrouped" rather than throwing them out. Saving a query offers a group picker (existing groups, "Ungrouped", or "+ New group..."), and every existing entry has a "Move to..." action. Your previously-saved queries are migrated into "Ungrouped" automatically on first launch.
 - **The SQL query window is much larger and now resizable.** It opens at 1200x820 instead of 700x520, and you can drag any corner to resize it — more room for both the editor and the result table.
 - **Saved SQL queries now persist in SQLite** at `%LOCALAPPDATA%\fnba-utils\saved-queries.db` instead of browser localStorage, so they survive a webview cache wipe and can be inspected/backed up like the clipboard DB.

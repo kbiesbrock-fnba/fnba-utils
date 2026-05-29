@@ -1198,11 +1198,37 @@ async function mockInvoke<T>(
       return {
         report: reportForResult,
         postedToTeams,
-        copiedToClipboard: cmd !== "post_standup_to_teams",
+        // Auto-copy was removed in v1.13.2 — users click the Copy button
+        // instead, which routes through "copy_standup_report" below.
+        copiedToClipboard: false,
         warnings: [],
         teamsConfigured: mockTeamsConfigured,
         teamsChannelUrl: mockTeamsConfigured ? mockChannelUrl : null,
       } as T;
+    }
+
+    case "copy_standup_report": {
+      await delay(20);
+      const report = (args?.report as StandupReport | undefined) ?? null;
+      const text = report
+        ? report.groups
+            .filter((g) => g.group !== "attention")
+            .map((g) => {
+              const head = `${g.emoji} ${g.label} (${g.issues.length})`;
+              const rows = g.issues
+                .map(
+                  (i) =>
+                    `  [${i.key}] ${i.summary}: ${i.status} (${
+                      i.storyPoints ?? "—"
+                    })`,
+                )
+                .join("\n");
+              return `${head}\n${rows}`;
+            })
+            .join("\n\n") + "\n"
+        : "";
+      console.info("[mock] copy_standup_report ->", text);
+      return text as T;
     }
 
     case "get_standup_panel_state": {
@@ -2308,11 +2334,20 @@ export function runStandup(postToTeams: boolean): Promise<StandupRunResult> {
 }
 
 /**
- * Preview-first flow: fetch Jira, build the report, copy text to clipboard, and
- * persist as a preview run. Does NOT post to Teams.
+ * Preview-first flow: fetch Jira, build the report, and persist as a preview
+ * run. Does NOT post to Teams and does NOT touch the clipboard — the user
+ * triggers `copyStandupReport` explicitly via the Copy button.
  */
 export function previewStandup(): Promise<StandupRunResult> {
   return invoke<StandupRunResult>("preview_standup");
+}
+
+/**
+ * Copy the report's plain-text rendition to the system clipboard. Resolves to
+ * the text that was written (so the caller can show exact "Copied" feedback).
+ */
+export function copyStandupReport(report: StandupReport): Promise<string> {
+  return invoke<string>("copy_standup_report", { report });
 }
 
 /**

@@ -412,7 +412,7 @@ pub async fn get_standup_report(
     Ok(build_report(issues))
 }
 
-/// Full run: fetch, build card, post to Teams (if configured), copy to clipboard, stamp last-run.
+/// Full run: fetch, build card, post to Teams (if configured), stamp last-run.
 #[tauri::command]
 pub async fn run_standup(
     app: tauri::AppHandle,
@@ -502,18 +502,10 @@ async fn run_standup_inner(
         }
     }
 
-    let copied = match copy_report_to_clipboard(&report) {
-        Ok(()) => true,
-        Err(e) => {
-            warnings.push(format!("Clipboard copy failed: {e}"));
-            false
-        }
-    };
-
     Ok(StandupRunResult {
         report,
         posted_to_teams: posted,
-        copied_to_clipboard: copied,
+        copied_to_clipboard: false,
         warnings,
         teams_configured: s
             .teams_webhook_url
@@ -527,9 +519,11 @@ async fn run_standup_inner(
     })
 }
 
-/// Preview-flow command: fetch + clipboard + record as preview (posted_to_teams=false).
-/// Does NOT post to Teams. The frontend renders this, then calls `post_standup_to_teams`
-/// with the same `StandupReport` if the user clicks Post.
+/// Preview-flow command: fetch + record as preview (posted_to_teams=false).
+/// Does NOT post to Teams and does NOT touch the clipboard — the user must
+/// explicitly click the Copy button (which calls `copy_standup_report`). The
+/// frontend renders this, then calls `post_standup_to_teams` with the same
+/// `StandupReport` if the user clicks Post.
 #[tauri::command]
 pub async fn preview_standup(
     app: tauri::AppHandle,
@@ -539,14 +533,7 @@ pub async fn preview_standup(
     let issues = fetch_issues(s).await?;
     let report = build_report(issues);
 
-    let mut warnings: Vec<String> = Vec::new();
-    let copied = match copy_report_to_clipboard(&report) {
-        Ok(()) => true,
-        Err(e) => {
-            warnings.push(format!("Clipboard copy failed: {e}"));
-            false
-        }
-    };
+    let warnings: Vec<String> = Vec::new();
 
     // Record the preview run so the always-on-top panel sees fresh data.
     // posted_to_teams=false here; `post_standup_to_teams` flips the row if the
@@ -571,7 +558,7 @@ pub async fn preview_standup(
     Ok(StandupRunResult {
         report,
         posted_to_teams: false,
-        copied_to_clipboard: copied,
+        copied_to_clipboard: false,
         warnings,
         teams_configured: s
             .teams_webhook_url
@@ -653,7 +640,19 @@ pub async fn post_standup_to_teams(
     })
 }
 
-fn copy_report_to_clipboard(report: &StandupReport) -> Result<(), String> {
+/// User-driven copy: the frontend's Copy button echoes back the `StandupReport`
+/// it currently has on screen, and we write a plain-text version of it to the
+/// system clipboard. Returns the plain text so the UI can give exact "Copied"
+/// feedback (and not need a second roundtrip).
+#[tauri::command]
+pub fn copy_standup_report(report: StandupReport) -> Result<String, String> {
+    let text = report_to_plain_text(&report);
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.set_text(&text).map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+fn report_to_plain_text(report: &StandupReport) -> String {
     let mut text = String::new();
     for group in &report.groups {
         if group.group == StatusGroup::Attention {
@@ -675,10 +674,7 @@ fn copy_report_to_clipboard(report: &StandupReport) -> Result<(), String> {
         }
         text.push('\n');
     }
-
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())?;
-    Ok(())
+    text
 }
 
 // --- Panel commands (SQLite-backed) ---

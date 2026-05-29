@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from "vue";
 import {
   previewStandup,
   postStandupToTeams,
+  copyStandupReport,
   type StandupRunResult,
 } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
@@ -24,6 +25,12 @@ const step = ref<Step>("loading");
 const result = ref<StandupRunResult | null>(null);
 const error = ref<string | null>(null);
 
+// Local-only "Copied" indicator. Resets whenever a fresh preview lands so the
+// badge can't outlive the report it described.
+const justCopied = ref(false);
+const copyError = ref<string | null>(null);
+let copyTimer: ReturnType<typeof setTimeout> | null = null;
+
 const teamsConfigured = computed(() => result.value?.teamsConfigured ?? false);
 const teamsChannelUrl = computed(() => result.value?.teamsChannelUrl ?? null);
 
@@ -34,12 +41,39 @@ onMounted(() => {
 async function fetchPreview() {
   step.value = "loading";
   error.value = null;
+  resetCopyState();
   try {
     result.value = await previewStandup();
     step.value = "preview";
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
     step.value = "error";
+  }
+}
+
+function resetCopyState() {
+  justCopied.value = false;
+  copyError.value = null;
+  if (copyTimer) {
+    clearTimeout(copyTimer);
+    copyTimer = null;
+  }
+}
+
+async function copyReport() {
+  if (!result.value) return;
+  copyError.value = null;
+  try {
+    await copyStandupReport(result.value.report);
+    justCopied.value = true;
+    if (copyTimer) clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      justCopied.value = false;
+      copyTimer = null;
+    }, 2000);
+  } catch (e) {
+    copyError.value = e instanceof Error ? e.message : String(e);
+    justCopied.value = false;
   }
 }
 
@@ -102,7 +136,10 @@ useKeyLayer(
   </template>
 
   <template v-else-if="step === 'preview' && result">
-    <StandupReportView :result="result" />
+    <StandupReportView :result="result" :copied="justCopied" />
+    <div v-if="copyError" class="config-hint warn">
+      Copy failed: {{ copyError }}
+    </div>
     <div v-if="!teamsConfigured" class="config-hint warn">
       Set <code>standup.teams_webhook_url</code> in <code>%LOCALAPPDATA%\fnba-utils\config.yaml</code>
       to enable posting.
@@ -110,6 +147,13 @@ useKeyLayer(
     <div class="action-row">
       <button class="btn secondary" @click="fetchPreview" title="Re-fetch from Jira">
         ↻ Refresh
+      </button>
+      <button
+        class="btn secondary"
+        :title="justCopied ? 'Copied to clipboard' : 'Copy report to clipboard'"
+        @click="copyReport"
+      >
+        {{ justCopied ? "✓ Copied" : "📋 Copy" }}
       </button>
       <button
         class="btn primary"
@@ -127,12 +171,22 @@ useKeyLayer(
   </template>
 
   <template v-else-if="step === 'posted' && result">
-    <StandupReportView :result="result" />
+    <StandupReportView :result="result" :copied="justCopied" />
+    <div v-if="copyError" class="config-hint warn">
+      Copy failed: {{ copyError }}
+    </div>
     <div v-if="!teamsChannelUrl" class="config-hint">
       Set <code>standup.teams_channel_url</code> in <code>%LOCALAPPDATA%\fnba-utils\config.yaml</code>
       to auto-open the channel after posting.
     </div>
-    <div class="action-row single">
+    <div class="action-row">
+      <button
+        class="btn secondary"
+        :title="justCopied ? 'Copied to clipboard' : 'Copy report to clipboard'"
+        @click="copyReport"
+      >
+        {{ justCopied ? "✓ Copied" : "📋 Copy" }}
+      </button>
       <button class="btn secondary" @click="emit('dismiss')">Close</button>
     </div>
     <StatusBar hint="⏎ Close  ⎋ Close" />

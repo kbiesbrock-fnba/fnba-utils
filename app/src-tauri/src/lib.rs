@@ -343,6 +343,7 @@ pub fn run() {
             commands::standup::run_standup,
             commands::standup::preview_standup,
             commands::standup::post_standup_to_teams,
+            commands::standup::copy_standup_report,
             commands::standup::get_standup_report,
             commands::standup::get_standup_last_run,
             commands::standup::get_standup_panel_state,

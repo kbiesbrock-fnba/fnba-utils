@@ -2,10 +2,20 @@
 import { computed } from "vue";
 import type { StandupRunResult } from "@/lib/tauri";
 
-const props = defineProps<{ result: StandupRunResult }>();
+const props = defineProps<{
+  result: StandupRunResult;
+  /** Optional override for the "✓ Copied" badge. Falls back to the result's
+   *  own `copiedToClipboard` flag when not provided, so older callers still
+   *  work. The Standup command passes a local ref driven by the Copy button. */
+  copied?: boolean;
+}>();
 
 const totalPoints = computed(() =>
   props.result.report.groups.reduce((acc, g) => acc + g.totalPoints, 0),
+);
+
+const showCopied = computed(() =>
+  props.copied !== undefined ? props.copied : props.result.copiedToClipboard,
 );
 
 function pts(n: number | null): string {
@@ -34,7 +44,7 @@ function pointsTotal(n: number): string {
       </div>
       <div class="report-badges">
         <span v-if="result.postedToTeams" class="badge ok">✓ Posted to Teams</span>
-        <span v-if="result.copiedToClipboard" class="badge ok">✓ Copied</span>
+        <span v-if="showCopied" class="badge ok">✓ Copied</span>
       </div>
     </div>
 
