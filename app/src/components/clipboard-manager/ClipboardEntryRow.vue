@@ -103,7 +103,13 @@ function humanAgo(epoch: number): string {
     </div>
 
     <div class="body">
-      <div class="preview" :class="{ obfuscated: entry.sensitive }">
+      <div v-if="entry.label" class="label" :title="entry.label">
+        {{ entry.label }}
+      </div>
+      <div
+        class="preview"
+        :class="{ obfuscated: entry.sensitive, secondary: !!entry.label }"
+      >
         <template v-if="entry.kind === 'image' && !entry.textPreview">
           {{ entry.width }}x{{ entry.height }} image
         </template>
@@ -225,6 +231,15 @@ function humanAgo(epoch: number): string {
   flex: 1;
   min-width: 0;
 }
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.98);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
 .preview {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.92);
@@ -234,6 +249,11 @@ function humanAgo(epoch: number): string {
   -webkit-box-orient: vertical;
   text-overflow: ellipsis;
   word-break: break-word;
+}
+.preview.secondary {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  -webkit-line-clamp: 1;
 }
 .meta {
   display: flex;

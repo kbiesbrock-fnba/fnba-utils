@@ -73,6 +73,8 @@ pub struct ClipboardEntrySummary {
     pub source_process: Option<String>,
     pub captured_at: i64,
     pub pinned: bool,
+    /// User-supplied label/rename. Metadata only — paste still uses content.
+    pub label: Option<String>,
 }
 
 /// Full entry returned by `get_clipboard_entry`. Image bytes are base64-encoded
@@ -102,6 +104,8 @@ pub struct ClipboardEntryFull {
     pub captured_at: i64,
     pub pinned: bool,
     pub content_hash: String,
+    /// User-supplied label/rename. Metadata only.
+    pub label: Option<String>,
 }
 
 /// Payload accepted from the clipboard listener.
@@ -153,6 +157,17 @@ pub struct ClipboardHistoryState {
 pub enum InsertOutcome {
     Inserted(i64),
     Touched(i64),
+}
+
+/// Result of `update_text_content`. Lets the caller surface a user-friendly
+/// error for the two non-success cases.
+pub enum UpdateContentOutcome {
+    Updated,
+    /// Entry is sensitive (must clear flag first) or kind is image.
+    Blocked,
+    /// Another entry already has this content_hash; would collide on UNIQUE.
+    Duplicate,
+    NotFound,
 }
 
 impl ClipboardHistoryState {
@@ -231,6 +246,7 @@ impl ClipboardHistoryState {
             ("obfuscated_text", "ALTER TABLE entries ADD COLUMN obfuscated_text TEXT"),
             ("test_user_id", "ALTER TABLE entries ADD COLUMN test_user_id INTEGER"),
             ("pii_kinds", "ALTER TABLE entries ADD COLUMN pii_kinds TEXT"),
+            ("label", "ALTER TABLE entries ADD COLUMN label TEXT"),
         ] {
             if !existing_cols.iter().any(|c| c == col) {
                 conn.execute_batch(ddl)?;
@@ -392,7 +408,7 @@ impl ClipboardHistoryState {
         let mut sql = String::from(
             "SELECT id, kind, text_content, thumb_png, width, height, byte_size,
                     sensitive, source_process, captured_at, pinned,
-                    obfuscated_text, pii_kinds
+                    obfuscated_text, pii_kinds, label
                FROM entries WHERE 1=1",
         );
         if kind_filter.is_some() {
@@ -444,13 +460,19 @@ impl ClipboardHistoryState {
         let mut scored: Vec<(i64, ClipboardEntrySummary)> = rows
             .into_iter()
             .filter_map(|row| {
-                let haystack = row.text_preview.as_deref().unwrap_or("");
-                if haystack.is_empty() {
+                let preview = row.text_preview.as_deref().unwrap_or("");
+                let label = row.label.as_deref().unwrap_or("");
+                if preview.is_empty() && label.is_empty() {
                     return None;
                 }
-                matcher
-                    .fuzzy_match(haystack, needle)
-                    .map(|score| (score, row))
+                // Score against label and preview separately; take the better
+                // of the two so a query can match either field.
+                let preview_score = matcher.fuzzy_match(preview, needle);
+                // Boost label hits slightly so a labeled entry beats an
+                // identical preview match in an unlabeled row.
+                let label_score = matcher.fuzzy_match(label, needle).map(|s| s + 16);
+                let best = preview_score.max(label_score)?;
+                Some((best, row))
             })
             .collect();
         // Pinned first, then score desc, then recency desc as tiebreaker.
@@ -489,7 +511,7 @@ impl ClipboardHistoryState {
             .query_row(
                 "SELECT id, kind, text_content, html_content, image_png, width, height,
                         byte_size, sensitive, source_process, captured_at, pinned, content_hash,
-                        obfuscated_text, test_user_id, pii_kinds
+                        obfuscated_text, test_user_id, pii_kinds, label
                    FROM entries WHERE id = ?1",
                 params![id],
                 |r| {
@@ -502,6 +524,7 @@ impl ClipboardHistoryState {
                     let sensitive: i64 = r.get(8)?;
                     let pinned: i64 = r.get(11)?;
                     let pii_kinds_raw: Option<String> = r.get(15)?;
+                    let label: Option<String> = r.get(16)?;
                     Ok(ClipboardEntryFull {
                         id: r.get(0)?,
                         kind,
@@ -519,6 +542,7 @@ impl ClipboardHistoryState {
                         captured_at: r.get(10)?,
                         pinned: pinned != 0,
                         content_hash: r.get(12)?,
+                        label: label.filter(|s| !s.is_empty()),
                     })
                 },
             )
@@ -543,6 +567,115 @@ impl ClipboardHistoryState {
                 params![pinned as i64, id],
             )
             .map_err(map_db)?;
+        Ok(n > 0)
+    }
+
+    /// Set or clear the user-supplied label on an entry. Empty/None clears.
+    pub fn set_label(&self, id: i64, label: Option<&str>) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("clipboard lock poisoned: {e}"))?;
+        let trimmed = label.map(str::trim).filter(|s| !s.is_empty());
+        let n = conn
+            .execute(
+                "UPDATE entries SET label = ?1 WHERE id = ?2",
+                params![trimmed, id],
+            )
+            .map_err(map_db)?;
+        Ok(n > 0)
+    }
+
+    /// Overwrite the text content of a (non-sensitive, text/html) entry.
+    /// The new hash and byte size are caller-computed so this stays a pure
+    /// DB op. Blocked if entry is sensitive or an image; Duplicate if the
+    /// new hash collides with another row's content_hash (UNIQUE).
+    pub fn update_text_content(
+        &self,
+        id: i64,
+        new_text: &str,
+        new_hash: &str,
+        new_byte_size: i64,
+    ) -> Result<UpdateContentOutcome, String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("clipboard lock poisoned: {e}"))?;
+        let tx = conn.transaction().map_err(map_db)?;
+        let row: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT kind, sensitive FROM entries WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(map_db)?;
+        let Some((kind, sensitive)) = row else {
+            return Ok(UpdateContentOutcome::NotFound);
+        };
+        if sensitive != 0 || kind == "image" {
+            return Ok(UpdateContentOutcome::Blocked);
+        }
+        let collides: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM entries WHERE content_hash = ?1 AND id <> ?2",
+                params![new_hash, id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(map_db)?;
+        if collides.is_some() {
+            return Ok(UpdateContentOutcome::Duplicate);
+        }
+        tx.execute(
+            "UPDATE entries
+                SET text_content = ?1,
+                    html_content = NULL,
+                    content_hash = ?2,
+                    byte_size    = ?3,
+                    kind         = 'text'
+              WHERE id = ?4",
+            params![new_text, new_hash, new_byte_size, id],
+        )
+        .map_err(map_db)?;
+        tx.commit().map_err(map_db)?;
+        Ok(UpdateContentOutcome::Updated)
+    }
+
+    /// Manually flip the sensitive flag on an entry. Caller computes the
+    /// obfuscation up-front (so this method doesn't depend on TestUsersState
+    /// / PII detection). Clearing the flag NULLs the obfuscation fields.
+    pub fn set_sensitivity(
+        &self,
+        id: i64,
+        sensitive: bool,
+        obfuscated_text: Option<&str>,
+        test_user_id: Option<i64>,
+        pii_kinds: &[String],
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("clipboard lock poisoned: {e}"))?;
+        let n = if sensitive {
+            let csv = if pii_kinds.is_empty() {
+                None
+            } else {
+                Some(pii_kinds.join(","))
+            };
+            conn.execute(
+                "UPDATE entries
+                    SET sensitive = 1,
+                        obfuscated_text = ?1,
+                        test_user_id    = ?2,
+                        pii_kinds       = ?3
+                  WHERE id = ?4",
+                params![obfuscated_text, test_user_id, csv, id],
+            )
+            .map_err(map_db)?
+        } else {
+            conn.execute(
+                "UPDATE entries
+                    SET sensitive = 0,
+                        obfuscated_text = NULL,
+                        test_user_id    = NULL,
+                        pii_kinds       = NULL
+                  WHERE id = ?1",
+                params![id],
+            )
+            .map_err(map_db)?
+        };
         Ok(n > 0)
     }
 
@@ -640,6 +773,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardEntrySum
     let pinned: i64 = row.get(10)?;
     let obfuscated: Option<String> = row.get(11)?;
     let pii_kinds_raw: Option<String> = row.get(12)?;
+    let label: Option<String> = row.get(13)?;
     let preview_src = if sensitive {
         obfuscated.as_deref().or(text.as_deref())
     } else {
@@ -658,6 +792,7 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardEntrySum
         source_process: row.get(8)?,
         captured_at: row.get(9)?,
         pinned: pinned != 0,
+        label: label.filter(|s| !s.is_empty()),
     })
 }
 

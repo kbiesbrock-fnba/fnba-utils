@@ -6,10 +6,14 @@ import {
   getClipboardMaxCapturedAt,
   hideClipboardWindow,
   listClipboardEntries,
+  onClipboardEntryUpdated,
   onClipboardWindowShown,
   pasteClipboardEntry,
   pinClipboardEntry,
   requestSensitiveReveal,
+  setClipboardEntryLabel,
+  setClipboardEntrySensitivity,
+  updateClipboardEntryContent,
   type ClipboardEntryFull,
   type ClipboardEntrySummary,
   type ClipboardKind,
@@ -30,6 +34,7 @@ export function useClipboardManager() {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let unsubShown: (() => void) | null = null;
+  let unsubUpdated: (() => void) | null = null;
   let lastSeenCapturedAt = 0;
   const POLL_INTERVAL_MS = 1500;
 
@@ -188,6 +193,75 @@ export function useClipboardManager() {
     }
   }
 
+  async function renameEntry(id: number, label: string | null) {
+    try {
+      await setClipboardEntryLabel(id, label);
+      const trimmed = label?.trim();
+      const next = trimmed ? trimmed : null;
+      const row = entries.value.find((r) => r.id === id);
+      if (row) row.label = next;
+      if (detail.value?.id === id) detail.value = { ...detail.value, label: next };
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function editEntryContent(id: number, content: string) {
+    try {
+      await updateClipboardEntryContent(id, content);
+      // Refresh row + detail so the new content + recomputed byte size show up.
+      // Skip the full list reload — the row stays in the same position.
+      const fresh = await getClipboardEntry(id);
+      if (fresh) {
+        const idx = entries.value.findIndex((r) => r.id === id);
+        if (idx >= 0) {
+          entries.value[idx] = {
+            ...entries.value[idx],
+            kind: fresh.kind,
+            textPreview: fresh.textContent?.slice(0, 240) ?? null,
+            byteSize: fresh.byteSize,
+            sensitive: fresh.sensitive,
+            piiKinds: fresh.piiKinds,
+            label: fresh.label,
+          };
+        }
+        if (detail.value?.id === id) detail.value = fresh;
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+      throw e;
+    }
+  }
+
+  async function toggleSensitive(id?: number) {
+    const target = id ?? selectedId.value;
+    if (target == null) return;
+    const row = entries.value.find((r) => r.id === target);
+    if (!row) return;
+    try {
+      const next = !row.sensitive;
+      await setClipboardEntrySensitivity(target, next);
+      // Refetch the row + detail — the obfuscated text + pii_kinds change.
+      const fresh = await getClipboardEntry(target);
+      if (fresh) {
+        const idx = entries.value.findIndex((r) => r.id === target);
+        if (idx >= 0) {
+          entries.value[idx] = {
+            ...entries.value[idx],
+            sensitive: fresh.sensitive,
+            piiKinds: fresh.piiKinds,
+            textPreview: fresh.sensitive
+              ? fresh.obfuscatedText ?? fresh.textContent ?? null
+              : fresh.textContent ?? null,
+          };
+        }
+        if (detail.value?.id === target) detail.value = fresh;
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function close() {
     void hideClipboardWindow();
   }
@@ -198,6 +272,29 @@ export function useClipboardManager() {
     // to in-process events for new entries. Instead, poll the DB for the
     // latest captured_at while the window is open and reload when it bumps.
     pollTimer = setInterval(() => void pollForNew(), POLL_INTERVAL_MS);
+    unsubUpdated = await onClipboardEntryUpdated((id) => {
+      // External mutation (or another component) updated this entry — refresh
+      // only the affected row + detail. No full reload to avoid jitter.
+      void (async () => {
+        const fresh = await getClipboardEntry(id);
+        if (!fresh) return;
+        const idx = entries.value.findIndex((r) => r.id === id);
+        if (idx >= 0) {
+          entries.value[idx] = {
+            ...entries.value[idx],
+            kind: fresh.kind,
+            textPreview: fresh.sensitive
+              ? fresh.obfuscatedText ?? fresh.textContent ?? null
+              : fresh.textContent ?? null,
+            byteSize: fresh.byteSize,
+            sensitive: fresh.sensitive,
+            piiKinds: fresh.piiKinds,
+            label: fresh.label,
+          };
+        }
+        if (detail.value?.id === id) detail.value = fresh;
+      })();
+    });
     unsubShown = await onClipboardWindowShown((p) => {
       // When the window is reopened via the global shortcut, reset the
       // query so the user lands on the freshest entries. Win+Shift+V sends
@@ -217,6 +314,7 @@ export function useClipboardManager() {
     if (debounceTimer) clearTimeout(debounceTimer);
     if (pollTimer) clearInterval(pollTimer);
     if (unsubShown) unsubShown();
+    if (unsubUpdated) unsubUpdated();
   });
 
   return {
@@ -237,6 +335,9 @@ export function useClipboardManager() {
     togglePin,
     remove,
     clearAll,
+    renameEntry,
+    editEntryContent,
+    toggleSensitive,
     close,
   };
 }

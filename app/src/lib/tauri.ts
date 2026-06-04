@@ -415,6 +415,8 @@ export interface ClipboardEntrySummary {
   sourceProcess: string | null;
   capturedAt: number;
   pinned: boolean;
+  /** User-supplied label/rename. Metadata only — paste still uses content. */
+  label: string | null;
 }
 
 export interface ClipboardEntryFull {
@@ -440,6 +442,8 @@ export interface ClipboardEntryFull {
   capturedAt: number;
   pinned: boolean;
   contentHash: string;
+  /** User-supplied label/rename. */
+  label: string | null;
 }
 
 export interface ClipboardSettings {
@@ -1688,9 +1692,11 @@ async function mockInvoke<T>(
       if (kind) rows = rows.filter((r) => r.kind === kind);
       if (pinnedOnly) rows = rows.filter((r) => r.pinned);
       if (q) {
-        rows = rows.filter(
-          (r) => r.textPreview && r.textPreview.toLowerCase().includes(q),
-        );
+        rows = rows.filter((r) => {
+          const preview = r.textPreview?.toLowerCase() ?? "";
+          const label = r.label?.toLowerCase() ?? "";
+          return preview.includes(q) || label.includes(q);
+        });
       }
       rows.sort(
         (a, b) =>
@@ -1731,6 +1737,53 @@ async function mockInvoke<T>(
         expiresInMs: 15000,
       } as T;
     }
+    case "set_clipboard_entry_label": {
+      await delay(20);
+      const id = args?.id as number;
+      const label = (args?.label as string | null | undefined) ?? null;
+      const row = mockClipboardEntries().find((r) => r.id === id);
+      if (row) {
+        const trimmed = typeof label === "string" ? label.trim() : "";
+        row.label = trimmed ? trimmed : null;
+      }
+      window.dispatchEvent(
+        new CustomEvent("mock-clipboard-entry-updated", { detail: id }),
+      );
+      return undefined as T;
+    }
+    case "update_clipboard_entry_content": {
+      await delay(30);
+      const id = args?.id as number;
+      const content = (args?.content as string) ?? "";
+      const row = mockClipboardEntries().find((r) => r.id === id);
+      if (!row) throw new Error(`clipboard entry ${id} not found`);
+      if (row.sensitive || row.kind === "image") {
+        throw new Error(
+          "cannot edit a sensitive or image entry; clear the sensitive flag first",
+        );
+      }
+      row.kind = "text";
+      row.textPreview = content.slice(0, 240);
+      row.byteSize = content.length;
+      window.dispatchEvent(
+        new CustomEvent("mock-clipboard-entry-updated", { detail: id }),
+      );
+      return undefined as T;
+    }
+    case "set_clipboard_entry_sensitivity": {
+      await delay(20);
+      const id = args?.id as number;
+      const sensitive = (args?.sensitive as boolean) ?? false;
+      const row = mockClipboardEntries().find((r) => r.id === id);
+      if (row) {
+        row.sensitive = sensitive;
+        row.piiKinds = sensitive ? row.piiKinds : [];
+      }
+      window.dispatchEvent(
+        new CustomEvent("mock-clipboard-entry-updated", { detail: id }),
+      );
+      return undefined as T;
+    }
     case "delete_clipboard_entry":
     case "pin_clipboard_entry":
     case "clear_clipboard_history":
@@ -1769,9 +1822,11 @@ async function mockInvoke<T>(
   }
 }
 
+let mockClipboardEntriesCache: ClipboardEntrySummary[] | null = null;
 function mockClipboardEntries(): ClipboardEntrySummary[] {
+  if (mockClipboardEntriesCache) return mockClipboardEntriesCache;
   const now = Date.now();
-  return [
+  mockClipboardEntriesCache = [
     {
       id: 1,
       kind: "text",
@@ -1785,6 +1840,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "ssms.exe",
       capturedAt: now - 1000 * 30,
       pinned: false,
+      label: null,
     },
     {
       id: 2,
@@ -1799,6 +1855,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "WindowsTerminal.exe",
       capturedAt: now - 1000 * 60 * 5,
       pinned: true,
+      label: "feature branch",
     },
     {
       id: 3,
@@ -1813,6 +1870,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "chrome.exe",
       capturedAt: now - 1000 * 60 * 12,
       pinned: false,
+      label: null,
     },
     {
       id: 4,
@@ -1828,6 +1886,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "SnippingTool.exe",
       capturedAt: now - 1000 * 60 * 25,
       pinned: false,
+      label: null,
     },
     {
       id: 5,
@@ -1842,6 +1901,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "ssms.exe",
       capturedAt: now - 1000 * 60 * 47,
       pinned: false,
+      label: null,
     },
     {
       id: 6,
@@ -1856,6 +1916,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "outlook.exe",
       capturedAt: now - 1000 * 60 * 60 * 2,
       pinned: false,
+      label: "my email",
     },
     {
       id: 7,
@@ -1871,6 +1932,7 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "ssms.exe",
       capturedAt: now - 1000 * 60 * 60 * 4,
       pinned: false,
+      label: null,
     },
     {
       id: 8,
@@ -1885,8 +1947,10 @@ function mockClipboardEntries(): ClipboardEntrySummary[] {
       sourceProcess: "chrome.exe",
       capturedAt: now - 1000 * 60 * 90,
       pinned: false,
+      label: null,
     },
   ];
+  return mockClipboardEntriesCache;
 }
 
 function mockTestUsers(): TestUser[] {
@@ -2438,6 +2502,27 @@ export function pinClipboardEntry(id: number, pinned: boolean): Promise<void> {
   return invoke<void>("pin_clipboard_entry", { id, pinned });
 }
 
+export function setClipboardEntryLabel(
+  id: number,
+  label: string | null,
+): Promise<void> {
+  return invoke<void>("set_clipboard_entry_label", { id, label });
+}
+
+export function updateClipboardEntryContent(
+  id: number,
+  content: string,
+): Promise<void> {
+  return invoke<void>("update_clipboard_entry_content", { id, content });
+}
+
+export function setClipboardEntrySensitivity(
+  id: number,
+  sensitive: boolean,
+): Promise<void> {
+  return invoke<void>("set_clipboard_entry_sensitivity", { id, sensitive });
+}
+
 export function clearClipboardHistory(includePinned: boolean): Promise<number> {
   return invoke<number>("clear_clipboard_history", { includePinned });
 }
@@ -2489,6 +2574,20 @@ export async function onClipboardEntryAdded(
   const listener = (e: Event) => handler((e as CustomEvent<number>).detail);
   window.addEventListener("mock-clipboard-entry-added", listener);
   return () => window.removeEventListener("mock-clipboard-entry-added", listener);
+}
+
+/** Fires when an entry's metadata or content was mutated (label, edit, sensitivity). */
+export async function onClipboardEntryUpdated(
+  handler: (id: number) => void,
+): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<number>("clipboard-entry-updated", (e) => handler(e.payload));
+  }
+  const listener = (e: Event) => handler((e as CustomEvent<number>).detail);
+  window.addEventListener("mock-clipboard-entry-updated", listener);
+  return () =>
+    window.removeEventListener("mock-clipboard-entry-updated", listener);
 }
 
 /** Fires when the clipboard window is shown via the global shortcut. */

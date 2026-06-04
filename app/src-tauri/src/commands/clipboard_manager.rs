@@ -7,6 +7,7 @@
 use crate::clipboard::ForegroundCapture;
 use crate::state::clipboard_history::{
     ClipboardEntryFull, ClipboardEntrySummary, ClipboardHistoryState, ClipboardSettings,
+    UpdateContentOutcome,
 };
 use crate::state::test_users::{TestUser, TestUsersState};
 use serde::{Deserialize, Serialize};
@@ -217,6 +218,91 @@ pub async fn pin_clipboard_entry(
 ) -> Result<(), String> {
     state.set_pinned(id, pinned)?;
     let _ = app.emit("clipboard-entry-pinned", (id, pinned));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_clipboard_entry_label(
+    state: State<'_, ClipboardHistoryState>,
+    app: AppHandle,
+    id: i64,
+    label: Option<String>,
+) -> Result<(), String> {
+    let trimmed = label.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let ok = state.set_label(id, trimmed)?;
+    if !ok {
+        return Err(format!("clipboard entry {id} not found"));
+    }
+    let _ = app.emit("clipboard-entry-updated", id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_clipboard_entry_content(
+    state: State<'_, ClipboardHistoryState>,
+    app: AppHandle,
+    id: i64,
+    content: String,
+) -> Result<(), String> {
+    let new_hash = crate::clipboard::listener::compute_text_hash(&content);
+    let byte_size = content.len() as i64;
+    match state.update_text_content(id, &content, &new_hash, byte_size)? {
+        UpdateContentOutcome::Updated => {
+            // Mark the new hash as a self-write so an OS-clipboard echo of
+            // the edited value (e.g. immediately pasting it) isn't captured
+            // as a fresh entry by the daemon's listener.
+            state.mark_self_write(&new_hash);
+            let _ = app.emit("clipboard-entry-updated", id);
+            Ok(())
+        }
+        UpdateContentOutcome::Blocked => Err(
+            "cannot edit a sensitive or image entry; clear the sensitive flag first".into(),
+        ),
+        UpdateContentOutcome::Duplicate => Err(
+            "another clipboard entry already has this exact content".into(),
+        ),
+        UpdateContentOutcome::NotFound => Err(format!("clipboard entry {id} not found")),
+    }
+}
+
+#[tauri::command]
+pub async fn set_clipboard_entry_sensitivity(
+    state: State<'_, ClipboardHistoryState>,
+    test_users: State<'_, TestUsersState>,
+    app: AppHandle,
+    id: i64,
+    sensitive: bool,
+) -> Result<(), String> {
+    let ok = if sensitive {
+        let entry = state
+            .get(id)?
+            .ok_or_else(|| format!("clipboard entry {id} not found"))?;
+        let plain = entry.text_content.unwrap_or_default();
+        let res = crate::clipboard::pii::scan(&plain);
+        let kinds: Vec<String> = res
+            .kinds()
+            .into_iter()
+            .map(|k| k.as_str().to_string())
+            .collect();
+        let user = test_users.pick_random_enabled().ok().flatten();
+        // When PII detection found something, substitute against the test
+        // user (or mask-fallback). When it found nothing but the user is
+        // explicitly tagging this as sensitive, replace the whole text with
+        // an "***" mask so the obfuscated paste path has something safe.
+        let obfuscated = if res.detections.is_empty() {
+            if plain.is_empty() { String::new() } else { "***".to_string() }
+        } else {
+            crate::clipboard::pii::substitute(&plain, &res.detections, user.as_ref())
+        };
+        let user_id = user.and_then(|u| u.id);
+        state.set_sensitivity(id, true, Some(obfuscated.as_str()), user_id, &kinds)?
+    } else {
+        state.set_sensitivity(id, false, None, None, &[])?
+    };
+    if !ok {
+        return Err(format!("clipboard entry {id} not found"));
+    }
+    let _ = app.emit("clipboard-entry-updated", id);
     Ok(())
 }
 
