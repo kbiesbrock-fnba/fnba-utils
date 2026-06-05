@@ -67,6 +67,16 @@ export function usePalette() {
     if (cmd) selectCommand(cmd);
   }
 
+  /** Activate the Nth visible command (0-indexed). Used by digit hotkeys
+   *  1-9 in the palette so users can launch a command without arrow-keying. */
+  function selectByIndex(index: number) {
+    const cmd = filteredCommands.value[index];
+    if (cmd) {
+      selectedIndex.value = index;
+      selectCommand(cmd);
+    }
+  }
+
   function onSearchChange(query: string) {
     searchQuery.value = query;
     selectedIndex.value = 0;
@@ -85,6 +95,7 @@ export function usePalette() {
     back,
     moveSelection,
     confirmSelection,
+    selectByIndex,
     onSearchChange,
   };
 }

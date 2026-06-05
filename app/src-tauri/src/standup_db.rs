@@ -39,7 +39,8 @@ impl StandupDb {
                     hidden INTEGER NOT NULL DEFAULT 0,
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
-                    manual_order INTEGER
+                    manual_order INTEGER,
+                    post_to_teams INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS run_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +77,7 @@ impl StandupDb {
         // already exists; we swallow that and continue.
         for stmt in [
             "ALTER TABLE issue_state ADD COLUMN manual_order INTEGER",
+            "ALTER TABLE issue_state ADD COLUMN post_to_teams INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE run_snapshot ADD COLUMN priority TEXT",
             "ALTER TABLE run_snapshot ADD COLUMN priority_rank INTEGER NOT NULL DEFAULT 10",
             "ALTER TABLE run_snapshot ADD COLUMN due_date TEXT",
@@ -323,6 +325,40 @@ impl StandupDb {
         Ok(n)
     }
 
+    /// Set the post_to_teams flag for a single issue key. Upserts so brand-new
+    /// keys still land in `issue_state`.
+    pub fn set_post_to_teams(&self, key: &str, post: bool) -> Result<(), String> {
+        let now = Utc::now().to_rfc3339();
+        self.conn
+            .execute(
+                "INSERT INTO issue_state (key, hidden, first_seen_at, last_seen_at, post_to_teams)
+                 VALUES (?1, 0, ?2, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET post_to_teams = excluded.post_to_teams",
+                params![key, now, if post { 1 } else { 0 }],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Return every issue key that's been explicitly starred (opted *in*) for
+    /// the Teams post. Keys missing from this list default to excluded — the
+    /// star is opt-in. The user's prior picks carry over until they manually
+    /// unstar or the row is deleted.
+    pub fn get_post_to_teams_included(&self) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key FROM issue_state WHERE post_to_teams = 1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
     /// Return (key, manual_order) for every issue with a non-null manual_order.
     pub fn get_manual_orders(&self) -> Result<Vec<(String, i64)>, String> {
         let mut stmt = self
@@ -419,6 +455,9 @@ pub fn report_from_snapshot(
             has_checklist: issue.has_checklist,
             checklist_text: issue.checklist_text,
             checklist,
+            // Default false; apply_post_to_teams_flags() joins the persisted
+            // opt-ins from issue_state.post_to_teams over the top.
+            post_to_teams: false,
         });
     }
 

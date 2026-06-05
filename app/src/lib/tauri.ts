@@ -317,6 +317,10 @@ export interface JiraIssue {
   checklistText: string | null;
   /** Parsed checklist items derived from checklistText. */
   checklist: ChecklistItem[];
+  /** True if this issue should be included in the Teams post / clipboard copy.
+   *  Defaults to true. Today only honored for the To Do group; other groups
+   *  always post. */
+  postToTeams: boolean;
 }
 
 export interface StandupGroup {
@@ -522,6 +526,38 @@ const mockSqlQueries = new Map<
   string,
   { timer: ReturnType<typeof setTimeout>; reject: (err: Error) => void }
 >();
+
+// Mock standup state: per-issue-key "include in Teams post" flag. Mirrors the
+// `issue_state.post_to_teams` column the Rust backend keeps in standup.db so
+// the browser-mode demo behaves the same way as the native app.
+const mockPostToTeams = new Map<string, boolean>();
+
+const MOCK_AUTO_STAR_TARGET = 3;
+
+/** Browser-mode replica of the Rust `auto_promote_to_do_stars` — when the To Do
+ *  group has fewer than 3 starred items, fill it up by promoting unstarred ones
+ *  (priority, then due date, then key) and persist to mockPostToTeams. */
+function autoPromoteTodoStars(report: StandupReport): void {
+  const todo = report.groups.find((g) => g.group === "todo");
+  if (!todo || todo.issues.length === 0) return;
+  const starred = todo.issues.filter((i) => i.postToTeams).length;
+  if (starred >= MOCK_AUTO_STAR_TARGET) return;
+  const needed = MOCK_AUTO_STAR_TARGET - starred;
+  const candidates = todo.issues
+    .filter((i) => !i.postToTeams)
+    .slice()
+    .sort((a, b) => {
+      if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
+      const da = a.dueDate ?? "9999-12-31";
+      const db = b.dueDate ?? "9999-12-31";
+      if (da !== db) return da < db ? -1 : 1;
+      return a.key.localeCompare(b.key);
+    });
+  for (const issue of candidates.slice(0, needed)) {
+    issue.postToTeams = true;
+    mockPostToTeams.set(issue.key, true);
+  }
+}
 
 async function mockInvoke<T>(
   cmd: string,
@@ -1123,11 +1159,12 @@ async function mockInvoke<T>(
           hasChecklist: checklist.length > 0,
           checklistText: opts.checklistText ?? null,
           checklist,
+          postToTeams: mockPostToTeams.get(key) ?? false,
         };
       };
       const sample: StandupReport = {
         generatedAt: new Date().toISOString(),
-        issueCount: 5,
+        issueCount: 8,
         groups: [
           {
             group: "in_progress",
@@ -1164,6 +1201,18 @@ async function mockInvoke<T>(
             ],
           },
           {
+            group: "todo",
+            label: "To Do",
+            emoji: "📝",
+            totalPoints: 9,
+            issues: [
+              mockIssue("MIN-1410", "Add audit log retention policy", "Selected for Development", "todo", 3, { priority: "High" }),
+              mockIssue("MIN-1411", "Cleanup deprecated SOAP endpoint", "Backlog", "todo", 2, { priority: "Medium" }),
+              mockIssue("MIN-1412", "Investigate slow GL close run", "Investigate", "todo", 1, { priority: "Medium" }),
+              mockIssue("MIN-1413", "Wire metrics to Grafana", "Specify", "todo", 3, { priority: "Low" }),
+            ],
+          },
+          {
             group: "done",
             label: "Done This Week",
             emoji: "✅",
@@ -1185,6 +1234,7 @@ async function mockInvoke<T>(
       let reportForResult: StandupReport;
       if (cmd === "preview_standup") {
         postedToTeams = false;
+        autoPromoteTodoStars(sample);
         reportForResult = sample;
       } else if (cmd === "post_standup_to_teams") {
         postedToTeams = true;
@@ -1218,8 +1268,15 @@ async function mockInvoke<T>(
         ? report.groups
             .filter((g) => g.group !== "attention")
             .map((g) => {
-              const head = `${g.emoji} ${g.label} (${g.issues.length})`;
-              const rows = g.issues
+              // To Do is filtered to items flagged for posting; other groups
+              // render in full. Mirror the Rust backend.
+              const issues =
+                g.group === "todo"
+                  ? g.issues.filter((i) => i.postToTeams)
+                  : g.issues;
+              if (issues.length === 0) return null;
+              const head = `${g.emoji} ${g.label} (${issues.length})`;
+              const rows = issues
                 .map(
                   (i) =>
                     `  [${i.key}] ${i.summary}: ${i.status} (${
@@ -1229,10 +1286,20 @@ async function mockInvoke<T>(
                 .join("\n");
               return `${head}\n${rows}`;
             })
+            .filter((s): s is string => s !== null)
             .join("\n\n") + "\n"
         : "";
       console.info("[mock] copy_standup_report ->", text);
       return text as T;
+    }
+
+    case "set_standup_issue_post_to_teams": {
+      await delay(20);
+      const key = (args?.key as string) ?? "";
+      const post = (args?.post as boolean) ?? true;
+      if (key) mockPostToTeams.set(key, post);
+      console.log("[mock] set_standup_issue_post_to_teams", args);
+      return undefined as T;
     }
 
     case "get_standup_panel_state": {
@@ -1282,6 +1349,7 @@ async function mockInvoke<T>(
           hasChecklist: checklist.length > 0,
           checklistText: null,
           checklist,
+          postToTeams: mockPostToTeams.get(key) ?? false,
         };
       };
       return {
@@ -2440,6 +2508,15 @@ export function setIssueOrder(orderedKeys: string[]): Promise<void> {
 
 export function clearManualOrder(): Promise<number> {
   return invoke<number>("clear_manual_order");
+}
+
+/** Toggle whether a single issue is included in the Teams post / clipboard copy.
+ *  Only honored for the To Do group at format time; other groups always post. */
+export function setStandupIssuePostToTeams(
+  key: string,
+  post: boolean,
+): Promise<void> {
+  return invoke<void>("set_standup_issue_post_to_teams", { key, post });
 }
 
 export function getRunSnapshot(runId: number): Promise<StandupReport | null> {

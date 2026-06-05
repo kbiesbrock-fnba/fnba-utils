@@ -1,6 +1,6 @@
 {
   "productName": "FNBA Utils",
-  "version": "1.13.3",
+  "version": "1.13.4",
   "identifier": "com.fnba.utils",
   "build": {
     "devUrl": "http://localhost:5173",

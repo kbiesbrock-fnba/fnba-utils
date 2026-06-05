@@ -351,6 +351,7 @@ pub fn run() {
             commands::standup::clear_hidden_issues,
             commands::standup::set_issue_order,
             commands::standup::clear_manual_order,
+            commands::standup::set_standup_issue_post_to_teams,
             commands::standup::get_run_snapshot,
             commands::standup::get_issue_detail,
             commands::assume_identity::get_identity_data,

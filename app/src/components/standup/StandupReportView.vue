@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { StandupRunResult } from "@/lib/tauri";
+import type { StandupRunResult, JiraIssue } from "@/lib/tauri";
+import { setStandupIssuePostToTeams } from "@/lib/tauri";
 
 const props = defineProps<{
   result: StandupRunResult;
@@ -25,6 +26,41 @@ function pts(n: number | null): string {
 
 function pointsTotal(n: number): string {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1);
+}
+
+function todoPostedCount(issues: JiraIssue[]): number {
+  return issues.filter((i) => i.postToTeams).length;
+}
+
+function todoPostedPoints(issues: JiraIssue[]): number {
+  return issues
+    .filter((i) => i.postToTeams)
+    .reduce((acc, i) => acc + (i.storyPoints ?? 0), 0);
+}
+
+/** Render the To Do group with starred items on top so the "next up" picks
+ *  are immediately visible. Stable within each partition — preserves the
+ *  upstream order otherwise. */
+function todoIssuesSorted(issues: JiraIssue[]): JiraIssue[] {
+  const starred: JiraIssue[] = [];
+  const rest: JiraIssue[] = [];
+  for (const issue of issues) {
+    (issue.postToTeams ? starred : rest).push(issue);
+  }
+  return [...starred, ...rest];
+}
+
+// Optimistic toggle — flip the local flag immediately, then persist. If the
+// backend call fails we revert and surface a console error (no toast UI here).
+async function togglePost(issue: JiraIssue) {
+  const next = !issue.postToTeams;
+  issue.postToTeams = next;
+  try {
+    await setStandupIssuePostToTeams(issue.key, next);
+  } catch (e) {
+    issue.postToTeams = !next;
+    console.error("setStandupIssuePostToTeams failed:", e);
+  }
 }
 </script>
 
@@ -63,9 +99,49 @@ function pointsTotal(n: number): string {
           <span class="group-emoji">{{ group.emoji }}</span>
           <span class="group-label">{{ group.label }}</span>
           <span class="group-count">({{ group.issues.length }})</span>
-          <span class="group-pts">{{ pointsTotal(group.totalPoints) }} pt</span>
+          <span
+            v-if="group.group === 'todo'"
+            class="group-post-count"
+            :title="'Items checked will be included in the Teams post. Unchecked items stay in the preview only.'"
+          >posting {{ todoPostedCount(group.issues) }} of {{ group.issues.length }} to Teams</span>
+          <span v-if="group.group === 'todo'" class="group-pts">
+            {{ pointsTotal(todoPostedPoints(group.issues)) }} of {{ pointsTotal(group.totalPoints) }} pt
+          </span>
+          <span v-else class="group-pts">{{ pointsTotal(group.totalPoints) }} pt</span>
         </div>
+
+        <template v-if="group.group === 'todo'">
+          <div
+            v-for="issue in todoIssuesSorted(group.issues)"
+            :key="issue.key"
+            class="issue-row issue-row-toggle"
+            :class="{ 'issue-skipped': !issue.postToTeams }"
+          >
+            <button
+              type="button"
+              class="post-toggle"
+              :class="{ on: issue.postToTeams }"
+              :title="issue.postToTeams ? 'Posted to Teams — click to skip' : 'Preview only — click to include in Teams post'"
+              :aria-pressed="issue.postToTeams"
+              :aria-label="`Toggle ${issue.key} in Teams post`"
+              @click="togglePost(issue)"
+            >{{ issue.postToTeams ? '★' : '☆' }}</button>
+            <a
+              :href="issue.url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="issue-link"
+            >
+              <span class="issue-key">{{ issue.key }}</span>
+              <span class="issue-summary">{{ issue.summary }}</span>
+              <span class="issue-status">{{ issue.status }}</span>
+              <span class="issue-pts">{{ pts(issue.storyPoints) }}</span>
+            </a>
+          </div>
+        </template>
+
         <a
+          v-else
           v-for="issue in group.issues"
           :key="issue.key"
           :href="issue.url"
@@ -200,6 +276,14 @@ function pointsTotal(n: number): string {
   font-weight: 400;
 }
 
+.group-post-count {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 400;
+  font-family: var(--font-mono);
+  color: var(--text-placeholder);
+}
+
 .group-pts {
   margin-left: auto;
   color: var(--text-placeholder);
@@ -222,6 +306,54 @@ function pointsTotal(n: number): string {
 
 .issue-row:hover {
   background: var(--bg-hover);
+}
+
+/* Rows in the To Do group carry a leading star button; the rest of the row is
+ * a separate <a>. Override the grid so the row holds [button, link] only. */
+.issue-row-toggle {
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.issue-link {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px;
+  align-items: baseline;
+  text-decoration: none;
+  color: inherit;
+}
+
+.issue-skipped .issue-link {
+  opacity: 0.4;
+}
+
+.issue-skipped .issue-summary {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-placeholder);
+}
+
+.post-toggle {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-placeholder);
+  font-family: var(--font-mono);
+  transition: color 0.1s ease, transform 0.1s ease;
+  width: 18px;
+  text-align: center;
+}
+
+.post-toggle:hover {
+  transform: scale(1.15);
+}
+
+.post-toggle.on {
+  color: #fbbf24;
 }
 
 .issue-key {

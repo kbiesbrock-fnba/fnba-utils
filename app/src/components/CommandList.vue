@@ -6,6 +6,10 @@ import CommandItem from "./CommandItem.vue";
 const props = defineProps<{
   commands: PaletteCommand[];
   selectedIndex: number;
+  /** When true, show 1-9 hotkey badges on the first 9 items. The palette
+   *  passes false while the user has a search query, since the digit hotkey
+   *  is then routed to the search input instead. */
+  showHotkeys?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +41,7 @@ watch(
       :name="cmd.name"
       :description="cmd.description"
       :selected="i === selectedIndex"
+      :hotkey="showHotkeys && i < 9 ? String(i + 1) : null"
       @click="emit('select', i)"
     />
   </div>

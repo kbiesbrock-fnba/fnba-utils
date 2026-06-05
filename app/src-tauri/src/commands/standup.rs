@@ -33,6 +33,10 @@ const STATUS_EMOJIS: &[(&str, &str)] = &[
     ("ready for acceptance", "✔️"),
     ("ready to release", "🚀"),
     ("done", "✅"),
+    ("canceled", "🚫"),
+    ("cancelled", "🚫"),
+    ("won't do", "🚫"),
+    ("wont do", "🚫"),
     ("servicing top 10", "🔥"),
     ("origination top 10", "🔥"),
 ];
@@ -64,6 +68,13 @@ const STATUS_TO_GROUP: &[(&str, StatusGroup)] = &[
     ("origination top 10", StatusGroup::Attention),
     ("ready to release", StatusGroup::Done),
     ("done", StatusGroup::Done),
+    // Canceled work is considered closed for standup purposes — group with Done
+    // so the JQL window (statusCategoryChangedDate >= startOfWeek) still surfaces
+    // it but it doesn't pollute To Do.
+    ("canceled", StatusGroup::Done),
+    ("cancelled", StatusGroup::Done),
+    ("won't do", StatusGroup::Done),
+    ("wont do", StatusGroup::Done),
 ];
 
 fn status_emoji(status: &str) -> &'static str {
@@ -212,10 +223,104 @@ async fn fetch_issues(s: &crate::config::StandupConfig) -> Result<Vec<JiraIssue>
             has_checklist,
             checklist_text,
             checklist,
+            // apply_post_to_teams_flags() joins the persisted starred set onto
+            // this report after build_report; default false here is just a
+            // placeholder.
+            post_to_teams: false,
         });
     }
 
     Ok(out)
+}
+
+/// Apply the persisted "starred" set from `issue_state` onto every issue in
+/// the report. The flag is opt-in: items not in the set stay unstarred. This
+/// is how yesterday's picks carry forward to today.
+fn apply_post_to_teams_flags(report: &mut StandupReport) {
+    let Ok(db) = crate::standup_db::StandupDb::open() else {
+        return; // best-effort: a missing DB just leaves everything unstarred
+    };
+    let included: std::collections::HashSet<String> = match db.get_post_to_teams_included() {
+        Ok(keys) => keys.into_iter().collect(),
+        Err(e) => {
+            eprintln!("standup_db: get_post_to_teams_included failed: {e}");
+            return;
+        }
+    };
+    for group in report.groups.iter_mut() {
+        for issue in group.issues.iter_mut() {
+            issue.post_to_teams = included.contains(&issue.key);
+        }
+    }
+}
+
+/// Target number of starred To Do items the auto-promoter aims to maintain.
+/// "Next ~3 things I'm considering working on" — small enough to be a useful
+/// daily focus, big enough to be more than one bullet in Teams.
+const AUTO_STAR_TARGET: usize = 3;
+
+/// If fewer than `AUTO_STAR_TARGET` items in the To Do group are currently
+/// starred, pick unstarred items (priority_rank ASC, then due_date ASC, then
+/// key ASC) and star them up to the target. Persists each promotion to the DB
+/// so the choice carries forward to the next preview.
+///
+/// Does not unstar anything. A starred item that has moved out of To Do keeps
+/// its flag (it'll come back starred if it ever lands in To Do again); a user
+/// who has manually starred 5 stays at 5.
+fn auto_promote_to_do_stars(report: &mut StandupReport) {
+    let Some(group) = report
+        .groups
+        .iter_mut()
+        .find(|g| g.group == StatusGroup::Todo)
+    else {
+        return;
+    };
+    if group.issues.is_empty() {
+        return;
+    }
+
+    let starred_count = group.issues.iter().filter(|i| i.post_to_teams).count();
+    if starred_count >= AUTO_STAR_TARGET {
+        return;
+    }
+    let needed = AUTO_STAR_TARGET - starred_count;
+
+    let mut candidates: Vec<usize> = group
+        .issues
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| !i.post_to_teams)
+        .map(|(idx, _)| idx)
+        .collect();
+    candidates.sort_by(|&a, &b| {
+        let ia = &group.issues[a];
+        let ib = &group.issues[b];
+        ia.priority_rank
+            .cmp(&ib.priority_rank)
+            .then_with(|| {
+                // Unset due dates sort last so issues with a real deadline win.
+                let da = ia.due_date.as_deref().unwrap_or("9999-12-31");
+                let db_ = ib.due_date.as_deref().unwrap_or("9999-12-31");
+                da.cmp(db_)
+            })
+            .then_with(|| ia.key.cmp(&ib.key))
+    });
+
+    let mut promoted: Vec<String> = Vec::with_capacity(needed);
+    for idx in candidates.into_iter().take(needed) {
+        group.issues[idx].post_to_teams = true;
+        promoted.push(group.issues[idx].key.clone());
+    }
+
+    if !promoted.is_empty() {
+        if let Ok(db) = crate::standup_db::StandupDb::open() {
+            for key in &promoted {
+                if let Err(e) = db.set_post_to_teams(key, true) {
+                    eprintln!("standup_db: auto-promote set_post_to_teams({key}) failed: {e}");
+                }
+            }
+        }
+    }
 }
 
 fn build_report(issues: Vec<JiraIssue>) -> StandupReport {
@@ -278,13 +383,28 @@ fn build_adaptive_card(report: &StandupReport) -> Value {
         now.day()
     );
 
-    let total_points: f64 = report.groups.iter().map(|g| g.total_points).sum();
-    let visible_count: usize = report
+    // For the To Do group only, filter to items flagged for posting; other groups
+    // are unaffected. We compute (issues, points, count) per group up front so the
+    // header counts match what we actually render.
+    let group_view: Vec<(&StandupGroup, Vec<&JiraIssue>, f64)> = report
         .groups
         .iter()
         .filter(|g| g.group != StatusGroup::Attention)
-        .map(|g| g.issues.len())
-        .sum();
+        .map(|g| {
+            let issues: Vec<&JiraIssue> = if g.group == StatusGroup::Todo {
+                g.issues.iter().filter(|i| i.post_to_teams).collect()
+            } else {
+                g.issues.iter().collect()
+            };
+            let pts: f64 = issues.iter().filter_map(|i| i.story_points).sum();
+            (g, issues, pts)
+        })
+        // Skip groups that filtered down to zero (To Do with everything unchecked).
+        .filter(|(_, issues, _)| !issues.is_empty())
+        .collect();
+
+    let total_points: f64 = group_view.iter().map(|(_, _, p)| *p).sum();
+    let visible_count: usize = group_view.iter().map(|(_, i, _)| i.len()).sum();
 
     let mut md = format!(
         "🗓 **Standup — {}** · {} issue{} · {} pt{}",
@@ -295,20 +415,16 @@ fn build_adaptive_card(report: &StandupReport) -> Value {
         if (total_points - 1.0).abs() < f64::EPSILON { "" } else { "s" },
     );
 
-    for group in &report.groups {
-        if group.group == StatusGroup::Attention {
-            continue; // panel-only, not surfaced in Teams
-        }
-
+    for (group, issues, _) in &group_view {
         md.push_str("\n\n");
         md.push_str(&format!(
             "{} **{}** ({})",
             group.emoji,
             group.label,
-            group.issues.len()
+            issues.len()
         ));
 
-        for issue in &group.issues {
+        for issue in issues {
             md.push('\r');
             md.push_str(&format!("- [{}]({}) {}", issue.key, issue.url, issue.summary));
             if let Some(pts) = issue.story_points {
@@ -484,7 +600,9 @@ async fn run_standup_inner(
     post_to_teams_flag: bool,
 ) -> Result<StandupRunResult, String> {
     let issues = fetch_issues(s).await?;
-    let report = build_report(issues);
+    let mut report = build_report(issues);
+    apply_post_to_teams_flags(&mut report);
+    auto_promote_to_do_stars(&mut report);
 
     let mut warnings: Vec<String> = Vec::new();
     let mut posted = false;
@@ -531,7 +649,9 @@ pub async fn preview_standup(
 ) -> Result<StandupRunResult, String> {
     let s = standup_config(&cfg)?;
     let issues = fetch_issues(s).await?;
-    let report = build_report(issues);
+    let mut report = build_report(issues);
+    apply_post_to_teams_flags(&mut report);
+    auto_promote_to_do_stars(&mut report);
 
     let warnings: Vec<String> = Vec::new();
 
@@ -658,11 +778,20 @@ fn report_to_plain_text(report: &StandupReport) -> String {
         if group.group == StatusGroup::Attention {
             continue;
         }
+        // To Do is filtered to items flagged for posting; other groups render in full.
+        let issues: Vec<&JiraIssue> = if group.group == StatusGroup::Todo {
+            group.issues.iter().filter(|i| i.post_to_teams).collect()
+        } else {
+            group.issues.iter().collect()
+        };
+        if issues.is_empty() {
+            continue;
+        }
         text.push_str(&format!(
             "{} {} ({})\n",
-            group.emoji, group.label, group.issues.len()
+            group.emoji, group.label, issues.len()
         ));
-        for issue in &group.issues {
+        for issue in issues {
             let pts = issue
                 .story_points
                 .map(format_points)
@@ -713,7 +842,9 @@ pub async fn get_standup_panel_state() -> Result<StandupPanelState, String> {
     let report = match &last_run {
         Some(run) => {
             let snap = db.snapshot_for_run(run.id)?;
-            Some(crate::standup_db::report_from_snapshot(&run.run_at, snap))
+            let mut r = crate::standup_db::report_from_snapshot(&run.run_at, snap);
+            apply_post_to_teams_flags(&mut r);
+            Some(r)
         }
         None => None,
     };
@@ -759,6 +890,15 @@ pub async fn set_issue_order(ordered_keys: Vec<String>) -> Result<(), String> {
 pub async fn clear_manual_order() -> Result<usize, String> {
     let db = crate::standup_db::StandupDb::open()?;
     db.clear_all_manual_order()
+}
+
+/// Set whether a single issue should be included in the Teams post / clipboard
+/// copy. Persists across previews so a To Do item the user opted out yesterday
+/// stays opted out today. Only the To Do group respects this flag at format time.
+#[tauri::command]
+pub async fn set_standup_issue_post_to_teams(key: String, post: bool) -> Result<(), String> {
+    let db = crate::standup_db::StandupDb::open()?;
+    db.set_post_to_teams(&key, post)
 }
 
 /// Read a single past run's snapshot, rebuilt as a StandupReport. Lets the panel

@@ -17,6 +17,7 @@ const {
   back,
   moveSelection,
   confirmSelection,
+  selectByIndex,
   onSearchChange,
 } = usePalette();
 
@@ -37,6 +38,29 @@ async function openDataFolder() {
     console.error("Failed to open app data folder", e);
   }
 }
+
+// 1-9 in browsing mode + empty search → launch the Nth command. While the
+// user is typing a search query digits fall through so "1" still types into
+// the input. 0 is intentionally unbound (no 10th-slot ambiguity).
+//
+// preventDefault is opt-in here so the digit reaches the search input in the
+// fall-through case; we call preventDefault() ourselves inside the handler
+// only when we're actually launching a command.
+const digitBindings = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].map(
+  (key) => ({
+    key,
+    preventDefault: false,
+    handler: (e: KeyboardEvent) => {
+      if (mode.value !== "browsing") return false;
+      if (searchQuery.value !== "") return false;
+      const index = Number(key) - 1;
+      if (index >= filteredCommands.value.length) return false;
+      e.preventDefault();
+      selectByIndex(index);
+      return;
+    },
+  }),
+);
 
 useKeyLayer(
   [
@@ -65,6 +89,7 @@ useKeyLayer(
         return false;
       },
     },
+    ...digitBindings,
   ],
   { priority: KEY_PRIORITY.PALETTE },
 );
@@ -92,9 +117,10 @@ useKeyLayer(
       <CommandList
         :commands="filteredCommands"
         :selected-index="selectedIndex"
+        :show-hotkeys="searchQuery === ''"
         @select="(i) => { selectedIndex = i; confirmSelection(); }"
       />
-      <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Close" show-version />
+      <StatusBar hint="↑↓ Navigate  ⏎ Select  1-9 Jump  ⎋ Close" show-version />
     </template>
 
     <template v-else-if="mode === 'command-active' && activeCommand">

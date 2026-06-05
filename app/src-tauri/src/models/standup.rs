@@ -21,6 +21,14 @@ pub struct JiraIssue {
     pub checklist_text: Option<String>,
     /// Parsed checklist items derived from `checklist_text`.
     pub checklist: Vec<ChecklistItem>,
+    /// Include this issue's row in the Teams post / clipboard copy. Opt-in —
+    /// defaults to false. The user stars items in the preview to mark them as
+    /// "next up"; the backend also auto-stars up to 3 To Do items on each
+    /// preview so a fresh user (or someone whose starred items have moved on)
+    /// doesn't have to start from zero. Only honored for the To Do group at
+    /// format time; other groups always post.
+    #[serde(default)]
+    pub post_to_teams: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
