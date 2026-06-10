@@ -284,6 +284,44 @@ pub fn run() {
                 eprintln!("Failed to register Super+Shift+C: {e}");
             }
 
+            // --- Global Shortcut: Win+Shift+J (JSON Viewer) ---
+            if let Err(e) = app.global_shortcut().on_shortcut(
+                "Super+Shift+J",
+                move |app: &AppHandle, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(w) = app.get_webview_window("json-viewer") {
+                            // Check focus state, not visibility state, to avoid state misalignment
+                            // when the window loses focus but remains visible
+                            if w.is_focused().unwrap_or(false) {
+                                let _ = w.hide();
+                            } else {
+                                // Position at bottom-left of the current monitor
+                                if let Ok(Some(monitor)) = w.current_monitor() {
+                                    let mon_size = monitor.size();
+                                    let mon_pos = monitor.position();
+                                    let win_size = w.outer_size().unwrap_or(
+                                        tauri::PhysicalSize::new(1000, 700),
+                                    );
+                                    let margin = 16;
+                                    let x = mon_pos.x + margin;
+                                    let y = mon_pos.y + mon_size.height as i32
+                                        - win_size.height as i32
+                                        - margin
+                                        - 48;
+                                    let _ = w.set_position(tauri::Position::Physical(
+                                        tauri::PhysicalPosition::new(x, y),
+                                    ));
+                                }
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    }
+                },
+            ) {
+                eprintln!("Failed to register Super+Shift+J: {e}");
+            }
+
             // --- Clipboard daemon (fnba-clipd.exe) ---
             // Capture lives in a separate background process so it keeps
             // running even when fnba-utils itself is closed. We ensure it's
@@ -425,6 +463,7 @@ pub fn run() {
             commands::clipboard_manager::upsert_test_user,
             commands::clipboard_manager::delete_test_user,
             commands::clipboard_manager::set_test_user_enabled,
+            commands::json_viewer::copy_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

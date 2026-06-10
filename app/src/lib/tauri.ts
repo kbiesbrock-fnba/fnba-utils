@@ -1293,6 +1293,13 @@ async function mockInvoke<T>(
       return text as T;
     }
 
+    case "copy_text": {
+      await delay(20);
+      const text = args?.text as string | undefined;
+      console.info("[mock] copy_text ->", text);
+      return undefined as T;
+    }
+
     case "set_standup_issue_post_to_teams": {
       await delay(20);
       const key = (args?.key as string) ?? "";
@@ -2480,6 +2487,10 @@ export function previewStandup(): Promise<StandupRunResult> {
  */
 export function copyStandupReport(report: StandupReport): Promise<string> {
   return invoke<string>("copy_standup_report", { report });
+}
+
+export function copyText(text: string): Promise<void> {
+  return invoke<void>("copy_text", { text });
 }
 
 /**

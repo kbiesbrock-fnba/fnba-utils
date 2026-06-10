@@ -1,6 +1,6 @@
 {
   "productName": "FNBA Utils",
-  "version": "1.13.4",
+  "version": "1.13.5",
   "identifier": "com.fnba.utils",
   "build": {
     "devUrl": "http://localhost:5173",
@@ -96,6 +96,25 @@
         "backgroundColor": "#00000000",
         "visible": false,
         "alwaysOnTop": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "json-viewer",
+        "title": "JSON Viewer",
+        "url": "index.html#json-viewer",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 600,
+        "minHeight": 400,
+        "x": 0,
+        "y": 0,
+        "resizable": true,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "visible": false,
+        "alwaysOnTop": false,
         "skipTaskbar": true
       }
     ],
