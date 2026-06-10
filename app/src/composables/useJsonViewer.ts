@@ -23,7 +23,7 @@ export function useJsonViewer() {
   const parseError = ref<string | null>(null);
   const search = ref<string>("");
   const sortKeys = ref<boolean>(false);
-  const mode: Ref<ViewMode> = ref("tree");
+  const mode: Ref<ViewMode> = ref("format");
   const formatStyle: Ref<FormatStyle> = ref("pretty2");
   const diffInput = ref<string>("");
   const diffParsed: Ref<unknown | null> = ref(null);

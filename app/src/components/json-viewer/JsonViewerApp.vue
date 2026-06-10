@@ -111,6 +111,13 @@ function selectedPathStr(): string {
       </div>
       <div class="toolbar-buttons">
         <button
+          :class="{ active: mode === 'format' }"
+          @click="mode = 'format'"
+          title="Format and display"
+        >
+          ✨ Format
+        </button>
+        <button
           :class="{ active: mode === 'tree' }"
           @click="mode = 'tree'"
           title="Tree view"
@@ -130,13 +137,6 @@ function selectedPathStr(): string {
           title="JSON Schema"
         >
           📋 Schema
-        </button>
-        <button
-          :class="{ active: mode === 'format' }"
-          @click="mode = 'format'"
-          title="Format and display"
-        >
-          ✨ Format
         </button>
         <button
           :class="{ active: mode === 'diff' }"
