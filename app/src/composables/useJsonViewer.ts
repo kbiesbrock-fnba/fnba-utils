@@ -50,6 +50,17 @@ export function useJsonViewer() {
     }
   }
 
+  function clearAll() {
+    input.value = "";
+    parsed.value = null;
+    parseError.value = null;
+    search.value = "";
+    diffInput.value = "";
+    diffParsed.value = null;
+    selectedPath.value = [];
+    expanded.value = new Set();
+  }
+
   function toggleExpand(path: string[]) {
     const key = serializePath(path);
     if (expanded.value.has(key)) {
@@ -329,6 +340,7 @@ export function useJsonViewer() {
     selectedPath,
     expanded,
     parse,
+    clearAll,
     toggleExpand,
     selectNode,
     getNodeValue,

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useJsonViewer, type CopyFormat, type ViewMode } from "../../composables/useJsonViewer";
 import { copyText } from "../../lib/tauri";
+import { openNewJsonViewerWindow } from "../../lib/jsonViewerWindow";
 import JsonTreeNode from "./JsonTreeNode.vue";
 import JsonQueryResults from "./JsonQueryResults.vue";
 
@@ -18,6 +19,7 @@ const {
   selectedPath,
   expanded,
   parse,
+  clearAll,
   toggleExpand,
   selectNode,
   flatten,
@@ -94,6 +96,35 @@ function selectedPathStr(): string {
   }
   return result;
 }
+
+// The static `json-viewer` window is reusable (hide so Win+Shift+J brings it
+// back); dynamically-spawned `json-viewer:*` windows are ephemeral (destroy).
+async function closeWindow() {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const w = getCurrentWindow();
+  if (w.label === "json-viewer") {
+    await w.hide();
+  } else {
+    await w.close();
+  }
+}
+
+function onKeydown(e: KeyboardEvent) {
+  // Don't steal Escape while the user is mid-edit in a text field.
+  const target = e.target as HTMLElement | null;
+  const inEditable =
+    target &&
+    (target.tagName === "TEXTAREA" ||
+      target.tagName === "INPUT" ||
+      target.isContentEditable);
+  if (e.key === "Escape" && !inEditable) {
+    e.preventDefault();
+    void closeWindow();
+  }
+}
+
+onMounted(() => window.addEventListener("keydown", onKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
@@ -151,6 +182,28 @@ function selectedPathStr(): string {
           title="Sort object keys alphabetically"
         >
           A-Z
+        </button>
+        <span class="toolbar-divider"></span>
+        <button
+          class="util-btn"
+          @click="clearAll"
+          title="Clear all input and reset"
+        >
+          🗑 Clear
+        </button>
+        <button
+          class="util-btn"
+          @click="openNewJsonViewerWindow"
+          title="Open a new JSON Viewer window"
+        >
+          ＋ New
+        </button>
+        <button
+          class="close-btn"
+          @click="closeWindow"
+          title="Close window (Esc)"
+        >
+          ✕
         </button>
       </div>
     </div>
@@ -321,6 +374,34 @@ function selectedPathStr(): string {
 .toolbar-buttons button.active {
   background: #4CAF50;
   border-color: #45a049;
+  color: white;
+}
+
+.toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  background: #555;
+  margin: 2px 4px;
+}
+
+.toolbar-buttons button.util-btn {
+  background: #2d2d2d;
+}
+
+.toolbar-buttons button.util-btn:hover {
+  background: #3a3a3a;
+  color: #ddd;
+}
+
+.toolbar-buttons button.close-btn {
+  background: #2d2d2d;
+  color: #999;
+  font-weight: 600;
+}
+
+.toolbar-buttons button.close-btn:hover {
+  background: #c0392b;
+  border-color: #c0392b;
   color: white;
 }
 
