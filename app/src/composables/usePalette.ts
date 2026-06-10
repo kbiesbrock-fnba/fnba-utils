@@ -1,6 +1,7 @@
 import { ref, computed } from "vue";
 import { hideWindow } from "@/lib/tauri";
 import { filterCommands } from "@/commands";
+import { buildSoftCommands } from "@/lib/softCommands";
 import type { PaletteCommand } from "@/commands/types";
 
 export type PaletteMode = "browsing" | "command-active";
@@ -12,7 +13,14 @@ const activeCommand = ref<PaletteCommand | null>(null);
 const previousCommand = ref<PaletteCommand | null>(null);
 const returningToPrevious = ref(false);
 
-const filteredCommands = computed(() => filterCommands(searchQuery.value));
+const filteredCommands = computed(() => {
+  const matches = filterCommands(searchQuery.value);
+  // When nothing matches, offer contextual "soft commands" for the raw text
+  // (URL, Jira key, JSON, math, …). Returns [] when no pattern matches, so the
+  // normal empty state still shows for unrecognized text.
+  if (matches.length > 0) return matches;
+  return buildSoftCommands(searchQuery.value);
+});
 
 export function usePalette() {
   function reset() {
@@ -62,9 +70,21 @@ export function usePalette() {
     selectedIndex.value = (selectedIndex.value + delta + len) % len;
   }
 
+  /** Soft commands carry a one-shot `action` (run + dismiss); normal commands
+   *  open their `component`. */
+  function runOrSelect(cmd: PaletteCommand) {
+    if (cmd.action) {
+      Promise.resolve(cmd.action())
+        .catch((e) => console.error("[soft-command]", e))
+        .finally(() => dismiss());
+      return;
+    }
+    selectCommand(cmd);
+  }
+
   function confirmSelection() {
     const cmd = filteredCommands.value[selectedIndex.value];
-    if (cmd) selectCommand(cmd);
+    if (cmd) runOrSelect(cmd);
   }
 
   /** Activate the Nth visible command (0-indexed). Used by digit hotkeys
@@ -73,7 +93,7 @@ export function usePalette() {
     const cmd = filteredCommands.value[index];
     if (cmd) {
       selectedIndex.value = index;
-      selectCommand(cmd);
+      runOrSelect(cmd);
     }
   }
 

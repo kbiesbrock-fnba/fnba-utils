@@ -23,8 +23,21 @@ const JSON_VIEWER_OPTIONS: Record<string, unknown> = {
 // Monotonic suffix so two spawns in the same millisecond can't collide.
 let seq = 0;
 
-/** Create and focus a brand-new JSON Viewer window with a unique label. */
-export async function openNewJsonViewerWindow(): Promise<void> {
+/**
+ * Create and focus a brand-new JSON Viewer window with a unique label.
+ *
+ * `initialContent`, if given, is stashed in localStorage and picked up by the
+ * new window on mount (see JsonViewerApp) — used by the palette's "Open in
+ * JSON Viewer" soft command to seed the window with a pasted blob.
+ */
+export async function openNewJsonViewerWindow(initialContent?: string): Promise<void> {
+  if (initialContent != null) {
+    try {
+      localStorage.setItem("fnba-utils:json-viewer-pending", initialContent);
+    } catch {
+      // ignore
+    }
+  }
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
   const label = `json-viewer:${Date.now()}-${seq++}`;
   const win = new WebviewWindow(label, JSON_VIEWER_OPTIONS);

@@ -123,7 +123,20 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown));
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
+  // Seed from a pending blob if this window was opened by the palette's
+  // "Open in JSON Viewer" soft command (localStorage handoff).
+  try {
+    const pending = localStorage.getItem("fnba-utils:json-viewer-pending");
+    if (pending != null) {
+      localStorage.removeItem("fnba-utils:json-viewer-pending");
+      input.value = pending;
+    }
+  } catch {
+    // ignore
+  }
+});
 onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
@@ -193,7 +206,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
         </button>
         <button
           class="util-btn"
-          @click="openNewJsonViewerWindow"
+          @click="() => openNewJsonViewerWindow()"
           title="Open a new JSON Viewer window"
         >
           ＋ New

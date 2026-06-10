@@ -123,7 +123,7 @@ useKeyLayer(
       <StatusBar hint="↑↓ Navigate  ⏎ Select  1-9 Jump  ⎋ Close" show-version />
     </template>
 
-    <template v-else-if="mode === 'command-active' && activeCommand">
+    <template v-else-if="mode === 'command-active' && activeCommand && activeCommand.component">
       <div class="breadcrumb">
         <button class="breadcrumb-back" @click="back">
           <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
