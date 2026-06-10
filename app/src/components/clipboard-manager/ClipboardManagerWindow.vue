@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useClipboardManager, type Filter } from "@/composables/useClipboardManager";
 import ClipboardEntryRow from "./ClipboardEntryRow.vue";
 import TestUsersPanel from "./TestUsersPanel.vue";
-import { isTauri, onClipboardWindowShown } from "@/lib/tauri";
+import { onClipboardWindowShown } from "@/lib/tauri";
 
 const {
   entries,
@@ -224,7 +224,6 @@ onUnmounted(() => {
 });
 
 async function startDrag() {
-  if (!isTauri) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().startDragging();
 }
@@ -243,7 +242,6 @@ async function startResize(
 ) {
   e.preventDefault();
   e.stopPropagation();
-  if (!isTauri) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().startResizeDragging(dir);
 }

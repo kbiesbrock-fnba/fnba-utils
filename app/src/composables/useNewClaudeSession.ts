@@ -2,7 +2,6 @@ import { ref } from "vue";
 import {
   startNewClaudeSession,
   pickDirectory,
-  isTauri,
   type NewSessionInfo,
 } from "@/lib/tauri";
 import { useProjects } from "@/composables/useProjects";
@@ -42,15 +41,13 @@ export function useNewClaudeSession() {
       // The native picker steals focus on Windows, which can demote our
       // alwaysOnTop frameless palette window behind the picker. Force the
       // palette back to front + focused after the picker resolves.
-      if (isTauri) {
-        try {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
-          const w = getCurrentWindow();
-          await w.show();
-          await w.setFocus();
-        } catch (e) {
-          console.warn("[new-session] palette refocus failed", e);
-        }
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const w = getCurrentWindow();
+        await w.show();
+        await w.setFocus();
+      } catch (e) {
+        console.warn("[new-session] palette refocus failed", e);
       }
     }
   }

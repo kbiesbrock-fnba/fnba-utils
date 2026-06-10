@@ -8,11 +8,6 @@ fnba-utils is a monorepo containing shell extensions for FNBA development and a 
 
 ## Build & Dev Commands
 
-### Desktop app (UI only, no Rust needed)
-```bash
-cd app && docker compose up     # serves at localhost:5173 with mock Tauri API
-```
-
 ### Desktop app (native, requires Windows Rust toolchain)
 ```bash
 cd app && bash scripts/dev.sh   # builds Rust + launches Tauri dev window
@@ -31,11 +26,9 @@ cd app/src-tauri && cargo build
 ## Architecture
 
 ### Tauri bridge pattern
-`app/src/lib/tauri.ts` is the single gateway between frontend and backend. It detects whether it's running inside Tauri or a browser and routes `invoke()` calls accordingly:
-- **Tauri mode**: forwards to real Rust commands via `@tauri-apps/api/core`
-- **Browser mode**: uses `mockInvoke()` with realistic sample data for UI development without Rust
+`app/src/lib/tauri.ts` is the single gateway between frontend and backend. `invoke()` always calls the real Rust commands via `@tauri-apps/api/core`.
 
-All Tauri command types (request/response interfaces) are defined in this file. The mock layer must stay in sync with the Rust command signatures.
+All Tauri command types (request/response interfaces) are defined in this file.
 
 ### Command structure
 Each command (e.g., Assume Identity) follows this pattern:

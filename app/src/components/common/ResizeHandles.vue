@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isTauri } from "@/lib/tauri";
 
 /**
  * Eight invisible resize zones (4 edges + 4 corners) overlaid on the window.
@@ -24,7 +23,6 @@ type ResizeDir =
   | "SouthWest";
 
 function startResize(direction: ResizeDir, e: MouseEvent) {
-  if (!isTauri) return;
   e.preventDefault();
   e.stopPropagation();
   getCurrentWindow()

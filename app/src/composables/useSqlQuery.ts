@@ -3,7 +3,6 @@ import {
   addSqlGroup,
   addSqlQuery,
   executeSqlQuery,
-  isTauri,
   killSqlQuery,
   listSqlGroups,
   listSqlQueries,
@@ -191,17 +190,13 @@ async function startListening() {
   if (listening) return;
   listening = true;
 
-  if (isTauri) {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    rememberWindowFocus(getCurrentWindow().label);
-  }
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  rememberWindowFocus(getCurrentWindow().label);
 
   window.addEventListener("blur", async () => {
     if (!pinned.value) {
-      if (isTauri) {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        await getCurrentWindow().hide();
-      }
+      const { getCurrentWindow: getCW } = await import("@tauri-apps/api/window");
+      await getCW().hide();
     }
   });
 
@@ -389,7 +384,6 @@ function togglePin() {
 }
 
 async function closeWindow() {
-  if (!isTauri) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().hide();
 }

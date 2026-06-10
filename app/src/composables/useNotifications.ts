@@ -1,10 +1,7 @@
-import { isTauri } from "@/lib/tauri";
-
 /**
  * Thin wrapper around `tauri-plugin-notification`. Used by Wave 4 features
  * (permission-prompt detection, busy→idle transitions) to surface a system
- * toast when the relevant window is unfocused. Browser-dev mode logs to
- * console.
+ * toast when the relevant window is unfocused.
  *
  * Callers should gate on focus themselves — this just fires.
  */
@@ -15,10 +12,6 @@ let permissionGranted = false;
 async function ensurePermission(): Promise<boolean> {
   if (permissionChecked) return permissionGranted;
   permissionChecked = true;
-  if (!isTauri) {
-    permissionGranted = true;
-    return true;
-  }
   try {
     const { isPermissionGranted, requestPermission } = await import(
       "@tauri-apps/plugin-notification"
@@ -46,10 +39,6 @@ export async function notify(opts: ToastOptions): Promise<void> {
     console.log("[notify] permission denied", opts);
     return;
   }
-  if (!isTauri) {
-    console.log("[notify]", opts);
-    return;
-  }
   try {
     const { sendNotification } = await import("@tauri-apps/plugin-notification");
     sendNotification({ title: opts.title, body: opts.body });
@@ -67,7 +56,6 @@ export async function notify(opts: ToastOptions): Promise<void> {
  * they're sibling tools.
  */
 export async function isAnyMcWindowFocused(): Promise<boolean> {
-  if (!isTauri) return true; // dev: avoid spam
   try {
     const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     const all = await WebviewWindow.getAll();

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { getIssueDetail, hideWindow, isTauri, type IssueDetail } from "@/lib/tauri";
+import { getIssueDetail, hideWindow, type IssueDetail } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
 
 const detail = ref<IssueDetail | null>(null);
@@ -30,9 +30,7 @@ async function load(key: string) {
 }
 
 function close() {
-  if (isTauri) {
-    void hideWindow();
-  }
+  void hideWindow();
 }
 
 function formatDate(iso: string | null): string {
@@ -68,27 +66,23 @@ function points(n: number | null): string {
 }
 
 onMounted(async () => {
-  if (isTauri) {
-    const { listen } = await import("@tauri-apps/api/event");
-    await listen<{ key: string }>("issue-detail-open", (e) => {
-      // Clear the localStorage handoff once we've consumed the event.
-      try { localStorage.removeItem("fnba-utils:issue-detail-pending"); } catch { /* ignore */ }
-      void load(e.payload.key);
-    });
+  const { listen } = await import("@tauri-apps/api/event");
+  await listen<{ key: string }>("issue-detail-open", (e) => {
+    // Clear the localStorage handoff once we've consumed the event.
+    try { localStorage.removeItem("fnba-utils:issue-detail-pending"); } catch { /* ignore */ }
+    void load(e.payload.key);
+  });
 
-    // First-open fallback: if the opener wrote the key to localStorage before
-    // we subscribed, pick it up now so we don't sit on a blank panel.
-    try {
-      const pending = localStorage.getItem("fnba-utils:issue-detail-pending");
-      if (pending) {
-        localStorage.removeItem("fnba-utils:issue-detail-pending");
-        void load(pending);
-      }
-    } catch {
-      // ignore
+  // First-open fallback: if the opener wrote the key to localStorage before
+  // we subscribed, pick it up now so we don't sit on a blank panel.
+  try {
+    const pending = localStorage.getItem("fnba-utils:issue-detail-pending");
+    if (pending) {
+      localStorage.removeItem("fnba-utils:issue-detail-pending");
+      void load(pending);
     }
-  } else {
-    void load("MIN-1243");
+  } catch {
+    // ignore
   }
 });
 
