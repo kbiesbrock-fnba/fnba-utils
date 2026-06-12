@@ -1,7 +1,7 @@
-// Spawns JSON Viewer windows. The static `json-viewer` window (defined in
-// tauri.conf.json) is the Win+Shift+J quick-access primary; this helper creates
-// *additional* dynamically-labeled windows so the user can have several open at
-// once. Mirrors the dynamic-window pattern in `panels.ts`.
+// Spawns JSON Viewer windows. ALL viewers are equal dynamic windows labeled
+// `json-viewer:<timestamp>-<seq>`. Win+Shift+J opens a switcher when any
+// viewers are open, or spawns a fresh one when none exist. Mirrors the
+// dynamic-window pattern in `panels.ts`.
 
 const JSON_VIEWER_OPTIONS: Record<string, unknown> = {
   url: "index.html#json-viewer",
@@ -11,9 +11,9 @@ const JSON_VIEWER_OPTIONS: Record<string, unknown> = {
   minHeight: 400,
   resizable: true,
   decorations: false,
-  shadow: false,
-  transparent: true,
-  backgroundColor: "#00000000",
+  shadow: true,
+  transparent: false,
+  backgroundColor: "#1e1e1e",
   visible: true,
   alwaysOnTop: false,
   skipTaskbar: false,
@@ -45,4 +45,54 @@ export async function openNewJsonViewerWindow(initialContent?: string): Promise<
   win.once("tauri://created", () => {
     void win.setFocus().catch(() => {});
   });
+}
+
+/**
+ * Reopen every JSON Viewer window that has a registry entry but no live window.
+ * Called once at app startup to restore windows killed by a recompile, quit, or crash.
+ * Windows the user explicitly closed are not in the registry (removeEntry clears them)
+ * so they are not restored.
+ */
+export async function restoreJsonViewerWindows(): Promise<void> {
+  try {
+    const { readRegistry } = await import("./jsonViewerRegistry");
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+
+    const registry = readRegistry();
+    const allWindows = await WebviewWindow.getAll();
+    const liveLabels = new Set(allWindows.map((w) => w.label));
+
+    for (const [label, entry] of Object.entries(registry)) {
+      if (!label.startsWith("json-viewer:")) continue;
+      if (liveLabels.has(label)) continue;
+
+      // Build window options, overlaying saved geometry when available.
+      const opts: Record<string, unknown> = {
+        ...JSON_VIEWER_OPTIONS,
+        ...(entry.win
+          ? {
+              x: entry.win.x,
+              y: entry.win.y,
+              width: entry.win.width,
+              height: entry.win.height,
+              alwaysOnTop: entry.win.pinned,
+            }
+          : {}),
+      };
+
+      // Reuse the saved label so the window hydrates itself from the same
+      // registry entry on mount (label is the key into localStorage registry).
+      const win = new WebviewWindow(label, opts);
+
+      if (entry.win?.maximized) {
+        win.once("tauri://created", () => {
+          void win.maximize().catch(() => {});
+          // Do NOT setFocus — don't steal focus from whatever the user was doing.
+        });
+      }
+      // No setFocus for restored windows.
+    }
+  } catch {
+    // Restoration is best-effort; never crash the app over it.
+  }
 }

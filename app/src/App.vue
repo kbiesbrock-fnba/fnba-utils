@@ -30,6 +30,9 @@ const ClipboardManagerWindow = defineAsyncComponent(
 const JsonViewerApp = defineAsyncComponent(
   () => import("./components/json-viewer/JsonViewerApp.vue"),
 );
+const JsonSwitcher = defineAsyncComponent(
+  () => import("./components/json-viewer/JsonSwitcher.vue"),
+);
 
 const { dismiss } = usePalette();
 
@@ -39,6 +42,7 @@ const isSqlQuery = window.location.hash.startsWith("#sql-query");
 const isStandupPanel = window.location.hash.startsWith("#standup-panel");
 const isIssueDetail = window.location.hash.startsWith("#issue-detail");
 const isClipboardManager = window.location.hash.startsWith("#clipboard-manager");
+const isJsonSwitcher = window.location.hash.startsWith("#json-switcher");
 const isJsonViewer = window.location.hash.startsWith("#json-viewer");
 
 function onBackdropClick(e: MouseEvent) {
@@ -55,6 +59,7 @@ function onBackdropClick(e: MouseEvent) {
   <StandupPanelApp v-else-if="isStandupPanel" />
   <IssueDetailApp v-else-if="isIssueDetail" />
   <ClipboardManagerWindow v-else-if="isClipboardManager" />
+  <JsonSwitcher v-else-if="isJsonSwitcher" />
   <JsonViewerApp v-else-if="isJsonViewer" />
   <div v-else class="backdrop" @mousedown="onBackdropClick">
     <CommandPalette />

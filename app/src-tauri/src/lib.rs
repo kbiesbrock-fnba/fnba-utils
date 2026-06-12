@@ -284,37 +284,27 @@ pub fn run() {
                 eprintln!("Failed to register Super+Shift+C: {e}");
             }
 
-            // --- Global Shortcut: Win+Shift+J (JSON Viewer) ---
+            // --- Global Shortcut: Win+Shift+J (JSON Viewer / Switcher) ---
+            // No viewers open → emit to the main window to spawn a fresh one.
+            // Viewers exist → show the switcher overlay (json-switcher window).
             if let Err(e) = app.global_shortcut().on_shortcut(
                 "Super+Shift+J",
                 move |app: &AppHandle, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        if let Some(w) = app.get_webview_window("json-viewer") {
-                            // Check focus state, not visibility state, to avoid state misalignment
-                            // when the window loses focus but remains visible
-                            if w.is_focused().unwrap_or(false) {
-                                let _ = w.hide();
-                            } else {
-                                // Position at bottom-left of the current monitor
-                                if let Ok(Some(monitor)) = w.current_monitor() {
-                                    let mon_size = monitor.size();
-                                    let mon_pos = monitor.position();
-                                    let win_size = w.outer_size().unwrap_or(
-                                        tauri::PhysicalSize::new(1000, 700),
-                                    );
-                                    let margin = 16;
-                                    let x = mon_pos.x + margin;
-                                    let y = mon_pos.y + mon_size.height as i32
-                                        - win_size.height as i32
-                                        - margin
-                                        - 48;
-                                    let _ = w.set_position(tauri::Position::Physical(
-                                        tauri::PhysicalPosition::new(x, y),
-                                    ));
-                                }
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                        let has_viewer = app
+                            .webview_windows()
+                            .keys()
+                            .any(|l| l.starts_with("json-viewer:"));
+                        if !has_viewer {
+                            // No viewers open: skip the switcher, spawn a fresh one via the
+                            // always-alive main webview (single source of truth for window opts).
+                            // Scoped to "main" so future hashless windows can't double-spawn.
+                            let _ = app.emit_to("main", "json-viewer-new", ());
+                        } else if let Some(sw) = app.get_webview_window("json-switcher") {
+                            let _ = sw.center();
+                            let _ = sw.show();
+                            let _ = sw.set_focus();
+                            let _ = app.emit("json-switcher-refresh", ());
                         }
                     }
                 },

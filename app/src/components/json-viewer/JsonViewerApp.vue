@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { useJsonViewer, type CopyFormat, type ViewMode } from "../../composables/useJsonViewer";
+import { useJsonViewer, type CopyFormat, type ViewMode, type FormatStyle } from "../../composables/useJsonViewer";
 import { copyText } from "../../lib/tauri";
 import { openNewJsonViewerWindow } from "../../lib/jsonViewerWindow";
+import { touchEntry, removeEntry, saveState, saveWin, readRegistry } from "../../lib/jsonViewerRegistry";
 import JsonTreeNode from "./JsonTreeNode.vue";
 import JsonQueryResults from "./JsonQueryResults.vue";
 
@@ -29,6 +30,7 @@ const {
   serializePath,
   isJsonPathQuery,
   evaluateJsonPath,
+  searchResults,
   formatJson,
 } = useJsonViewer();
 
@@ -78,9 +80,17 @@ const schemaOutput = computed(() => {
 
 const isQueryMode = computed(() => isJsonPathQuery(search.value));
 
+// Any non-empty search swaps the output pane to the results panel, whatever
+// the active view mode — JSONPath queries and plain-text searches alike.
+const searchActive = computed(
+  () => search.value.trim().length > 0 && parsed.value !== null,
+);
+
 const queryResults = computed(() => {
-  if (!isQueryMode.value || !search.value) return [];
-  return evaluateJsonPath(search.value);
+  if (!searchActive.value) return [];
+  return isQueryMode.value
+    ? evaluateJsonPath(search.value)
+    : searchResults(search.value);
 });
 
 function selectedPathStr(): string {
@@ -97,20 +107,130 @@ function selectedPathStr(): string {
   return result;
 }
 
-// The static `json-viewer` window is reusable (hide so Win+Shift+J brings it
-// back); dynamically-spawned `json-viewer:*` windows are ephemeral (destroy).
+// All JSON Viewer windows are dynamic (`json-viewer:*`) — always close.
 async function closeWindow() {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const w = getCurrentWindow();
-  if (w.label === "json-viewer") {
-    await w.hide();
-  } else {
-    await w.close();
-  }
+  removeEntry(w.label);
+  await w.close();
 }
 
+// --- Title bar controls ---
+const pinned = ref(false);
+const isMaximized = ref(false);
+let unlistenResize: (() => void) | null = null;
+let unlistenMove: (() => void) | null = null;
+let unlistenFocus: (() => void) | null = null;
+let unlistenCloseRequested: (() => void) | null = null;
+
+// --- Persistence helpers ---
+
+// Debounce timer handles for state and geometry persistence.
+let persistStateTimer: ReturnType<typeof setTimeout> | null = null;
+let persistGeoTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Last known un-maximized geometry so that restoring after maximize lands
+// on the previous footprint rather than the default size.
+let lastUnmaximizedGeo: { x: number; y: number; width: number; height: number } | null = null;
+
+/** Debounced: persist viewer state (input, mode, search, etc.) to localStorage. */
+function schedulePersistState(label: string): void {
+  if (persistStateTimer) clearTimeout(persistStateTimer);
+  persistStateTimer = setTimeout(() => {
+    persistStateTimer = null;
+    saveState(label, {
+      input: input.value,
+      diffInput: diffInput.value,
+      mode: mode.value,
+      formatStyle: formatStyle.value,
+      sortKeys: sortKeys.value,
+      search: search.value,
+    });
+  }, 400);
+}
+
+/** Debounced: persist window geometry/pin/maximized state to localStorage. */
+function schedulePersistGeo(label: string, win: Awaited<ReturnType<typeof import("@tauri-apps/api/window")["getCurrentWindow"]>>): void {
+  if (persistGeoTimer) clearTimeout(persistGeoTimer);
+  persistGeoTimer = setTimeout(() => {
+    persistGeoTimer = null;
+    void (async () => {
+      try {
+        const maximized = await win.isMaximized();
+        if (!maximized) {
+          // Only update geometry when not maximized — preserve the last
+          // un-maximized footprint so restore-then-unmaximize lands correctly.
+          const sf = await win.scaleFactor();
+          const pos = (await win.outerPosition()).toLogical(sf);
+          const size = (await win.innerSize()).toLogical(sf);
+          lastUnmaximizedGeo = {
+            x: Math.round(pos.x),
+            y: Math.round(pos.y),
+            width: Math.round(size.width),
+            height: Math.round(size.height),
+          };
+        }
+        saveWin(label, {
+          x: lastUnmaximizedGeo?.x ?? 0,
+          y: lastUnmaximizedGeo?.y ?? 0,
+          width: lastUnmaximizedGeo?.width ?? 1000,
+          height: lastUnmaximizedGeo?.height ?? 700,
+          pinned: pinned.value,
+          maximized,
+        });
+      } catch {
+        // ignore — geometry persistence is best-effort
+      }
+    })();
+  }, 400);
+}
+
+async function togglePin() {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const w = getCurrentWindow();
+  pinned.value = !pinned.value;
+  await w.setAlwaysOnTop(pinned.value);
+  // Persist pin state change immediately.
+  schedulePersistGeo(w.label, w);
+}
+
+async function minimize() {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().minimize();
+}
+
+async function toggleMaximize() {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().toggleMaximize();
+}
+
+// --- Window title ---
+// Shows the first few root keys (object) or item count (array), else "JSON Viewer".
+const windowTitle = computed(() => {
+  const p = parsed.value;
+  if (p === null || p === undefined) return "JSON Viewer";
+  if (Array.isArray(p)) return `JSON · [${p.length} item${p.length === 1 ? "" : "s"}]`;
+  if (typeof p === "object") {
+    const keys = Object.keys(p as object);
+    if (keys.length === 0) return "JSON · {}";
+    const preview = keys.slice(0, 4).join(", ");
+    const truncated = preview.length > 36 ? preview.slice(0, 36) + "…" : preview;
+    return `JSON · {${truncated}}`;
+  }
+  return "JSON Viewer";
+});
+
+watch(windowTitle, async (title) => {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().setTitle(title);
+  } catch {
+    // non-critical
+  }
+});
+
 function onKeydown(e: KeyboardEvent) {
-  // Don't steal Escape while the user is mid-edit in a text field.
+  // Don't steal shortcuts while the user is mid-edit in a text field.
   const target = e.target as HTMLElement | null;
   const inEditable =
     target &&
@@ -121,12 +241,62 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault();
     void closeWindow();
   }
+  if (e.key === "F11") {
+    e.preventDefault();
+    void (async () => {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const w = getCurrentWindow();
+      await w.setFullscreen(!(await w.isFullscreen()));
+    })();
+  }
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
-  // Seed from a pending blob if this window was opened by the palette's
-  // "Open in JSON Viewer" soft command (localStorage handoff).
+
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const w = getCurrentWindow();
+  const label = w.label;
+
+  // --- Hydrate from saved state BEFORE the pending-blob handoff ---
+  // (A restored window reuses its old label, so the registry entry is present.)
+  try {
+    const registry = readRegistry();
+    const entry = registry[label];
+    if (entry?.state) {
+      const s = entry.state;
+      input.value = s.input;
+      diffInput.value = s.diffInput;
+      mode.value = s.mode as ViewMode;
+      formatStyle.value = s.formatStyle as FormatStyle;
+      sortKeys.value = s.sortKeys;
+      search.value = s.search;
+      // Trigger parse so parsed/diffParsed are populated from restored input.
+      parse();
+      if (diffInput.value) parseDiffInput();
+    }
+    if (entry?.win?.pinned) {
+      pinned.value = true;
+      // alwaysOnTop was already set at window creation time, no need to re-apply.
+    }
+    if (entry?.win && !entry.win.maximized) {
+      // Seed last-known un-maximized geo so a toggleMaximize→restore cycle works.
+      lastUnmaximizedGeo = {
+        x: entry.win.x,
+        y: entry.win.y,
+        width: entry.win.width,
+        height: entry.win.height,
+      };
+    }
+  } catch {
+    // ignore — hydration is best-effort
+  }
+
+  // --- Pending-blob handoff (palette "Open in JSON Viewer" soft command) ---
+  // This runs AFTER hydration. A brand-new window has a fresh label with no
+  // registry state, so hydration is a no-op and the pending blob wins cleanly.
+  // A restored window won't have a pending blob (they share a label, not the
+  // pending key) so the two paths don't collide in practice.
   try {
     const pending = localStorage.getItem("fnba-utils:json-viewer-pending");
     if (pending != null) {
@@ -136,12 +306,119 @@ onMounted(() => {
   } catch {
     // ignore
   }
+
+  // Register in MRU registry on open.
+  touchEntry(label);
+
+  // Persist initial state once so an immediate recompile can restore it.
+  schedulePersistState(label);
+
+  // Sync maximized state and keep it in sync as the window resizes.
+  isMaximized.value = await w.isMaximized();
+  unlistenResize = await w.onResized(async () => {
+    isMaximized.value = await w.isMaximized();
+    schedulePersistGeo(label, w);
+  });
+
+  // Persist geometry on window move.
+  unlistenMove = await w.onMoved(() => {
+    schedulePersistGeo(label, w);
+  });
+
+  // OS-level focus (taskbar click, switcher, Alt-Tab) — the DOM "focus" event
+  // doesn't fire for window activation in WebView2, so use Tauri's event.
+  unlistenFocus = await w.onFocusChanged(({ payload: focused }) => {
+    if (focused) touchEntry(label);
+  });
+
+  // Intentional close via Alt+F4 or taskbar close — remove entry so the window
+  // is NOT restored on next launch. (closeWindow() also calls removeEntry for
+  // the Esc / ✕ button paths; double-remove is harmless.)
+  unlistenCloseRequested = await w.onCloseRequested(() => {
+    removeEntry(label);
+  });
+
+  // Seed geometry after mount so a first-launch window persists position before
+  // the user has moved or resized it.
+  schedulePersistGeo(label, w);
 });
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown);
+  if (persistStateTimer) {
+    clearTimeout(persistStateTimer);
+    persistStateTimer = null;
+  }
+  if (persistGeoTimer) {
+    clearTimeout(persistGeoTimer);
+    persistGeoTimer = null;
+  }
+  if (unlistenResize) {
+    unlistenResize();
+    unlistenResize = null;
+  }
+  if (unlistenMove) {
+    unlistenMove();
+    unlistenMove = null;
+  }
+  if (unlistenFocus) {
+    unlistenFocus();
+    unlistenFocus = null;
+  }
+  if (unlistenCloseRequested) {
+    unlistenCloseRequested();
+    unlistenCloseRequested = null;
+  }
+  // NOTE: removeEntry is intentionally NOT called here. onUnmounted fires on
+  // every webview reload (Vite HMR / F5) while the window stays open — calling
+  // removeEntry here would wipe persisted state for a window the user never
+  // closed. Process death never runs onUnmounted at all. Intentional closes are
+  // handled by closeWindow() (Esc / ✕) and onCloseRequested (Alt+F4 / taskbar).
+});
+
+// Update registry preview as the user types (first 60 chars, single-line),
+// and debounce full state persistence.
+watch(input, (val) => {
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const label = getCurrentWindow().label;
+      const preview = val.replace(/\s+/g, " ").trim().slice(0, 60);
+      touchEntry(label, preview);
+      schedulePersistState(label);
+    } catch {
+      // ignore
+    }
+  })();
+});
+
+// Persist state on any viewer-state change beyond input (mode, formatStyle,
+// sortKeys, search, diffInput). Debounced together with the input watcher above.
+watch([diffInput, mode, formatStyle, sortKeys, search], () => {
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      schedulePersistState(getCurrentWindow().label);
+    } catch {
+      // ignore
+    }
+  })();
+});
 </script>
 
 <template>
   <div class="json-viewer-app">
+    <!-- Title bar -->
+    <div class="title-bar" data-tauri-drag-region>
+      <span class="tb-title" data-tauri-drag-region>{{ windowTitle }}</span>
+      <div class="tb-buttons">
+        <button class="tb-btn" :class="{ active: pinned }" @click="togglePin" title="Keep on top">📌</button>
+        <button class="tb-btn" @click="minimize" title="Minimize">—</button>
+        <button class="tb-btn" @click="toggleMaximize" :title="isMaximized ? 'Restore' : 'Maximize'">{{ isMaximized ? '🗗' : '🗖' }}</button>
+        <button class="tb-btn close" @click="closeWindow" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="search-bar">
@@ -211,13 +488,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
         >
           ＋ New
         </button>
-        <button
-          class="close-btn"
-          @click="closeWindow"
-          title="Close window (Esc)"
-        >
-          ✕
-        </button>
       </div>
     </div>
 
@@ -241,16 +511,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
       </div>
 
       <!-- Output pane (right side) -->
-      <div v-if="mode === 'tree'" class="output-pane">
-        <!-- JSONPath query results -->
+      <!-- An active search takes over the output pane in every mode -->
+      <div v-if="searchActive" class="output-pane">
         <json-query-results
-          v-if="isQueryMode && parsed !== null"
           :results="queryResults"
           :query="search"
+          :label="isQueryMode ? 'JSONPath' : 'Search'"
         />
-        <!-- Regular tree view -->
+      </div>
+      <div v-else-if="mode === 'tree'" class="output-pane">
         <json-tree-node
-          v-else-if="parsed !== null"
+          v-if="parsed !== null"
           :path="rootPath"
           :value="parsed"
           :expanded="rootIsExpanded"
@@ -329,6 +600,75 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
   font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
 }
 
+/* --- Title bar --- */
+.title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  background: #252525;
+  border-bottom: 1px solid #404040;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.tb-title {
+  font-size: 12px;
+  color: #aaa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  -webkit-app-region: drag;
+}
+
+.tb-buttons {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.tb-btn {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #888;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+  -webkit-app-region: no-drag;
+}
+
+.tb-btn:hover {
+  background: #3a3a3a;
+  color: #ddd;
+}
+
+.tb-btn.active {
+  color: #4CAF50;
+}
+
+.tb-btn.active:hover {
+  background: #3a3a3a;
+  color: #66bb6a;
+}
+
+.tb-btn.close:hover {
+  background: #c0392b;
+  color: white;
+}
+
+/* --- Toolbar --- */
 .toolbar {
   display: flex;
   align-items: center;
@@ -404,18 +744,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 .toolbar-buttons button.util-btn:hover {
   background: #3a3a3a;
   color: #ddd;
-}
-
-.toolbar-buttons button.close-btn {
-  background: #2d2d2d;
-  color: #999;
-  font-weight: 600;
-}
-
-.toolbar-buttons button.close-btn:hover {
-  background: #c0392b;
-  border-color: #c0392b;
-  color: white;
 }
 
 .content {

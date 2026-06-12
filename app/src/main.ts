@@ -7,3 +7,17 @@ import { initCommands } from "./commands";
 void initCommands();
 
 createApp(App).mount("#app");
+
+// Win+Shift+J zero-windows case: Rust emits "json-viewer-new" to the always-alive
+// main palette window when no json-viewer: windows exist and the switcher would be empty.
+if (!window.location.hash) {
+  import("@tauri-apps/api/event").then(({ listen }) => {
+    void listen("json-viewer-new", () => {
+      void import("./lib/jsonViewerWindow").then((m) => m.openNewJsonViewerWindow());
+    });
+  });
+
+  // Reopens any JSON Viewer windows killed by a recompile, app quit, or crash.
+  // Windows the user explicitly closed are not in the registry and stay closed.
+  void import("./lib/jsonViewerWindow").then((m) => m.restoreJsonViewerWindows());
+}

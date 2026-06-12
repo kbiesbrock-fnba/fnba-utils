@@ -1,5 +1,5 @@
 import type { PaletteCommand } from "./types";
-import JsonViewerLauncher from "../components/json-viewer/JsonViewerLauncher.vue";
+import { openNewJsonViewerWindow } from "../lib/jsonViewerWindow";
 
 export const jsonViewerCommand: PaletteCommand = {
   id: "json-viewer",
@@ -7,5 +7,5 @@ export const jsonViewerCommand: PaletteCommand = {
   description: "View, search, and transform JSON with tree view and multiple formats",
   icon: "🔍",
   keywords: ["json", "tree", "flatten", "schema", "diff", "format", "transform"],
-  component: JsonViewerLauncher,
+  action: () => openNewJsonViewerWindow(),
 };
