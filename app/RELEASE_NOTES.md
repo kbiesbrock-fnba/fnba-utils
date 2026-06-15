@@ -9,6 +9,10 @@
 
 ## [Unreleased]
 
+- **Markdown Viewer** (📝, search "markdown"): paste or type Markdown in the palette (or prefix with `md `), or use the **Markdown Viewer** palette command to open a blank one. Each window has a **Preview / Edit** toggle — Preview renders headings, tables, code blocks, links, and lists on a dark theme; Edit gives you a plain textarea. Links in the preview open in your default browser. Open Markdown Viewer windows now appear alongside JSON Viewer windows in the **`Win+Shift+J`** switcher. Windows, their content, position, and mode survive restarts just like JSON Viewer windows.
+
+- **Calculator in the palette is now a full expression engine.** Type `=` followed by any expression — `=2^10`, `=sin(90)`, `=factorial(10)`, `=2pi`, `=(2)(3)` — to get an instant result. Supports functions (`sin cos tan log ln sqrt abs ceil floor round pow min max` and more), constants (`pi e`), postfix `!` factorial, and implicit multiplication (`2pi`, `3(4+1)`). Whole-number results get extra **Copy as hex / binary / octal** rows. Press **Ctrl+Shift+Enter** instead of Enter to keep the palette open with the result seeded back in, so you can chain calculations. Type just `=` to browse the last 9 results and re-copy them. Type `=deg`, `=rad`, or `=grad` to switch the trig unit used for `sin/cos/tan` and their inverses (persisted across sessions).
+
 - **JSON Viewer windows now survive restarts.** If the app exits with viewers open (update, recompile, crash), they all reopen on next launch with their content, view mode, search, size, position, and pinned/maximized state fully restored. Windows you closed yourself stay closed.
 
 - **JSON Viewer: searching now shows a results panel automatically.** Typing in the search box switches the output pane to a list of matches — in any view mode, not just Tree. Plain text matches keys and values (JSONPath queries like `$.items[].name` work as before), and each result row shows its path, a value preview, and copy buttons. Clearing the search returns you to the view you were in. Also fixed result rows collapsing too short to show their text and buttons when a search returned a single property.

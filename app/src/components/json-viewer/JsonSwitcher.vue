@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import { readRegistry, removeEntry } from "../../lib/jsonViewerRegistry";
+import { readRegistry as readJsonRegistry, removeEntry as removeJsonEntry } from "../../lib/jsonViewerRegistry";
+import { readRegistry as readMdRegistry, removeEntry as removeMdEntry } from "../../lib/markdownViewerRegistry";
 import { openNewJsonViewerWindow } from "../../lib/jsonViewerWindow";
+import { openNewMarkdownViewerWindow } from "../../lib/markdownViewerWindow";
 
 interface SwitcherRow {
   label: string;
+  kind: "json" | "md";
   preview: string;
   focusedAt: number;
 }
@@ -17,24 +20,34 @@ async function refresh() {
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
   const allWindows = await WebviewWindow.getAll();
   const liveLabels = new Set(
-    allWindows.map((w) => w.label).filter((l) => l.startsWith("json-viewer:")),
+    allWindows
+      .map((w) => w.label)
+      .filter((l) => l.startsWith("json-viewer:") || l.startsWith("markdown-viewer:")),
   );
 
-  const registry = readRegistry();
+  const jsonRegistry = readJsonRegistry();
+  const mdRegistry = readMdRegistry();
 
   // Prune stale entries (windows that are no longer alive).
-  for (const label of Object.keys(registry)) {
+  for (const label of Object.keys(jsonRegistry)) {
     if (!liveLabels.has(label)) {
-      removeEntry(label);
+      removeJsonEntry(label);
+    }
+  }
+  for (const label of Object.keys(mdRegistry)) {
+    if (!liveLabels.has(label)) {
+      removeMdEntry(label);
     }
   }
 
   // Build rows: live windows joined with registry data, sorted by focusedAt desc.
   const built: SwitcherRow[] = [];
   for (const label of liveLabels) {
-    const entry = registry[label];
+    const isMd = label.startsWith("markdown-viewer:");
+    const entry = isMd ? mdRegistry[label] : jsonRegistry[label];
     built.push({
       label,
+      kind: isMd ? "md" : "json",
       preview: entry?.preview ?? "",
       focusedAt: entry?.focusedAt ?? 0,
     });
@@ -53,8 +66,12 @@ async function activateRow(idx: number) {
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
 
   if (idx >= rows.value.length) {
-    // "New window" row.
-    await openNewJsonViewerWindow();
+    // Two virtual rows: rows.length = New JSON, rows.length + 1 = New Markdown.
+    if (idx === rows.value.length + 1) {
+      await openNewMarkdownViewerWindow();
+    } else {
+      await openNewJsonViewerWindow();
+    }
   } else {
     const row = rows.value[idx];
     const w = await WebviewWindow.getByLabel(row.label);
@@ -70,12 +87,12 @@ async function activateRow(idx: number) {
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "ArrowDown") {
     e.preventDefault();
-    // +1 wraps around; rows.value.length is the "New window" virtual row.
-    selectedIdx.value = (selectedIdx.value + 1) % (rows.value.length + 1);
+    // +2 for the two trailing virtual rows (New JSON, New Markdown).
+    selectedIdx.value = (selectedIdx.value + 1) % (rows.value.length + 2);
   } else if (e.key === "ArrowUp") {
     e.preventDefault();
     selectedIdx.value =
-      (selectedIdx.value - 1 + rows.value.length + 1) % (rows.value.length + 1);
+      (selectedIdx.value - 1 + rows.value.length + 2) % (rows.value.length + 2);
   } else if (e.key === "Enter") {
     e.preventDefault();
     void activateRow(selectedIdx.value);
@@ -120,7 +137,7 @@ onUnmounted(() => {
 <template>
   <div class="switcher-overlay">
     <div class="switcher-panel">
-      <div class="switcher-header">JSON Windows</div>
+      <div class="switcher-header">Viewer Windows</div>
       <div class="switcher-list">
         <div
           v-for="(row, idx) in rows"
@@ -130,17 +147,29 @@ onUnmounted(() => {
           @click="activateRow(idx)"
           @mouseenter="selectedIdx = idx"
         >
+          <span class="row-icon">{{ row.kind === 'md' ? '📝' : '🔍' }}</span>
           <span class="row-preview">{{ row.preview || "(empty)" }}</span>
-          <span class="row-label">{{ row.label.replace("json-viewer:", "#") }}</span>
+          <span class="row-label">{{ row.label.replace(/^(json|markdown)-viewer:/, "#") }}</span>
         </div>
-        <!-- "New window" row -->
+        <!-- "New JSON window" row -->
         <div
           class="switcher-row new-window"
           :class="{ selected: selectedIdx === rows.length }"
           @click="activateRow(rows.length)"
           @mouseenter="selectedIdx = rows.length"
         >
-          <span class="row-preview">&#xFF0B; New window</span>
+          <span class="row-icon">🔍</span>
+          <span class="row-preview">&#xFF0B; New JSON window</span>
+        </div>
+        <!-- "New Markdown window" row -->
+        <div
+          class="switcher-row new-window"
+          :class="{ selected: selectedIdx === rows.length + 1 }"
+          @click="activateRow(rows.length + 1)"
+          @mouseenter="selectedIdx = rows.length + 1"
+        >
+          <span class="row-icon">📝</span>
+          <span class="row-preview">&#xFF0B; New Markdown window</span>
         </div>
       </div>
     </div>
@@ -201,6 +230,11 @@ onUnmounted(() => {
 .switcher-row:hover,
 .switcher-row.selected {
   background: #2d2d2d;
+}
+
+.row-icon {
+  font-size: 13px;
+  flex-shrink: 0;
 }
 
 .row-preview {

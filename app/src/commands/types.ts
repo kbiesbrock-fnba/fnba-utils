@@ -24,5 +24,12 @@ export interface PaletteCommand {
    * matches a pattern (URL, JSON, Jira key, …) and no real command matches.
    */
   soft?: boolean;
+  /**
+   * When set, Ctrl+Shift+Enter replaces the palette query with this string
+   * (and keeps the palette open) instead of running `action`. Lets the user
+   * chain a result back into the input — e.g. the calculator uses it to seed
+   * the next expression with the previous answer.
+   */
+  chainQuery?: string;
   breadcrumbs?: BreadcrumbStep[];
 }

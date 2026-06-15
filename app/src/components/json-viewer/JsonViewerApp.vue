@@ -6,6 +6,7 @@ import { openNewJsonViewerWindow } from "../../lib/jsonViewerWindow";
 import { touchEntry, removeEntry, saveState, saveWin, readRegistry } from "../../lib/jsonViewerRegistry";
 import JsonTreeNode from "./JsonTreeNode.vue";
 import JsonQueryResults from "./JsonQueryResults.vue";
+import SplitPane from "../common/SplitPane.vue";
 
 const {
   input,
@@ -493,74 +494,79 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
 
     <!-- Main content -->
     <div class="content">
-      <!-- Input pane (left side for tree, side-by-side for diff) -->
-      <div v-if="mode === 'diff'" class="input-panes">
-        <div class="input-pane">
-          <label>JSON 1</label>
-          <textarea v-model="input" placeholder="Paste first JSON..." />
-          <div v-if="parseError" class="error">{{ parseError }}</div>
-        </div>
-        <div class="input-pane">
-          <label>JSON 2</label>
-          <textarea v-model="diffInput" placeholder="Paste second JSON..." />
-        </div>
-      </div>
-      <div v-else class="input-pane single">
-        <textarea v-model="input" placeholder="Paste JSON here..." />
-        <div v-if="parseError" class="error">{{ parseError }}</div>
-      </div>
-
-      <!-- Output pane (right side) -->
-      <!-- An active search takes over the output pane in every mode -->
-      <div v-if="searchActive" class="output-pane">
-        <json-query-results
-          :results="queryResults"
-          :query="search"
-          :label="isQueryMode ? 'JSONPath' : 'Search'"
-        />
-      </div>
-      <div v-else-if="mode === 'tree'" class="output-pane">
-        <json-tree-node
-          v-if="parsed !== null"
-          :path="rootPath"
-          :value="parsed"
-          :expanded="rootIsExpanded"
-          :is-selected="selectedPath.length === 0"
-          :search="search"
-          :sort-keys="sortKeys"
-          @toggle="toggleExpand"
-          @select="selectNode"
-        />
-        <div v-else class="placeholder">Paste JSON to view tree</div>
-      </div>
-      <div v-else-if="mode === 'flatten'" class="output-pane">
-        <pre v-if="flattenedOutput" class="output-text">{{ flattenedOutput }}</pre>
-        <div v-else class="placeholder">Paste JSON to flatten</div>
-      </div>
-      <div v-else-if="mode === 'schema'" class="output-pane">
-        <pre v-if="schemaOutput" class="output-text">{{ schemaOutput }}</pre>
-        <div v-else class="placeholder">Paste JSON to generate schema</div>
-      </div>
-      <div v-else-if="mode === 'format'" class="output-pane">
-        <div v-if="parsed !== null" class="format-controls">
-          <label>Format style:</label>
-          <select v-model="formatStyle" class="format-select">
-            <option value="pretty2">Pretty (2-space indent)</option>
-            <option value="pretty4">Pretty (4-space indent)</option>
-            <option value="minified">Minified</option>
-            <option value="compact">Compact (one item per line)</option>
-          </select>
-        </div>
-        <pre v-if="parsed !== null" class="output-text format-output">{{ formatJson(formatStyle) }}</pre>
-        <div v-else class="placeholder">Paste JSON to format</div>
-      </div>
-      <div v-else-if="mode === 'diff'" class="output-pane">
-        <div v-if="parsed && diffParsed" class="diff-view">
-          <div>Diff view (simplified)</div>
-          <pre class="output-text">{{ JSON.stringify({ json1: parsed, json2: diffParsed }, null, 2) }}</pre>
-        </div>
-        <div v-else class="placeholder">Paste both JSON blobs to compare</div>
-      </div>
+      <SplitPane storageKey="fnba-utils:json-split" :default-ratio="0.4">
+        <template #left>
+          <!-- Input pane (left side for tree, side-by-side for diff) -->
+          <div v-if="mode === 'diff'" class="input-panes">
+            <div class="input-pane">
+              <label>JSON 1</label>
+              <textarea v-model="input" placeholder="Paste first JSON..." />
+              <div v-if="parseError" class="error">{{ parseError }}</div>
+            </div>
+            <div class="input-pane">
+              <label>JSON 2</label>
+              <textarea v-model="diffInput" placeholder="Paste second JSON..." />
+            </div>
+          </div>
+          <div v-else class="input-pane single">
+            <textarea v-model="input" placeholder="Paste JSON here..." />
+            <div v-if="parseError" class="error">{{ parseError }}</div>
+          </div>
+        </template>
+        <template #right>
+          <!-- Output pane (right side) -->
+          <!-- An active search takes over the output pane in every mode -->
+          <div v-if="searchActive" class="output-pane">
+            <json-query-results
+              :results="queryResults"
+              :query="search"
+              :label="isQueryMode ? 'JSONPath' : 'Search'"
+            />
+          </div>
+          <div v-else-if="mode === 'tree'" class="output-pane">
+            <json-tree-node
+              v-if="parsed !== null"
+              :path="rootPath"
+              :value="parsed"
+              :expanded="rootIsExpanded"
+              :is-selected="selectedPath.length === 0"
+              :search="search"
+              :sort-keys="sortKeys"
+              @toggle="toggleExpand"
+              @select="selectNode"
+            />
+            <div v-else class="placeholder">Paste JSON to view tree</div>
+          </div>
+          <div v-else-if="mode === 'flatten'" class="output-pane">
+            <pre v-if="flattenedOutput" class="output-text">{{ flattenedOutput }}</pre>
+            <div v-else class="placeholder">Paste JSON to flatten</div>
+          </div>
+          <div v-else-if="mode === 'schema'" class="output-pane">
+            <pre v-if="schemaOutput" class="output-text">{{ schemaOutput }}</pre>
+            <div v-else class="placeholder">Paste JSON to generate schema</div>
+          </div>
+          <div v-else-if="mode === 'format'" class="output-pane">
+            <div v-if="parsed !== null" class="format-controls">
+              <label>Format style:</label>
+              <select v-model="formatStyle" class="format-select">
+                <option value="pretty2">Pretty (2-space indent)</option>
+                <option value="pretty4">Pretty (4-space indent)</option>
+                <option value="minified">Minified</option>
+                <option value="compact">Compact (one item per line)</option>
+              </select>
+            </div>
+            <pre v-if="parsed !== null" class="output-text format-output">{{ formatJson(formatStyle) }}</pre>
+            <div v-else class="placeholder">Paste JSON to format</div>
+          </div>
+          <div v-else-if="mode === 'diff'" class="output-pane">
+            <div v-if="parsed && diffParsed" class="diff-view">
+              <div>Diff view (simplified)</div>
+              <pre class="output-text">{{ JSON.stringify({ json1: parsed, json2: diffParsed }, null, 2) }}</pre>
+            </div>
+            <div v-else class="placeholder">Paste both JSON blobs to compare</div>
+          </div>
+        </template>
+      </SplitPane>
     </div>
 
     <!-- Status bar -->
@@ -748,7 +754,6 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
 
 .content {
   display: flex;
-  gap: 16px;
   flex: 1;
   padding: 12px;
   overflow: hidden;
@@ -757,7 +762,8 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
 .input-panes {
   display: flex;
   gap: 12px;
-  flex: 0.5;
+  flex: 1;
+  width: 100%;
   overflow: hidden;
 }
 
@@ -774,7 +780,8 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
 }
 
 .input-pane.single {
-  flex: 0.4;
+  flex: 1;
+  width: 100%;
 }
 
 .input-pane label {
@@ -810,7 +817,8 @@ textarea:focus {
 }
 
 .output-pane {
-  flex: 0.6;
+  flex: 1;
+  width: 100%;
   background: #2d2d2d;
   border: 1px solid #404040;
   border-radius: 4px;

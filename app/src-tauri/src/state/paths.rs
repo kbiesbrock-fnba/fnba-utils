@@ -37,6 +37,15 @@ pub fn data_file(name: &str) -> PathBuf {
     app_data_dir().join(name)
 }
 
+/// `%LOCALAPPDATA%\fnba-utils\markdown-docs`, creating it on demand. Holds the
+/// body of each open Markdown Viewer document so large docs never hit the
+/// webview localStorage quota; localStorage keeps only the file path.
+pub fn markdown_docs_dir() -> std::path::PathBuf {
+    let dir = app_data_dir().join("markdown-docs");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 /// Migrate state files written by older builds into [`app_data_dir`].
 ///
 /// For each known legacy location:

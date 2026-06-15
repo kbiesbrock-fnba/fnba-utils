@@ -33,6 +33,9 @@ const JsonViewerApp = defineAsyncComponent(
 const JsonSwitcher = defineAsyncComponent(
   () => import("./components/json-viewer/JsonSwitcher.vue"),
 );
+const MarkdownViewerApp = defineAsyncComponent(
+  () => import("./components/markdown-viewer/MarkdownViewerApp.vue"),
+);
 
 const { dismiss } = usePalette();
 
@@ -44,6 +47,7 @@ const isIssueDetail = window.location.hash.startsWith("#issue-detail");
 const isClipboardManager = window.location.hash.startsWith("#clipboard-manager");
 const isJsonSwitcher = window.location.hash.startsWith("#json-switcher");
 const isJsonViewer = window.location.hash.startsWith("#json-viewer");
+const isMarkdownViewer = window.location.hash.startsWith("#markdown-viewer");
 
 function onBackdropClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains("backdrop")) {
@@ -61,6 +65,7 @@ function onBackdropClick(e: MouseEvent) {
   <ClipboardManagerWindow v-else-if="isClipboardManager" />
   <JsonSwitcher v-else-if="isJsonSwitcher" />
   <JsonViewerApp v-else-if="isJsonViewer" />
+  <MarkdownViewerApp v-else-if="isMarkdownViewer" />
   <div v-else class="backdrop" @mousedown="onBackdropClick">
     <CommandPalette />
   </div>

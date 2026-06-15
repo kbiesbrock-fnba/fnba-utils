@@ -926,6 +926,27 @@ export function copyText(text: string): Promise<void> {
   return invoke<void>("copy_text", { text });
 }
 
+export function writeMarkdownDoc(label: string, content: string): Promise<string> {
+  return invoke<string>("write_markdown_doc", { label, content });
+}
+
+export function readMarkdownDoc(path: string): Promise<string> {
+  return invoke<string>("read_markdown_doc", { path });
+}
+
+export function deleteMarkdownDoc(path: string): Promise<void> {
+  return invoke<void>("delete_markdown_doc", { path });
+}
+
+export function cleanupMarkdownDocs(keepPaths: string[]): Promise<number> {
+  return invoke<number>("cleanup_markdown_docs", { keepPaths });
+}
+
+/** Spawn a detached terminal window running `command` via wsl.exe bash -ilc. */
+export function runInTerminal(command: string): Promise<void> {
+  return invoke<void>("run_in_terminal", { command });
+}
+
 /**
  * Post the previewed report to Teams. The frontend echoes back the exact
  * StandupReport from the preview so the post matches what was on screen.

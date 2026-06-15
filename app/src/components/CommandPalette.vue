@@ -17,6 +17,7 @@ const {
   back,
   moveSelection,
   confirmSelection,
+  chainSelection,
   selectByIndex,
   onSearchChange,
 } = usePalette();
@@ -84,9 +85,11 @@ useKeyLayer(
     },
     {
       key: "Enter",
-      handler: () => {
-        if (mode.value === "browsing") { confirmSelection(); return; }
-        return false;
+      handler: (e: KeyboardEvent) => {
+        if (mode.value !== "browsing") return false;
+        // Ctrl+Shift+Enter → chain the result back into the query (calculator flow)
+        if (e.ctrlKey && e.shiftKey) { chainSelection(); return; }
+        confirmSelection();
       },
     },
     ...digitBindings,

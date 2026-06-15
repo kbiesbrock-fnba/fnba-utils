@@ -9,14 +9,25 @@
 // land in Stage 2, which needs new path-aware Rust commands.
 
 import type { PaletteCommand } from "@/commands/types";
-import { copyText } from "@/lib/tauri";
+import { copyText, runInTerminal } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
 import { openNewJsonViewerWindow } from "@/lib/jsonViewerWindow";
+import { openNewMarkdownViewerWindow } from "@/lib/markdownViewerWindow";
+import { looksLikeMarkdown } from "@/lib/markdownDetect";
+import { evaluate, formatResult, usesTrig } from "@/lib/calc";
+import {
+  getTrigUnit,
+  setTrigUnit,
+  getHistory,
+  addHistory,
+  clearHistory,
+} from "@/lib/calcPrefs";
+import type { TrigUnit } from "@/lib/calc";
+import { buildTimeRows } from "@/lib/timeSoft";
 
 const URL_RE = /^(https?:\/\/|www\.)\S+$/i;
 const JIRA_KEY_RE = /^[A-Z][A-Z0-9]*-\d+$/;
 const JIRA_IN_URL_RE = /\/browse\/([A-Z][A-Z0-9]*-\d+)/i;
-const MATH_RE = /^[\d\s.+\-*/%()]+$/;
 
 function isJsonText(q: string): boolean {
   if (q.length < 2 || (q[0] !== "{" && q[0] !== "[")) return false;
@@ -25,18 +36,6 @@ function isJsonText(q: string): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-/** Evaluate a pure arithmetic expression. Returns null if it isn't safe/simple. */
-function evalMath(expr: string): number | null {
-  if (!MATH_RE.test(expr) || !/[+\-*/%]/.test(expr) || !/\d/.test(expr)) return null;
-  try {
-    // Input is constrained by MATH_RE to digits/whitespace/operators/parens.
-    const value = Function(`"use strict"; return (${expr});`)() as unknown;
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
-  } catch {
-    return null;
   }
 }
 
@@ -59,8 +58,105 @@ async function openIssuePanel(key: string): Promise<void> {
   }
 }
 
-function row(c: Omit<PaletteCommand, "keywords" | "soft">): PaletteCommand {
+function row(
+  c: Omit<PaletteCommand, "keywords" | "soft">,
+): PaletteCommand {
   return { ...c, keywords: [], soft: true };
+}
+
+function markdownRows(content: string): PaletteCommand[] {
+  return [
+    row({
+      id: "soft:markdown:view",
+      name: "Open in Markdown Viewer",
+      description: `${content.length} chars of Markdown`,
+      icon: "📝",
+      action: () => openNewMarkdownViewerWindow(content),
+    }),
+    row({
+      id: "soft:markdown:copy",
+      name: "Copy Markdown",
+      description: `${content.length} chars`,
+      icon: "📋",
+      action: () => copyText(content),
+    }),
+  ];
+}
+
+// ─── Relative timestamp (for history rows) ────────────────────────────────────
+
+function relativeTime(at: number): string {
+  const diff = Date.now() - at;
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// ─── Calculator rows ──────────────────────────────────────────────────────────
+
+const UNIT_LABELS: Record<TrigUnit, string> = {
+  rad: "radians",
+  deg: "degrees",
+  grad: "gradians",
+};
+
+function buildCalcRows(expr: string): PaletteCommand[] {
+  const unit = getTrigUnit();
+  const value = evaluate(expr, unit);
+  if (value === null) return [];
+
+  const formatted = formatResult(value);
+  const trigHint = usesTrig(expr) ? ` · ${unit}` : "";
+  const desc = `${expr}${trigHint}`;
+
+  const rows: PaletteCommand[] = [
+    row({
+      id: "soft:calc:copy",
+      name: `= ${formatted}`,
+      description: desc,
+      icon: "🧮",
+      action: () => {
+        addHistory(expr, formatted);
+        copyText(formatted);
+      },
+      chainQuery: `=${formatted}`,
+    }),
+  ];
+
+  // Extra base-conversion rows for whole-number results.
+  if (Number.isInteger(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER) {
+    const sign = value < 0 ? "-" : "";
+    const abs = Math.abs(value);
+    rows.push(
+      row({
+        id: "soft:calc:hex",
+        name: `${sign}0x${abs.toString(16).toUpperCase()}`,
+        description: "Copy as hexadecimal",
+        icon: "#️⃣",
+        action: () => copyText(`${sign}0x${abs.toString(16).toUpperCase()}`),
+      }),
+      row({
+        id: "soft:calc:bin",
+        name: `${sign}0b${abs.toString(2)}`,
+        description: "Copy as binary",
+        icon: "#️⃣",
+        action: () => copyText(`${sign}0b${abs.toString(2)}`),
+      }),
+      row({
+        id: "soft:calc:oct",
+        name: `${sign}0o${abs.toString(8)}`,
+        description: "Copy as octal",
+        icon: "#️⃣",
+        action: () => copyText(`${sign}0o${abs.toString(8)}`),
+      }),
+    );
+  }
+
+  return rows;
 }
 
 /**
@@ -70,6 +166,40 @@ function row(c: Omit<PaletteCommand, "keywords" | "soft">): PaletteCommand {
 export function buildSoftCommands(query: string): PaletteCommand[] {
   const q = query.trim();
   if (!q) return [];
+
+  // --- ">" run-in-terminal prefix ---
+  if (q.startsWith(">")) {
+    const cmd = q.slice(1).trim();
+    if (!cmd) return [];
+    return [
+      row({
+        id: "soft:terminal:run",
+        name: "Run in terminal",
+        description: cmd,
+        icon: "💻",
+        action: () => runInTerminal(cmd),
+      }),
+      row({
+        id: "soft:terminal:copy",
+        name: "Copy command",
+        description: cmd,
+        icon: "📋",
+        action: () => copyText(cmd),
+      }),
+    ];
+  }
+
+  // --- ")" time/date prefix ---
+  if (q.startsWith(")")) {
+    return buildTimeRows(q);
+  }
+
+  // --- "md " markdown prefix ---
+  if (q.startsWith("md ")) {
+    const body = q.slice(3).trim();
+    if (!body) return [];
+    return markdownRows(body);
+  }
 
   // --- URL ---
   if (URL_RE.test(q)) {
@@ -150,18 +280,62 @@ export function buildSoftCommands(query: string): PaletteCommand[] {
   }
 
   // --- Calculator ---
-  const result = evalMath(q);
-  if (result !== null) {
-    const text = String(result);
-    return [
-      row({
-        id: "soft:calc",
-        name: `= ${text}`,
-        description: q,
-        icon: "🧮",
-        action: () => copyText(text),
-      }),
-    ];
+  // Triggered by a leading "=" (e.g. "=2*(3+4)"). The "=" is required because
+  // the palette's 1-9 launch hotkeys swallow a leading digit while the search
+  // is empty — typing "=" first makes the search non-empty so digits type
+  // normally. It also avoids false positives (a bare "2024" isn't a sum).
+  if (q.startsWith("=")) {
+    const raw = q.slice(1).trim();
+
+    // "=deg" / "=rad" / "=grad" — trig unit switcher
+    if (/^(deg|rad|grad)$/i.test(raw)) {
+      const next = raw.toLowerCase() as TrigUnit;
+      const current = getTrigUnit();
+      return [
+        row({
+          id: "soft:calc:unit",
+          name: `Set trig unit to ${UNIT_LABELS[next]}`,
+          description: `Currently: ${UNIT_LABELS[current]}`,
+          icon: "📐",
+          action: () => setTrigUnit(next),
+        }),
+      ];
+    }
+
+    // Bare "=" — show history
+    if (raw === "") {
+      const history = getHistory();
+      const out: PaletteCommand[] = history.slice(0, 9).map((entry, i) =>
+        row({
+          id: `soft:calc:hist:${i}`,
+          name: `= ${entry.result}`,
+          description: `${entry.expr} · ${relativeTime(entry.at)}`,
+          icon: "🧮",
+          action: () => copyText(entry.result),
+          chainQuery: `=${entry.result}`,
+        }),
+      );
+      if (history.length > 0) {
+        out.push(
+          row({
+            id: "soft:calc:hist:clear",
+            name: "Clear calculator history",
+            description: `${history.length} saved ${history.length === 1 ? "entry" : "entries"}`,
+            icon: "🗑️",
+            action: () => clearHistory(),
+          }),
+        );
+      }
+      return out;
+    }
+
+    // Expression — evaluate and build result rows
+    return buildCalcRows(raw);
+  }
+
+  // --- Markdown content sniff (LAST: all other patterns have priority) ---
+  if (looksLikeMarkdown(q)) {
+    return markdownRows(q);
   }
 
   return [];

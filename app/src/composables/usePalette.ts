@@ -87,6 +87,24 @@ export function usePalette() {
     if (cmd) runOrSelect(cmd);
   }
 
+  /**
+   * Ctrl+Shift+Enter: if the selected command has a `chainQuery`, replace the
+   * search text with it and keep the palette open so the user can keep
+   * calculating. Falls back to normal `confirmSelection` when chainQuery is
+   * absent.
+   */
+  function chainSelection() {
+    const cmd = filteredCommands.value[selectedIndex.value];
+    if (!cmd) return;
+    if (cmd.chainQuery !== undefined) {
+      searchQuery.value = cmd.chainQuery;
+      selectedIndex.value = 0;
+      return;
+    }
+    // No chain target — behave like a plain Enter.
+    runOrSelect(cmd);
+  }
+
   /** Activate the Nth visible command (0-indexed). Used by digit hotkeys
    *  1-9 in the palette so users can launch a command without arrow-keying. */
   function selectByIndex(index: number) {
@@ -102,12 +120,17 @@ export function usePalette() {
     selectedIndex.value = 0;
   }
 
+  const selectedCommand = computed(
+    () => filteredCommands.value[selectedIndex.value] ?? null,
+  );
+
   return {
     mode,
     searchQuery,
     selectedIndex,
     activeCommand,
     filteredCommands,
+    selectedCommand,
     returningToPrevious,
     reset,
     dismiss,
@@ -115,6 +138,7 @@ export function usePalette() {
     back,
     moveSelection,
     confirmSelection,
+    chainSelection,
     selectByIndex,
     onSearchChange,
   };

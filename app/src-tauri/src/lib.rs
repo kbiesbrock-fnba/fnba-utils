@@ -284,9 +284,10 @@ pub fn run() {
                 eprintln!("Failed to register Super+Shift+C: {e}");
             }
 
-            // --- Global Shortcut: Win+Shift+J (JSON Viewer / Switcher) ---
+            // --- Global Shortcut: Win+Shift+J (JSON / Markdown Viewer / Switcher) ---
             // No viewers open → emit to the main window to spawn a fresh one.
             // Viewers exist → show the switcher overlay (json-switcher window).
+            // Covers both json-viewer:* and markdown-viewer:* windows.
             if let Err(e) = app.global_shortcut().on_shortcut(
                 "Super+Shift+J",
                 move |app: &AppHandle, _shortcut, event| {
@@ -294,7 +295,7 @@ pub fn run() {
                         let has_viewer = app
                             .webview_windows()
                             .keys()
-                            .any(|l| l.starts_with("json-viewer:"));
+                            .any(|l| l.starts_with("json-viewer:") || l.starts_with("markdown-viewer:"));
                         if !has_viewer {
                             // No viewers open: skip the switcher, spawn a fresh one via the
                             // always-alive main webview (single source of truth for window opts).
@@ -454,6 +455,10 @@ pub fn run() {
             commands::clipboard_manager::delete_test_user,
             commands::clipboard_manager::set_test_user_enabled,
             commands::json_viewer::copy_text,
+            commands::markdown_docs::write_markdown_doc,
+            commands::markdown_docs::read_markdown_doc,
+            commands::markdown_docs::delete_markdown_doc,
+            commands::markdown_docs::cleanup_markdown_docs,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

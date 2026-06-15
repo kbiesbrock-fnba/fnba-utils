@@ -20,4 +20,19 @@ if (!window.location.hash) {
   // Reopens any JSON Viewer windows killed by a recompile, app quit, or crash.
   // Windows the user explicitly closed are not in the registry and stay closed.
   void import("./lib/jsonViewerWindow").then((m) => m.restoreJsonViewerWindows());
+
+  // Reopens any Markdown Viewer windows killed by a recompile, app quit, or crash.
+  void import("./lib/markdownViewerWindow").then((m) => m.restoreMarkdownViewerWindows());
+
+  // Sweep markdown-doc files orphaned by a crash: keep only paths still in the registry.
+  void (async () => {
+    try {
+      const { readRegistry } = await import("./lib/markdownViewerRegistry");
+      const { cleanupMarkdownDocs } = await import("./lib/tauri");
+      const keep = Object.values(readRegistry())
+        .map((e: any) => e?.state?.docPath)
+        .filter((p): p is string => typeof p === "string" && p.length > 0);
+      await cleanupMarkdownDocs(keep);
+    } catch { /* best-effort */ }
+  })();
 }
