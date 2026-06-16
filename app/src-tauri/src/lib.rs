@@ -459,6 +459,11 @@ pub fn run() {
             commands::markdown_docs::read_markdown_doc,
             commands::markdown_docs::delete_markdown_doc,
             commands::markdown_docs::cleanup_markdown_docs,
+            commands::markdown_docs::open_markdown_file,
+            commands::markdown_docs::save_markdown_as,
+            commands::markdown_docs::save_markdown_file,
+            commands::markdown_docs::stat_markdown_file,
+            commands::markdown_docs::read_markdown_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

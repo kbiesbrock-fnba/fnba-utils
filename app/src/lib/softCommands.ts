@@ -24,20 +24,7 @@ import {
 } from "@/lib/calcPrefs";
 import type { TrigUnit } from "@/lib/calc";
 import { buildTimeRows } from "@/lib/timeSoft";
-
-const URL_RE = /^(https?:\/\/|www\.)\S+$/i;
-const JIRA_KEY_RE = /^[A-Z][A-Z0-9]*-\d+$/;
-const JIRA_IN_URL_RE = /\/browse\/([A-Z][A-Z0-9]*-\d+)/i;
-
-function isJsonText(q: string): boolean {
-  if (q.length < 2 || (q[0] !== "{" && q[0] !== "[")) return false;
-  try {
-    JSON.parse(q);
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { URL_RE, JIRA_KEY_RE, JIRA_IN_URL_RE, isJsonText } from "@/lib/patterns";
 
 /** Surface a Jira issue in the in-app Issue panel (mirrors the standup flow). */
 async function openIssuePanel(key: string): Promise<void> {

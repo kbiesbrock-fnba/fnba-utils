@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { renderMarkdown } from "../../lib/markdown";
 import { touchEntry, removeEntry, saveState, saveWin, readRegistry } from "../../lib/markdownViewerRegistry";
-import { readMarkdownDoc, writeMarkdownDoc, deleteMarkdownDoc } from "../../lib/tauri";
+import { readMarkdownDoc, writeMarkdownDoc, deleteMarkdownDoc, openMarkdownFile, saveMarkdownAs, saveMarkdownFile, statMarkdownFile, readMarkdownFile } from "../../lib/tauri";
 import { openNewMarkdownViewerWindow } from "../../lib/markdownViewerWindow";
 import { openExternal } from "../../lib/external";
 import SplitPane from "../common/SplitPane.vue";
@@ -13,11 +13,34 @@ const source = ref("");
 const mode = ref<"preview" | "edit" | "split">("edit");
 let currentDocPath: string | null = null;
 
+// --- File-backed editor state ---
+const filePath = ref<string | null>(null);
+const dirty = ref(false);
+const showCloseModal = ref(false);
+let forceClose = false; // set right before a programmatic close so onCloseRequested allows it
+
+// --- External-change detection ---
+let diskBaseline: { mtimeMs: number; size: number } | null = null;
+const externalChange = ref<null | "changed" | "deleted">(null);
+
+const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
+const splitPreviewRef = ref<HTMLElement | null>(null);
+// Guards the scroll-sync feedback loop (programmatic scroll re-fires @scroll).
+let syncing = false;
+
 const renderedHtml = computed(() => renderMarkdown(source.value));
 
 // --- Window title ---
-// Shows the first heading or first non-empty line, else "Markdown Viewer".
+// For bound files: show filename + dirty indicator.
+// For unbound (scratch): shows the first heading or first non-empty line, else "Markdown Viewer".
+function baseName(p: string): string {
+  return p.split(/[\\/]/).pop() || p;
+}
+
 const windowTitle = computed(() => {
+  if (filePath.value) {
+    return baseName(filePath.value) + (dirty.value ? " ●" : "");
+  }
   const s = source.value.trim();
   if (!s) return "Markdown Viewer";
   const firstLine = s.split("\n").find((l) => l.trim().length > 0) ?? "";
@@ -35,20 +58,225 @@ watch(windowTitle, async (title) => {
   }
 });
 
-// --- Link interception ---
+// --- Scroll sync helpers ---
+
+function editorLineHeight(el: HTMLTextAreaElement): number {
+  const cs = getComputedStyle(el);
+  const lh = parseFloat(cs.lineHeight);
+  if (Number.isFinite(lh)) return lh;
+  return (parseFloat(cs.fontSize) || 13) * 1.5;
+}
+
+// --- Source-line ↔ editor-pixel mapping (wrap-aware) ---
+// The textarea soft-wraps long lines, so a source line's pixel offset is NOT
+// `line * lineHeight`. We measure it with a hidden mirror <div> that replicates
+// the textarea's width + typography, one <span> per source line; each span's
+// offsetTop is that line's true top in the textarea's scroll coordinates.
+// Results are cached until the text or editor width changes.
+const MIRROR_PROPS = [
+  "boxSizing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant",
+  "letterSpacing", "lineHeight", "textTransform", "wordSpacing", "tabSize",
+  "overflowWrap", "wordBreak", "wordWrap",
+];
+let mirrorEl: HTMLDivElement | null = null;
+let cachedTops: number[] | null = null;
+let cachedText = "";
+let cachedWidth = -1;
+
+function lineTops(editor: HTMLTextAreaElement): number[] {
+  const text = source.value;
+  const width = editor.clientWidth;
+  if (cachedTops && cachedText === text && cachedWidth === width) return cachedTops;
+
+  if (!mirrorEl) {
+    mirrorEl = document.createElement("div");
+    mirrorEl.setAttribute("aria-hidden", "true");
+    Object.assign(mirrorEl.style, {
+      position: "absolute", top: "0", left: "-9999px",
+      visibility: "hidden", height: "auto", overflow: "hidden", pointerEvents: "none",
+    });
+    document.body.appendChild(mirrorEl);
+  }
+  const cs = getComputedStyle(editor);
+  for (const p of MIRROR_PROPS) {
+    (mirrorEl.style as unknown as Record<string, string>)[p] =
+      (cs as unknown as Record<string, string>)[p];
+  }
+  mirrorEl.style.width = `${width}px`;
+  mirrorEl.style.whiteSpace = "pre-wrap";
+
+  // Build with safe DOM methods (textContent) — no innerHTML. One span per
+  // source line, joined by literal newlines so pre-wrap breaks between them.
+  const lines = text.split("\n");
+  mirrorEl.replaceChildren();
+  const spans: HTMLElement[] = [];
+  lines.forEach((l, i) => {
+    if (i > 0) mirrorEl!.appendChild(document.createTextNode("\n"));
+    const span = document.createElement("span");
+    span.textContent = l.length ? l : "​"; // ZWSP keeps blank lines tall
+    mirrorEl!.appendChild(span);
+    spans.push(span);
+  });
+  const tops: number[] = spans.map((s) => s.offsetTop);
+
+  cachedTops = tops;
+  cachedText = text;
+  cachedWidth = width;
+  return tops;
+}
+
+/** Fractional source line shown at editor scroll offset `scrollTop`. */
+function lineAtScroll(editor: HTMLTextAreaElement, scrollTop: number): number {
+  const tops = lineTops(editor);
+  if (tops.length === 0) return 0;
+  let i = 0;
+  while (i + 1 < tops.length && tops[i + 1] <= scrollTop) i++;
+  const top = tops[i];
+  const next = i + 1 < tops.length ? tops[i + 1] : top + editorLineHeight(editor);
+  const frac = next > top ? (scrollTop - top) / (next - top) : 0;
+  return i + Math.min(1, Math.max(0, frac));
+}
+
+/** Editor scroll offset that puts (fractional) source `line` at the top. */
+function scrollForLine(editor: HTMLTextAreaElement, line: number): number {
+  const tops = lineTops(editor);
+  if (tops.length === 0) return 0;
+  const i = Math.max(0, Math.min(Math.floor(line), tops.length - 1));
+  const top = tops[i];
+  const next = i + 1 < tops.length ? tops[i + 1] : top + editorLineHeight(editor);
+  return top + (line - i) * (next - top);
+}
+
+interface ScrollAnchor { line: number; top: number; }
+function previewAnchors(preview: HTMLElement): ScrollAnchor[] {
+  const base = preview.getBoundingClientRect().top;
+  const out: ScrollAnchor[] = [];
+  preview.querySelectorAll<HTMLElement>("[data-source-line]").forEach((el) => {
+    const line = Number(el.dataset.sourceLine);
+    if (!Number.isFinite(line)) return;
+    out.push({ line, top: el.getBoundingClientRect().top - base + preview.scrollTop });
+  });
+  return out; // DOM order ⇒ ascending by line
+}
+
+// Editor scrolled → align the preview to the same source line.
+// Note: textarea line→pixel is approximate when long lines wrap; anchoring the
+// preview by source line keeps it well aligned for typical Markdown documents.
+function onEditorScroll() {
+  if (syncing) return;
+  const editor = splitEditorRef.value;
+  const preview = splitPreviewRef.value;
+  if (!editor || !preview) return;
+  const topLine = lineAtScroll(editor, editor.scrollTop);
+  const anchors = previewAnchors(preview);
+  let targetTop: number;
+  if (anchors.length < 2) {
+    const er = editor.scrollHeight - editor.clientHeight;
+    const pr = preview.scrollHeight - preview.clientHeight;
+    targetTop = er > 0 ? (editor.scrollTop / er) * pr : 0;
+  } else {
+    let lo = anchors[0];
+    let hi = anchors[anchors.length - 1];
+    for (let i = 0; i < anchors.length; i++) {
+      if (anchors[i].line <= topLine) lo = anchors[i];
+      if (anchors[i].line >= topLine) { hi = anchors[i]; break; }
+    }
+    targetTop = hi.line === lo.line
+      ? lo.top
+      : lo.top + ((topLine - lo.line) / (hi.line - lo.line)) * (hi.top - lo.top);
+  }
+  syncing = true;
+  preview.scrollTop = targetTop;
+  requestAnimationFrame(() => { syncing = false; });
+}
+
+// Preview scrolled → align the editor to the topmost visible source line.
+function onPreviewScroll() {
+  if (syncing) return;
+  const editor = splitEditorRef.value;
+  const preview = splitPreviewRef.value;
+  if (!editor || !preview) return;
+  const anchors = previewAnchors(preview);
+  let targetTop: number;
+  if (anchors.length < 2) {
+    const pr = preview.scrollHeight - preview.clientHeight;
+    const er = editor.scrollHeight - editor.clientHeight;
+    targetTop = pr > 0 ? (preview.scrollTop / pr) * er : 0;
+  } else {
+    let chosen = anchors[0];
+    for (const a of anchors) {
+      if (a.top <= preview.scrollTop + 1) chosen = a; else break;
+    }
+    const idx = anchors.indexOf(chosen);
+    const next = anchors[idx + 1];
+    let line = chosen.line;
+    if (next && next.top > chosen.top) {
+      line = chosen.line + ((preview.scrollTop - chosen.top) / (next.top - chosen.top)) * (next.line - chosen.line);
+    }
+    targetTop = scrollForLine(editor, line);
+  }
+  syncing = true;
+  editor.scrollTop = targetTop;
+  requestAnimationFrame(() => { syncing = false; });
+}
+
+// --- Link interception + click-to-locate ---
 function onPreviewClick(e: MouseEvent) {
-  const a = (e.target as HTMLElement).closest("a");
+  const targetEl = e.target as HTMLElement;
+  const a = targetEl.closest("a");
   if (a) {
     const href = a.getAttribute("href");
     if (href) {
       e.preventDefault();
       void openExternal(href);
     }
+    return;
   }
+  // Locate only in split mode, and never when the user is selecting text.
+  if (mode.value !== "split") return;
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) return;
+  const el = targetEl.closest<HTMLElement>("[data-source-line]");
+  if (!el) return;
+  const line = Number(el.dataset.sourceLine);
+  if (!Number.isFinite(line)) return;
+  const editor = splitEditorRef.value;
+  if (!editor) return;
+  const lines = source.value.split("\n");
+  const clamped = Math.max(0, Math.min(line, lines.length - 1));
+  let start = 0;
+  for (let i = 0; i < clamped; i++) start += lines[i].length + 1; // +1 for \n
+  const end = start + lines[clamped].length;
+  editor.focus();
+  editor.setSelectionRange(start, end);
+  editor.scrollTop = Math.max(0, scrollForLine(editor, clamped) - editor.clientHeight / 3);
 }
 
 // --- Persistence ---
 let persistDocTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Write the full viewer state (docPath + mode + filePath + dirty + disk baseline) immediately. */
+function persistState(label: string): void {
+  saveState(label, {
+    docPath: currentDocPath,
+    mode: mode.value,
+    filePath: filePath.value,
+    dirty: dirty.value,
+    diskMtimeMs: diskBaseline?.mtimeMs ?? null,
+    diskSize: diskBaseline?.size ?? null,
+  });
+}
+
+/** Persist state immediately using the current window label. */
+async function persistCurrent(): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    persistState(getCurrentWindow().label);
+  } catch {
+    // ignore
+  }
+}
 
 function schedulePersistDoc(label: string): void {
   if (persistDocTimer) clearTimeout(persistDocTimer);
@@ -57,7 +285,7 @@ function schedulePersistDoc(label: string): void {
     void (async () => {
       try {
         currentDocPath = await writeMarkdownDoc(label, source.value);
-        saveState(label, { docPath: currentDocPath, mode: mode.value });
+        persistState(label);
       } catch {
         // ignore — file I/O is best-effort
       }
@@ -74,6 +302,8 @@ watch(source, (val) => {
       const preview = val.replace(/\s+/g, " ").trim().slice(0, 60);
       touchEntry(label, preview);
       schedulePersistDoc(label);
+      // Mark dirty for bound docs when content changes.
+      if (filePath.value) dirty.value = true;
     } catch {
       // ignore
     }
@@ -82,19 +312,126 @@ watch(source, (val) => {
 
 // Watch mode: persist immediately (cheap, no debounce needed).
 watch(mode, () => {
-  void (async () => {
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const label = getCurrentWindow().label;
-      saveState(label, { docPath: currentDocPath, mode: mode.value });
-    } catch {
-      // ignore
-    }
-  })();
+  void persistCurrent();
 });
 
+// --- External-change detection helpers ---
+
+/** Snapshot the current disk fingerprint so our own writes never self-trigger the banner. */
+async function refreshBaseline(): Promise<void> {
+  if (!filePath.value) { diskBaseline = null; return; }
+  try {
+    const s = await statMarkdownFile(filePath.value);
+    diskBaseline = s.exists ? { mtimeMs: s.mtimeMs, size: s.size } : null;
+    await persistCurrent();
+  } catch { /* best-effort */ }
+}
+
+/** Check whether the on-disk file differs from our baseline. Sets externalChange. */
+async function checkExternalChange(): Promise<void> {
+  if (!filePath.value) { externalChange.value = null; return; }
+  try {
+    const s = await statMarkdownFile(filePath.value);
+    if (!s.exists) {
+      externalChange.value = "deleted";
+      return;
+    }
+    if (diskBaseline && (s.mtimeMs !== diskBaseline.mtimeMs || s.size !== diskBaseline.size)) {
+      externalChange.value = "changed";
+    } else {
+      externalChange.value = null;
+    }
+  } catch { /* ignore */ }
+}
+
+/** Banner action: discard local edits and reload from disk. */
+async function reloadFromDisk(): Promise<void> {
+  if (!filePath.value) return;
+  try {
+    const f = await readMarkdownFile(filePath.value);
+    source.value = f.content;
+    dirty.value = false;
+    diskBaseline = { mtimeMs: f.mtimeMs, size: f.size };
+    externalChange.value = null;
+    await persistCurrent();
+  } catch (e) { console.error("reload failed", e); }
+}
+
+/** Banner action: dismiss; re-baseline to stop nagging about THIS change. */
+async function keepMine(): Promise<void> {
+  externalChange.value = null;
+  await refreshBaseline();
+}
+
+/** Banner action: open the on-disk version in a separate unbound scratch window. */
+async function openDiskCopy(): Promise<void> {
+  if (!filePath.value) return;
+  try {
+    const f = await readMarkdownFile(filePath.value);
+    await openNewMarkdownViewerWindow(f.content);
+  } catch (e) { console.error(e); }
+  await keepMine();
+}
+
+/** Banner action: write the current content back to a file that was deleted on disk. */
+async function saveOverDeleted(): Promise<void> {
+  const ok = await save();
+  if (ok) { externalChange.value = null; }
+}
+
+/** Banner action: dismiss without re-baselining (deleted-file case). */
+function dismissExternal(): void { externalChange.value = null; }
+
+// --- File I/O ---
+
+function suggestedName(): string {
+  if (filePath.value) return baseName(filePath.value);
+  const first = source.value.split("\n").find((l) => l.trim()) ?? "";
+  const slug = first
+    .replace(/^#+\s*/, "")
+    .trim()
+    .slice(0, 40)
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return (slug || "untitled") + ".md";
+}
+
+async function saveAs(): Promise<boolean> {
+  const p = await saveMarkdownAs(source.value, suggestedName());
+  if (!p) return false;
+  filePath.value = p;
+  dirty.value = false;
+  await refreshBaseline();
+  return true;
+}
+
+async function save(): Promise<boolean> {
+  if (!filePath.value) return saveAs();
+  try {
+    await saveMarkdownFile(filePath.value, source.value);
+    dirty.value = false;
+    await refreshBaseline();
+    return true;
+  } catch (e) {
+    console.error("save failed", e);
+    return false;
+  }
+}
+
+async function openFile() {
+  const f = await openMarkdownFile();
+  if (f) await openNewMarkdownViewerWindow(f.content, f.path);
+}
+
 // --- Close ---
-async function closeWindow() {
+
+function needsSavePrompt(): boolean {
+  if (filePath.value) return dirty.value;
+  return source.value.trim() !== "";
+}
+
+async function doClose() {
+  forceClose = true;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const w = getCurrentWindow();
   try {
@@ -105,6 +442,21 @@ async function closeWindow() {
   removeEntry(w.label);
   await w.close();
 }
+
+function closeWindow() {
+  if (needsSavePrompt()) { showCloseModal.value = true; return; }
+  void doClose();
+}
+
+async function onModalSave() {
+  const ok = await save();
+  showCloseModal.value = false;
+  if (ok) await doClose();
+  // if saveAs was cancelled (ok=false), stay open
+}
+
+function onModalDiscard() { showCloseModal.value = false; void doClose(); }
+function onModalCancel() { showCloseModal.value = false; }
 
 // --- Title bar controls ---
 const pinned = ref(false);
@@ -170,6 +522,18 @@ async function toggleMaximize() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // Save / Save As / Open — handled globally regardless of focus.
+  if (e.ctrlKey && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    if (e.shiftKey) void saveAs(); else void save();
+    return;
+  }
+  if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
+    e.preventDefault();
+    void openFile();
+    return;
+  }
+
   const target = e.target as HTMLElement | null;
   const inEditable =
     target &&
@@ -178,7 +542,7 @@ function onKeydown(e: KeyboardEvent) {
       target.isContentEditable);
   if (e.key === "Escape" && !inEditable) {
     e.preventDefault();
-    void closeWindow();
+    closeWindow();
   }
   if (e.key === "F11") {
     e.preventDefault();
@@ -208,6 +572,13 @@ onMounted(async () => {
       currentDocPath = entry.state.docPath;
       source.value = await readMarkdownDoc(currentDocPath);
       mode.value = (entry.state.mode as "preview" | "edit" | "split") ?? "preview";
+      filePath.value = entry.state.filePath ?? null;
+      dirty.value = entry.state.dirty ?? false;
+      // Hydrate disk baseline so external-change detection works across restarts.
+      const dm = entry.state.diskMtimeMs, ds = entry.state.diskSize;
+      diskBaseline = (typeof dm === "number" && typeof ds === "number") ? { mtimeMs: dm, size: ds } : null;
+      // If bound, check immediately for changes that happened while the app was closed.
+      if (filePath.value) void checkExternalChange();
     }
     if (entry?.win?.pinned) {
       pinned.value = true;
@@ -223,6 +594,10 @@ onMounted(async () => {
   } catch {
     // ignore — hydration is best-effort
   }
+
+  // For a new bound window (opened via openFile()) where no baseline was
+  // persisted yet, establish the baseline now.
+  if (filePath.value && diskBaseline === null) void refreshBaseline();
 
   // No content (new window, or a restored/empty doc) → start in edit mode so
   // the user can type immediately rather than facing an empty preview.
@@ -245,17 +620,22 @@ onMounted(async () => {
   });
 
   unlistenFocus = await w.onFocusChanged(({ payload: focused }) => {
-    if (focused) touchEntry(label);
+    if (focused) {
+      touchEntry(label);
+      void checkExternalChange();
+    }
   });
 
-  // Intentional close via Alt+F4 or taskbar close — delete doc and remove entry.
-  unlistenCloseRequested = await w.onCloseRequested(async () => {
-    try {
-      if (currentDocPath) await deleteMarkdownDoc(currentDocPath);
-    } catch {
-      // ignore
+  // Alt+F4 / taskbar close: check for unsaved changes first.
+  unlistenCloseRequested = await w.onCloseRequested((event) => {
+    if (forceClose) return; // our own doClose() — allow
+    if (needsSavePrompt()) {
+      event.preventDefault();
+      showCloseModal.value = true;
+    } else {
+      if (currentDocPath) void deleteMarkdownDoc(currentDocPath).catch(() => {});
+      removeEntry(label);
     }
-    removeEntry(label);
   });
 
   // Seed geometry after mount.
@@ -276,6 +656,7 @@ onUnmounted(() => {
   if (unlistenMove) { unlistenMove(); unlistenMove = null; }
   if (unlistenFocus) { unlistenFocus(); unlistenFocus = null; }
   if (unlistenCloseRequested) { unlistenCloseRequested(); unlistenCloseRequested = null; }
+  if (mirrorEl) { mirrorEl.remove(); mirrorEl = null; cachedTops = null; }
   // NOTE: deleteMarkdownDoc / removeEntry are intentionally NOT called here.
   // onUnmounted fires on every Vite HMR reload while the window stays open —
   // calling them here would destroy the doc for a window the user never closed.
@@ -324,6 +705,28 @@ onUnmounted(() => {
         <span class="toolbar-divider"></span>
         <button
           class="util-btn"
+          @click="openFile"
+          title="Open a Markdown file (Ctrl+O)"
+        >
+          📂 Open
+        </button>
+        <button
+          class="util-btn"
+          @click="save"
+          title="Save (Ctrl+S)"
+        >
+          💾 Save
+        </button>
+        <button
+          class="util-btn"
+          @click="saveAs"
+          title="Save As… (Ctrl+Shift+S)"
+        >
+          Save As…
+        </button>
+        <span class="toolbar-divider"></span>
+        <button
+          class="util-btn"
           @click="source = ''; mode = 'edit'"
           title="Clear content"
         >
@@ -337,6 +740,23 @@ onUnmounted(() => {
           ＋ New
         </button>
       </div>
+    </div>
+
+    <!-- External-change banners (between toolbar and content; push content down) -->
+    <div v-if="externalChange === 'changed'" class="ext-banner">
+      <span class="ext-msg">⚠ This file changed on disk{{ dirty ? " — you have unsaved edits" : "" }}.</span>
+      <span class="ext-actions">
+        <button class="ext-btn ext-primary" @click="reloadFromDisk">{{ dirty ? "Reload (discard mine)" : "Reload" }}</button>
+        <button v-if="dirty" class="ext-btn" @click="openDiskCopy">Open disk copy ↗</button>
+        <button class="ext-btn" @click="keepMine">Keep mine</button>
+      </span>
+    </div>
+    <div v-else-if="externalChange === 'deleted'" class="ext-banner ext-deleted">
+      <span class="ext-msg">⚠ This file was deleted on disk.</span>
+      <span class="ext-actions">
+        <button class="ext-btn ext-primary" @click="saveOverDeleted">Save again</button>
+        <button class="ext-btn" @click="dismissExternal">Dismiss</button>
+      </span>
     </div>
 
     <!-- Content area -->
@@ -362,16 +782,35 @@ onUnmounted(() => {
       <SplitPane v-else storageKey="fnba-utils:md-split" :default-ratio="0.5">
         <template #left>
           <div class="edit-pane">
-            <textarea v-model="source" placeholder="Type or paste Markdown…" class="md-editor" />
+            <textarea
+              ref="splitEditorRef"
+              v-model="source"
+              placeholder="Type or paste Markdown…"
+              class="md-editor"
+              @scroll="onEditorScroll"
+            />
           </div>
         </template>
         <template #right>
-          <div class="preview-pane">
+          <div ref="splitPreviewRef" class="preview-pane" @scroll="onPreviewScroll">
             <div v-if="source.trim()" class="md-body" v-html="renderedHtml" @click="onPreviewClick" />
             <div v-else class="placeholder">Start typing on the left…</div>
           </div>
         </template>
       </SplitPane>
+    </div>
+
+    <!-- Save-on-close modal -->
+    <div v-if="showCloseModal" class="close-modal-backdrop">
+      <div class="close-modal">
+        <div class="cm-title">Save changes?</div>
+        <div class="cm-msg">{{ filePath ? baseName(filePath) : "This document" }} has unsaved changes.</div>
+        <div class="cm-actions">
+          <button class="cm-btn cm-primary" @click="onModalSave">Save</button>
+          <button class="cm-btn" @click="onModalDiscard">Don't save</button>
+          <button class="cm-btn" @click="onModalCancel">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -563,6 +1002,9 @@ onUnmounted(() => {
   line-height: 1.7;
   font-size: 14px;
   color: #e0e0e0;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .md-body :deep(h1),
@@ -685,5 +1127,145 @@ onUnmounted(() => {
 .md-body :deep(img) {
   max-width: 100%;
   border-radius: 4px;
+}
+
+/* --- Save-on-close modal --- */
+.close-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.close-modal {
+  background: #2d2d2d;
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 24px;
+  width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+.cm-msg {
+  font-size: 13px;
+  color: #aaa;
+  word-break: break-all;
+}
+
+.cm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.cm-btn {
+  padding: 6px 14px;
+  background: #404040;
+  border: 1px solid #555;
+  color: #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.12s;
+}
+
+.cm-btn:hover {
+  background: #505050;
+}
+
+.cm-btn.cm-primary {
+  background: #4CAF50;
+  border-color: #45a049;
+  color: white;
+}
+
+.cm-btn.cm-primary:hover {
+  background: #45a049;
+}
+
+/* --- External-change banner --- */
+.ext-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #3a2f1a;
+  border-bottom: 1px solid #5c4a1f;
+  color: #e0c66a;
+  font-size: 12px;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.ext-banner.ext-deleted {
+  background: #3a1e1e;
+  border-bottom-color: #5c2a2a;
+  color: #e08080;
+}
+
+.ext-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ext-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ext-btn {
+  padding: 4px 10px;
+  background: #4a3a20;
+  border: 1px solid #7a6030;
+  color: #e0c66a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.ext-btn:hover {
+  background: #5a4a28;
+  color: #f0d87a;
+}
+
+.ext-banner.ext-deleted .ext-btn {
+  background: #4a2020;
+  border-color: #7a3030;
+  color: #e08080;
+}
+
+.ext-banner.ext-deleted .ext-btn:hover {
+  background: #5a2828;
+  color: #f09090;
+}
+
+.ext-btn.ext-primary {
+  background: #4CAF50;
+  border-color: #45a049;
+  color: white;
+}
+
+.ext-btn.ext-primary:hover {
+  background: #45a049;
+  color: white;
 }
 </style>

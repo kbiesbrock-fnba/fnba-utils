@@ -398,6 +398,7 @@ impl ClipboardHistoryState {
         query: Option<&str>,
         kind_filter: Option<&str>,
         pinned_only: bool,
+        exclude_pinned: bool,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<ClipboardEntrySummary>, String> {
@@ -417,7 +418,10 @@ impl ClipboardHistoryState {
         if pinned_only {
             sql.push_str(" AND pinned = 1");
         }
-        sql.push_str(" ORDER BY pinned DESC, captured_at DESC LIMIT ?");
+        if exclude_pinned {
+            sql.push_str(" AND pinned = 0");
+        }
+        sql.push_str(" ORDER BY captured_at DESC LIMIT ?");
         // For non-fuzzy queries we paginate in SQL; for fuzzy we pull the
         // candidate pool and paginate after ranking.
         let row_cap: i64 = if q.is_some() {
@@ -475,11 +479,9 @@ impl ClipboardHistoryState {
                 Some((best, row))
             })
             .collect();
-        // Pinned first, then score desc, then recency desc as tiebreaker.
+        // Score desc, then recency desc as tiebreaker.
         scored.sort_by(|a, b| {
-            b.1.pinned
-                .cmp(&a.1.pinned)
-                .then_with(|| b.0.cmp(&a.0))
+            b.0.cmp(&a.0)
                 .then_with(|| b.1.captured_at.cmp(&a.1.captured_at))
         });
         let start = offset as usize;

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
 import type { ClipboardEntrySummary } from "@/lib/tauri";
+import { deriveLabel } from "@/lib/clipboardLabel";
 
 const props = defineProps<{
   entry: ClipboardEntrySummary;
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 }>();
 
 const ageLabel = computed(() => humanAgo(props.entry.capturedAt));
+const kindLabel = computed(() => deriveLabel(props.entry));
 const sourceLabel = computed(() => {
   const s = props.entry.sourceProcess;
   if (!s) return "";
@@ -97,9 +99,7 @@ function humanAgo(epoch: number): string {
       <img :src="`data:image/png;base64,${entry.thumbBase64}`" alt="" />
     </div>
     <div class="thumb thumb-icon" v-else>
-      <span v-if="entry.kind === 'image'" aria-hidden="true">img</span>
-      <span v-else-if="entry.kind === 'html'" aria-hidden="true">html</span>
-      <span v-else aria-hidden="true">txt</span>
+      <span aria-hidden="true">{{ kindLabel }}</span>
     </div>
 
     <div class="body">

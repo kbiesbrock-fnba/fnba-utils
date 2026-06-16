@@ -942,6 +942,31 @@ export function cleanupMarkdownDocs(keepPaths: string[]): Promise<number> {
   return invoke<number>("cleanup_markdown_docs", { keepPaths });
 }
 
+export interface MarkdownFile { path: string; content: string; }
+
+export function openMarkdownFile(): Promise<MarkdownFile | null> {
+  return invoke<MarkdownFile | null>("open_markdown_file");
+}
+
+export function saveMarkdownAs(content: string, suggestedName?: string): Promise<string | null> {
+  return invoke<string | null>("save_markdown_as", { content, suggestedName: suggestedName ?? null });
+}
+
+export function saveMarkdownFile(path: string, content: string): Promise<void> {
+  return invoke<void>("save_markdown_file", { path, content });
+}
+
+export interface MarkdownFileStat { mtimeMs: number; size: number; exists: boolean; }
+export interface MarkdownFileRead { content: string; mtimeMs: number; size: number; }
+
+export function statMarkdownFile(path: string): Promise<MarkdownFileStat> {
+  return invoke<MarkdownFileStat>("stat_markdown_file", { path });
+}
+
+export function readMarkdownFile(path: string): Promise<MarkdownFileRead> {
+  return invoke<MarkdownFileRead>("read_markdown_file", { path });
+}
+
 /** Spawn a detached terminal window running `command` via wsl.exe bash -ilc. */
 export function runInTerminal(command: string): Promise<void> {
   return invoke<void>("run_in_terminal", { command });
@@ -1004,6 +1029,7 @@ export function listClipboardEntries(
   query?: string,
   kind?: ClipboardKind,
   pinnedOnly?: boolean,
+  excludePinned?: boolean,
   limit?: number,
   offset?: number,
 ): Promise<ClipboardEntrySummary[]> {
@@ -1011,6 +1037,7 @@ export function listClipboardEntries(
     query: query ?? null,
     kind: kind ?? null,
     pinnedOnly: pinnedOnly ?? false,
+    excludePinned: excludePinned ?? false,
     limit: limit ?? 100,
     offset: offset ?? 0,
   });

@@ -11,7 +11,8 @@
     "issue-detail",
     "clipboard-manager",
     "json-viewer*",
-    "json-switcher"
+    "json-switcher",
+    "markdown-viewer*"
   ],
   "permissions": [
     "core:default",

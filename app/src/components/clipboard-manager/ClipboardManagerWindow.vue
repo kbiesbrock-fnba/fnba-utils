@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useClipboardManager, type Filter } from "@/composables/useClipboardManager";
+import { deriveLabel } from "@/lib/clipboardLabel";
 import ClipboardEntryRow from "./ClipboardEntryRow.vue";
 import TestUsersPanel from "./TestUsersPanel.vue";
 import { onClipboardWindowShown } from "@/lib/tauri";
@@ -15,6 +16,7 @@ const {
   filter,
   loading,
   error,
+  windowReady,
   selectIndex,
   selectFirst,
   selectLast,
@@ -254,7 +256,7 @@ function formatBytes(n: number): string {
 </script>
 
 <template>
-  <div class="panel">
+  <div class="panel" :style="{ visibility: windowReady ? 'visible' : 'hidden' }">
     <div class="resize-edge resize-n" @mousedown="startResize('North', $event)" />
     <div class="resize-edge resize-s" @mousedown="startResize('South', $event)" />
     <div class="resize-edge resize-e" @mousedown="startResize('East', $event)" />
@@ -336,7 +338,7 @@ function formatBytes(n: number): string {
 
       <section v-if="selected" class="detail">
         <div class="detail-meta">
-          <span class="badge">{{ selected.kind }}</span>
+          <span class="badge">{{ deriveLabel(selected) }}</span>
           <button
             class="badge sensitive-toggle"
             :class="{ sensitive: selected.sensitive }"

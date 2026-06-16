@@ -14,6 +14,10 @@ export interface MarkdownViewerEntry {
   state?: {
     docPath: string | null;
     mode: string;
+    filePath?: string | null;
+    dirty?: boolean;
+    diskMtimeMs?: number | null;
+    diskSize?: number | null;
   };
   win?: {
     x: number;

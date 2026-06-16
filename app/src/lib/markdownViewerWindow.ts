@@ -29,17 +29,20 @@ let seq = 0;
  * `initialContent`, if given, is written to disk and pre-seeded into the
  * registry BEFORE the window is created — the new window hydrates from its
  * registry entry on mount (no pending-localStorage handoff needed).
+ *
+ * `filePath`, if given, binds the window to a real file on disk (Open / Save flow).
  */
-export async function openNewMarkdownViewerWindow(initialContent?: string): Promise<void> {
+export async function openNewMarkdownViewerWindow(initialContent?: string, filePath?: string): Promise<void> {
   const label = `markdown-viewer:${Date.now()}-${seq++}`;
 
-  if (initialContent != null && initialContent.trim() !== "") {
+  if ((initialContent != null && initialContent.trim() !== "") || filePath) {
     try {
       const { writeMarkdownDoc } = await import("./tauri");
       const { saveState, touchEntry } = await import("./markdownViewerRegistry");
-      const docPath = await writeMarkdownDoc(label, initialContent);
-      saveState(label, { docPath, mode: "preview" });
-      touchEntry(label, initialContent.replace(/\s+/g, " ").trim().slice(0, 60));
+      const docPath = await writeMarkdownDoc(label, initialContent ?? "");
+      const seedMode = (initialContent && initialContent.trim()) ? "preview" : "edit";
+      saveState(label, { docPath, mode: seedMode, filePath: filePath ?? null, dirty: false });
+      touchEntry(label, (initialContent ?? "").replace(/\s+/g, " ").trim().slice(0, 60));
     } catch {
       // best-effort; window still opens empty
     }
