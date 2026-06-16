@@ -9,7 +9,7 @@
 // land in Stage 2, which needs new path-aware Rust commands.
 
 import type { PaletteCommand } from "@/commands/types";
-import { copyText, runInTerminal } from "@/lib/tauri";
+import { copyText, runInTerminal, openInExplorer, openPathInEditor, resolvePath, openInNotepadpp } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
 import { openNewJsonViewerWindow } from "@/lib/jsonViewerWindow";
 import { openNewMarkdownViewerWindow } from "@/lib/markdownViewerWindow";
@@ -24,7 +24,7 @@ import {
 } from "@/lib/calcPrefs";
 import type { TrigUnit } from "@/lib/calc";
 import { buildTimeRows } from "@/lib/timeSoft";
-import { URL_RE, JIRA_KEY_RE, JIRA_IN_URL_RE, isJsonText } from "@/lib/patterns";
+import { URL_RE, JIRA_KEY_RE, JIRA_IN_URL_RE, isJsonText, isPath } from "@/lib/patterns";
 
 /** Surface a Jira issue in the in-app Issue panel (mirrors the standup flow). */
 async function openIssuePanel(key: string): Promise<void> {
@@ -146,6 +146,75 @@ function buildCalcRows(expr: string): PaletteCommand[] {
   return rows;
 }
 
+// ─── Path soft commands ───────────────────────────────────────────────────────
+
+// Detect synchronously whether the raw string looks like a Windows drive path
+// or a /mnt/<drive>/ path — used to decide if the secondary native-drive row
+// should be included before resolve_path comes back async.
+function buildPathRows(rawPath: string): PaletteCommand[] {
+  return [
+    row({
+      id: "soft:path:explorer",
+      name: "Open in Explorer",
+      description: rawPath,
+      icon: "📂",
+      action: async () => {
+        const r = await resolvePath(rawPath);
+        // For a file: open the containing folder (strip the last segment from
+        // the resolved Windows path); for a dir or unknown: open it directly.
+        const target = r.exists && r.isFile
+          ? r.windows.replace(/\\[^\\]+$/, "") || r.windows
+          : r.windows;
+        await openInExplorer(target);
+      },
+    }),
+    row({
+      id: "soft:path:editor",
+      name: "Open in editor",
+      description: "IntelliJ → Explorer fallback",
+      icon: "✏️",
+      action: async () => {
+        const r = await resolvePath(rawPath);
+        await openPathInEditor(r.windows);
+      },
+    }),
+    row({
+      id: "soft:path:terminal",
+      name: "Open terminal here",
+      description: rawPath,
+      icon: "💻",
+      action: async () => {
+        const r = await resolvePath(rawPath);
+        // cd to posix dir; strip filename segment if it's a file.
+        const dir = r.exists && r.isFile
+          ? r.posix.replace(/\/[^/]+$/, "") || r.posix
+          : r.posix;
+        await runInTerminal(`cd ${JSON.stringify(dir)}`);
+      },
+    }),
+    row({
+      id: "soft:path:notepadpp",
+      name: "Open in Notepad++",
+      description: rawPath,
+      icon: "📝",
+      action: async () => {
+        const r = await resolvePath(rawPath);
+        await openInNotepadpp(r.windows);
+      },
+    }),
+    row({
+      id: "soft:path:copy",
+      name: "Copy path",
+      description: rawPath,
+      icon: "📋",
+      action: async () => {
+        const r = await resolvePath(rawPath);
+        await copyText(r.windows);
+      },
+    }),
+  ];
+}
+
 /**
  * Build the contextual soft-command rows for `query`, or `[]` if nothing
  * matches. Callers invoke this only when the normal command filter is empty.
@@ -186,6 +255,11 @@ export function buildSoftCommands(query: string): PaletteCommand[] {
     const body = q.slice(3).trim();
     if (!body) return [];
     return markdownRows(body);
+  }
+
+  // --- Filesystem path (C:\…, /mnt/c/…, /path/…) ---
+  if (isPath(q)) {
+    return buildPathRows(q);
   }
 
   // --- URL ---

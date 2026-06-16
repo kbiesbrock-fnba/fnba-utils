@@ -889,6 +889,24 @@ export function openInExplorer(cwd: string): Promise<void> {
   return invoke<void>("open_in_explorer", { cwd });
 }
 
+export interface ResolvedPath {
+  /** WSL posix form, ~ expanded (e.g. /mnt/c/dev/X or /home/.../X). */
+  posix: string;
+  /** Windows-reachable open form: C:\... for drive-backed paths, \\wsl.localhost\Ubuntu\... for WSL-native paths. */
+  windows: string;
+  exists: boolean;
+  isFile: boolean;
+  isDir: boolean;
+}
+
+export function resolvePath(path: string): Promise<ResolvedPath> {
+  return invoke<ResolvedPath>("resolve_path", { path });
+}
+
+export function openInNotepadpp(path: string): Promise<void> {
+  return invoke<void>("open_in_notepadpp", { path });
+}
+
 export function getAppConfig(): Promise<AppConfigView> {
   return invoke<AppConfigView>("get_app_config");
 }

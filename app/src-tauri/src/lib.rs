@@ -6,6 +6,7 @@ mod db;
 mod models;
 mod standup_db;
 mod state;
+mod util;
 
 /// Public re-exports for the `fnba-clipd` daemon binary, which only needs
 /// the clipboard subsystem (no Tauri / commands / standup).
@@ -464,6 +465,9 @@ pub fn run() {
             commands::markdown_docs::save_markdown_file,
             commands::markdown_docs::stat_markdown_file,
             commands::markdown_docs::read_markdown_file,
+            commands::terminal::run_in_terminal,
+            commands::fs::resolve_path,
+            commands::fs::open_in_notepadpp,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
