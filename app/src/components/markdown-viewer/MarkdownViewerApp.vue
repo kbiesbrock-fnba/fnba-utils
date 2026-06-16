@@ -6,6 +6,7 @@ import { readMarkdownDoc, writeMarkdownDoc, deleteMarkdownDoc, openMarkdownFile,
 import { openNewMarkdownViewerWindow } from "../../lib/markdownViewerWindow";
 import { openExternal } from "../../lib/external";
 import SplitPane from "../common/SplitPane.vue";
+import StatusBar from "../StatusBar.vue";
 
 const source = ref("");
 // Default to edit: a brand-new/empty window should drop straight into typing.
@@ -221,6 +222,14 @@ function onPreviewScroll() {
   requestAnimationFrame(() => { syncing = false; });
 }
 
+// --- Status bar hint ---
+const statusHint = computed(() => {
+  const base = "Ctrl+S Save · Ctrl+O Open · F11 Fullscreen · ⎋ Close";
+  return mode.value === "split"
+    ? `Ctrl+click jump to source · ${base}`
+    : base;
+});
+
 // --- Link interception + click-to-locate ---
 function onPreviewClick(e: MouseEvent) {
   const targetEl = e.target as HTMLElement;
@@ -233,8 +242,9 @@ function onPreviewClick(e: MouseEvent) {
     }
     return;
   }
-  // Locate only in split mode, and never when the user is selecting text.
+  // Locate only in split mode, and only on Ctrl+click — plain click selects text.
   if (mode.value !== "split") return;
+  if (!e.ctrlKey) return;
   const sel = window.getSelection();
   if (sel && !sel.isCollapsed) return;
   const el = targetEl.closest<HTMLElement>("[data-source-line]");
@@ -799,6 +809,9 @@ onUnmounted(() => {
         </template>
       </SplitPane>
     </div>
+
+    <!-- Status bar -->
+    <StatusBar :hint="statusHint" />
 
     <!-- Save-on-close modal -->
     <div v-if="showCloseModal" class="close-modal-backdrop">
