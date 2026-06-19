@@ -907,6 +907,10 @@ export function openInNotepadpp(path: string): Promise<void> {
   return invoke<void>("open_in_notepadpp", { path });
 }
 
+export function revealInExplorer(path: string): Promise<void> {
+  return invoke<void>("reveal_in_explorer", { path });
+}
+
 export function getAppConfig(): Promise<AppConfigView> {
   return invoke<AppConfigView>("get_app_config");
 }

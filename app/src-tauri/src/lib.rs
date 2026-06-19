@@ -468,6 +468,7 @@ pub fn run() {
             commands::terminal::run_in_terminal,
             commands::fs::resolve_path,
             commands::fs::open_in_notepadpp,
+            commands::fs::reveal_in_explorer,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

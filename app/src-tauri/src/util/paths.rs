@@ -17,7 +17,11 @@ pub fn wsl_home() -> Option<String> {
     let mu = CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = mu.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
-        if let Ok(out) = crate::state::wsl_helper::run_script("printf '%s' \"$HOME\"") {
+        // NOTE: the script's output MUST end with a newline. `wsl_helper::run_script`
+        // detects completion by matching a sentinel line, so output without a
+        // trailing `\n` lands on the same line as the sentinel — the match never
+        // fires and the read blocks forever. `printf '%s\n'`, not `printf '%s'`.
+        if let Ok(out) = crate::state::wsl_helper::run_script("printf '%s\\n' \"$HOME\"") {
             let trimmed = out.trim().to_string();
             if !trimmed.is_empty() {
                 *guard = Some(trimmed);

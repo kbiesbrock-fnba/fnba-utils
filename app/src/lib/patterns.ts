@@ -6,9 +6,9 @@ export const JIRA_IN_URL_RE = /\/browse\/([A-Z][A-Z0-9]*-\d+)/i;
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Single-line path: C:\... or /... or ~ / ~/...
+// Single-line path: C:\... or \\unc\... or /... or ~ / ~/...
 // Tilde: bare "~", "~/", or "~/anything" — but NOT "~word" (no slash).
-const PATH_RE = /^(?:[A-Za-z]:[/\\]\S+|\/\S+|~(?=$|[/\\])\S*)/;
+const PATH_RE = /^(?:[A-Za-z]:[/\\]\S+|\\\\\S+|\/\S+|~(?=$|[/\\])\S*)/;
 const SQL_FIRST_WORD_RE = /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\b/i;
 
 export function isJsonText(q: string): boolean {

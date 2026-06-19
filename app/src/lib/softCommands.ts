@@ -9,7 +9,7 @@
 // land in Stage 2, which needs new path-aware Rust commands.
 
 import type { PaletteCommand } from "@/commands/types";
-import { copyText, runInTerminal, openInExplorer, openPathInEditor, resolvePath, openInNotepadpp } from "@/lib/tauri";
+import { copyText, runInTerminal, openInExplorer, openPathInEditor, resolvePath, openInNotepadpp, revealInExplorer } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
 import { openNewJsonViewerWindow } from "@/lib/jsonViewerWindow";
 import { openNewMarkdownViewerWindow } from "@/lib/markdownViewerWindow";
@@ -155,17 +155,17 @@ function buildPathRows(rawPath: string): PaletteCommand[] {
   return [
     row({
       id: "soft:path:explorer",
-      name: "Open in Explorer",
+      name: "Show in Explorer",
       description: rawPath,
       icon: "📂",
       action: async () => {
         const r = await resolvePath(rawPath);
-        // For a file: open the containing folder (strip the last segment from
-        // the resolved Windows path); for a dir or unknown: open it directly.
-        const target = r.exists && r.isFile
-          ? r.windows.replace(/\\[^\\]+$/, "") || r.windows
-          : r.windows;
-        await openInExplorer(target);
+        // File: reveal it highlighted in its folder. Dir/unknown: open directly.
+        if (r.exists && r.isFile) {
+          await revealInExplorer(r.windows);
+        } else {
+          await openInExplorer(r.windows);
+        }
       },
     }),
     row({

@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+- Command palette now recognizes `\\wsl.localhost\…` UNC paths and reveals files in Explorer with the file highlighted.
+
 - **Clipboard: content-aware labels** — entry badges now show what the content actually is (URL, JSON, Jira key, SQL, file path, GUID, email) instead of the raw capture kind (`html`/`text`). A browser copy that's really a link reads `url`, not `html`. Sensitive entries always show `sensitive`.
 - **Clipboard: "All" view now shows newest first and excludes pinned items.** Pinned items remain reachable via the Pinned tab and `Win+Shift+V`.
 
