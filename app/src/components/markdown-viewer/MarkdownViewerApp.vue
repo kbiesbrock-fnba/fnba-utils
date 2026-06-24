@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { renderMarkdown } from "../../lib/markdown";
 import { touchEntry, removeEntry, saveState, saveWin, readRegistry } from "../../lib/markdownViewerRegistry";
 import { readMarkdownDoc, writeMarkdownDoc, deleteMarkdownDoc, openMarkdownFile, saveMarkdownAs, saveMarkdownFile, statMarkdownFile, readMarkdownFile } from "../../lib/tauri";
@@ -26,6 +26,11 @@ const externalChange = ref<null | "changed" | "deleted">(null);
 
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const splitPreviewRef = ref<HTMLElement | null>(null);
+// Ref for the solo edit-mode textarea (distinct element from splitEditorRef).
+const editRef = ref<HTMLTextAreaElement | null>(null);
+// Source char-range captured from a preview selection; carried into the editor
+// on the next mode switch to 'edit' or 'split'.
+let previewSelRange: { start: number; end: number } | null = null;
 // Guards the scroll-sync feedback loop (programmatic scroll re-fires @scroll).
 let syncing = false;
 
@@ -226,9 +231,97 @@ function onPreviewScroll() {
 const statusHint = computed(() => {
   const base = "Ctrl+S Save · Ctrl+O Open · F11 Fullscreen · ⎋ Close";
   return mode.value === "split"
-    ? `Ctrl+click jump to source · ${base}`
+    ? `Ctrl+click to sync panes · ${base}`
     : base;
 });
+
+// Ctrl+click on the editor pane → scroll the preview to the clicked source line.
+function onEditorClick(e: MouseEvent) {
+  if (!e.ctrlKey) return;
+  const editor = splitEditorRef.value;
+  const preview = splitPreviewRef.value;
+  if (!editor || !preview) return;
+
+  const rect = editor.getBoundingClientRect();
+  const relY = e.clientY - rect.top + editor.scrollTop;
+  const line = lineAtScroll(editor, relY);
+
+  const anchors = previewAnchors(preview);
+  let targetTop: number;
+  if (anchors.length < 2) {
+    const pr = preview.scrollHeight - preview.clientHeight;
+    targetTop = editor.scrollHeight > 0
+      ? Math.min((relY / editor.scrollHeight) * preview.scrollHeight, pr)
+      : 0;
+  } else {
+    let lo = anchors[0];
+    let hi = anchors[anchors.length - 1];
+    for (let i = 0; i < anchors.length; i++) {
+      if (anchors[i].line <= line) lo = anchors[i];
+      if (anchors[i].line >= line) { hi = anchors[i]; break; }
+    }
+    targetTop = hi.line === lo.line
+      ? lo.top
+      : lo.top + ((line - lo.line) / (hi.line - lo.line)) * (hi.top - lo.top);
+  }
+  syncing = true;
+  preview.scrollTop = Math.max(0, targetTop - preview.clientHeight / 3);
+  requestAnimationFrame(() => { syncing = false; });
+}
+
+// --- Preview → editor selection sync ---
+
+/** Walk up from a DOM node to the nearest [data-source-line] ancestor. */
+function closestSourceLine(node: Node | null): number | null {
+  let el: Element | null = node instanceof Element ? node : node?.parentElement ?? null;
+  while (el) {
+    const v = (el as HTMLElement).dataset?.sourceLine;
+    if (v !== undefined) return Number(v);
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/** Map two source-line indices to a start/end char offset in source.value. */
+function sourceRangeForLines(a: number, b: number): { start: number; end: number } {
+  const lines = source.value.split("\n");
+  const from = Math.max(0, Math.min(Math.min(a, b), lines.length - 1));
+  const to   = Math.max(0, Math.min(Math.max(a, b), lines.length - 1));
+  let start = 0;
+  for (let i = 0; i < from; i++) start += lines[i].length + 1;
+  let end = start;
+  for (let i = from; i <= to; i++) end += lines[i].length + (i < to ? 1 : 0);
+  return { start, end };
+}
+
+/**
+ * Fired on mouseup inside a preview pane. Captures the browser selection and
+ * maps it back to a source-line range, then:
+ *  - In split mode: immediately mirrors the selection into the editor textarea.
+ *  - Any mode: stores the range so the mode-switch watcher can apply it when
+ *    the user clicks Edit or Split.
+ */
+function onPreviewMouseUp() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+  const selRange = sel.getRangeAt(0);
+
+  const startLine = closestSourceLine(selRange.startContainer);
+  const endLine   = closestSourceLine(selRange.endContainer);
+  if (startLine === null || endLine === null) return;
+
+  const { start, end } = sourceRangeForLines(startLine, endLine);
+  previewSelRange = { start, end };
+
+  if (mode.value === "split" && splitEditorRef.value) {
+    const editor = splitEditorRef.value;
+    editor.setSelectionRange(start, end);
+    editor.scrollTop = Math.max(
+      0,
+      scrollForLine(editor, Math.min(startLine, endLine)) - editor.clientHeight / 3,
+    );
+  }
+}
 
 // --- Link interception + click-to-locate ---
 function onPreviewClick(e: MouseEvent) {
@@ -320,9 +413,27 @@ watch(source, (val) => {
   })();
 });
 
-// Watch mode: persist immediately (cheap, no debounce needed).
-watch(mode, () => {
+// Watch mode: persist immediately, and carry any preview selection into the editor.
+watch(mode, async (newMode) => {
   void persistCurrent();
+  if (previewSelRange && (newMode === "edit" || newMode === "split")) {
+    const saved = previewSelRange;
+    previewSelRange = null;
+    await nextTick();
+    const editor = newMode === "edit" ? editRef.value : splitEditorRef.value;
+    if (!editor) return;
+    editor.focus();
+    editor.setSelectionRange(saved.start, saved.end);
+    // Scroll so the start of the selection is visible.
+    const lines = source.value.split("\n");
+    let chars = 0;
+    let topLine = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (chars >= saved.start) { topLine = i; break; }
+      chars += lines[i].length + 1;
+    }
+    editor.scrollTop = Math.max(0, scrollForLine(editor, topLine) - editor.clientHeight / 3);
+  }
 });
 
 // --- External-change detection helpers ---
@@ -771,7 +882,7 @@ onUnmounted(() => {
 
     <!-- Content area -->
     <div class="content">
-      <div v-if="mode === 'preview'" class="preview-pane">
+      <div v-if="mode === 'preview'" class="preview-pane" @mouseup="onPreviewMouseUp">
         <div
           v-if="source.trim()"
           class="md-body"
@@ -784,6 +895,7 @@ onUnmounted(() => {
       </div>
       <div v-else-if="mode === 'edit'" class="edit-pane">
         <textarea
+          ref="editRef"
           v-model="source"
           placeholder="Type or paste Markdown…"
           class="md-editor"
@@ -798,11 +910,12 @@ onUnmounted(() => {
               placeholder="Type or paste Markdown…"
               class="md-editor"
               @scroll="onEditorScroll"
+              @click="onEditorClick"
             />
           </div>
         </template>
         <template #right>
-          <div ref="splitPreviewRef" class="preview-pane" @scroll="onPreviewScroll">
+          <div ref="splitPreviewRef" class="preview-pane" @scroll="onPreviewScroll" @mouseup="onPreviewMouseUp">
             <div v-if="source.trim()" class="md-body" v-html="renderedHtml" @click="onPreviewClick" />
             <div v-else class="placeholder">Start typing on the left…</div>
           </div>
