@@ -11,6 +11,10 @@
 
 - Command palette now recognizes `\\wsl.localhost\…` UNC paths and reveals files in Explorer with the file highlighted.
 
+- **Assume Identity hides people who can't be assumed.** Directory and rights-holder search results now tuck associates without a Windows login behind a collapsible **"Show N people without a Windows login"** row — they can't be assumed anyway (no login exists), so they no longer clutter the list or use up the 1–9 quick-pick numbers. Click the row to reveal them; each new search and right drill starts collapsed.
+
+- **Markdown Viewer: panes sync both ways.** In split view, **Ctrl+click** in the editor now scrolls the preview to that line (the reverse — Ctrl+click in the preview to jump to source — already worked). And selecting text in the rendered preview mirrors the selection into the editor — instantly in split view, or carried over when you switch to Edit/Split — so you can highlight what you see and land on it in the source.
+
 - **Clipboard: content-aware labels** — entry badges now show what the content actually is (URL, JSON, Jira key, SQL, file path, GUID, email) instead of the raw capture kind (`html`/`text`). A browser copy that's really a link reads `url`, not `html`. Sensitive entries always show `sensitive`.
 - **Clipboard: "All" view now shows newest first and excludes pinned items.** Pinned items remain reachable via the Pinned tab and `Win+Shift+V`.
 
