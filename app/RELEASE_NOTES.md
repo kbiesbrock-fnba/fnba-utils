@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+- **Docker Widget** (🐳, search "docker"): an always-on, borderless gadget that sits flush above the Windows taskbar and shows your Docker containers at a glance. It has three states: a compact heading (a health dot for your pinned containers plus running/total counts), a hover view of your pinned set (running first) with a "show all" bar, and an expanded view of every container grouped by Compose project. The health dot is scoped to your pins — green when all pinned containers are running, amber when one is stopped, red on an unhealthy/restart-looping/dead container, grey when the Docker engine is down. Hover any row for **start / stop / restart**, a **logs** peek, an **exec shell**, or **open mapped port**; pin the containers you care about from the expanded view and your pins (and the widget's position) persist across restarts. The widget never steals focus and collapses itself when you click elsewhere or switch windows. Open it from the palette command **Docker Widget**.
+
 - Command palette now recognizes `\\wsl.localhost\…` UNC paths and reveals files in Explorer with the file highlighted.
 
 - **Assume Identity hides people who can't be assumed.** Directory and rights-holder search results now tuck associates without a Windows login behind a collapsible **"Show N people without a Windows login"** row — they can't be assumed anyway (no login exists), so they no longer clutter the list or use up the 1–9 quick-pick numbers. Click the row to reveal them; each new search and right drill starts collapsed.

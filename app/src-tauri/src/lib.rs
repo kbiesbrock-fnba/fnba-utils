@@ -7,6 +7,7 @@ mod models;
 mod standup_db;
 mod state;
 mod util;
+mod widget_focus;
 
 /// Public re-exports for the `fnba-clipd` daemon binary, which only needs
 /// the clipboard subsystem (no Tauri / commands / standup).
@@ -58,6 +59,30 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+/// Collapse the Docker widget when the user switches to another window. The
+/// widget is intentionally non-focusable, so it never holds the foreground and
+/// receives no OS blur event — instead we watch for any change in the
+/// foreground window, which means "the user looked away", and emit a defocus
+/// event the widget listens for.
+#[cfg(windows)]
+fn spawn_foreground_watch(app: AppHandle) {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    std::thread::spawn(move || {
+        let mut last: isize = unsafe { GetForegroundWindow().0 as isize };
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let cur = unsafe { GetForegroundWindow().0 as isize };
+            if cur != last {
+                last = cur;
+                let _ = app.emit("docker-widget-defocus", ());
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn spawn_foreground_watch(_app: AppHandle) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Must run before any State::load() below — those loaders read from the
@@ -84,6 +109,7 @@ pub fn run() {
         .manage(state::saved_queries::SavedQueriesState::load())
         .manage(state::clipboard_history::ClipboardHistoryState::load())
         .manage(state::test_users::TestUsersState::load())
+        .manage(state::docker_widget::DockerWidgetState::load())
         .manage(clipboard::ForegroundCapture::default())
         .manage(commands::clipboard_manager::RevealTokens::default())
         .setup(|app| {
@@ -371,6 +397,70 @@ pub fn run() {
                 eprintln!("Failed to register Super+Shift+D: {e}");
             }
 
+            // --- Docker Widget ---
+            // Always-on-top ambient gadget on the PRIMARY ("main") monitor,
+            // pinned flush above the taskbar. The bottom edge is always anchored
+            // to the work-area bottom (taskbar top); only the horizontal position
+            // is restored from a saved value (so it can be nudged left/right).
+            if let Some(w) = app.get_webview_window("docker-widget") {
+                let saved_pos = app
+                    .try_state::<state::docker_widget::DockerWidgetState>()
+                    .and_then(|s| s.position());
+
+                if let Ok(Some(monitor)) = w.primary_monitor() {
+                    let mon_size = monitor.size();
+                    let mon_pos = monitor.position();
+                    let win_size = w
+                        .outer_size()
+                        .unwrap_or(tauri::PhysicalSize::new(280, 96));
+
+                    // X: restore a saved x that's within the primary monitor,
+                    // else centre horizontally.
+                    let saved_x = saved_pos.and_then(|(sx, _sy)| {
+                        if sx >= mon_pos.x && sx < mon_pos.x + mon_size.width as i32 {
+                            Some(sx)
+                        } else {
+                            None
+                        }
+                    });
+                    let x = saved_x.unwrap_or_else(|| {
+                        mon_pos.x + (mon_size.width as i32 - win_size.width as i32) / 2
+                    });
+
+                    // Y: pin the window's bottom edge to the work-area bottom
+                    // (taskbar top). Falls back to a small fixed clearance only
+                    // if the work area can't be queried.
+                    let bottom = commands::docker::work_area_bottom()
+                        .unwrap_or(mon_pos.y + mon_size.height as i32 - 48);
+                    let y = bottom - win_size.height as i32;
+
+                    let _ = w.set_position(tauri::Position::Physical(
+                        tauri::PhysicalPosition::new(x, y),
+                    ));
+                }
+
+                // Allow the window to shrink to the heading height — the OS
+                // default minimum tracking size for a resizable window would
+                // otherwise clamp it, leaving the heading floating above the
+                // taskbar with empty space below.
+                let _ = w.set_min_size(Some(tauri::LogicalSize::new(1.0, 1.0)));
+
+                let _ = w.set_always_on_top(true);
+                // Intentionally NOT calling set_focus() — the widget is ambient
+                // and must not steal focus from the user's active window.
+
+                // Let the click-outside hook hit-test against this window.
+                widget_focus::track_window(&w);
+            }
+
+            // Start the Docker background poll thread (emits `docker-status`),
+            // the foreground watch (collapses on window switch / Alt-Tab), and
+            // the click-outside hook (collapses on a click off the widget) —
+            // both emit `docker-widget-defocus`.
+            commands::docker::spawn_poll_thread(app.handle().clone());
+            spawn_foreground_watch(app.handle().clone());
+            widget_focus::spawn(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -476,6 +566,17 @@ pub fn run() {
             commands::fs::resolve_path,
             commands::fs::open_in_notepadpp,
             commands::fs::reveal_in_explorer,
+            commands::docker::get_docker_status,
+            commands::docker::docker_start,
+            commands::docker::docker_stop,
+            commands::docker::docker_restart,
+            commands::docker::docker_logs,
+            commands::docker::list_pinned_containers,
+            commands::docker::pin_container,
+            commands::docker::unpin_container,
+            commands::docker::save_docker_widget_position,
+            commands::docker::get_docker_widget_position,
+            commands::docker::docker_widget_anchor_bottom,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

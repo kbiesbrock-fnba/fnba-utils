@@ -6,6 +6,7 @@ import { clipboardManagerCommand } from "./clipboard-manager";
 import { jsonViewerCommand } from "./json-viewer";
 import { markdownViewerCommand, openMarkdownFileCommand } from "./markdown-viewer";
 import { buildStandupCommand, buildStandupDescription } from "./standup";
+import { dockerWidgetCommand } from "./docker-widget";
 import { getAppConfig } from "@/lib/tauri";
 
 // Always-on commands.
@@ -16,6 +17,7 @@ const baseCommands: PaletteCommand[] = [
   jsonViewerCommand,
   markdownViewerCommand,
   openMarkdownFileCommand,
+  dockerWidgetCommand,
 ];
 
 /** Live list of palette commands. Mutated as opt-in features are detected. */
