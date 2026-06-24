@@ -1175,3 +1175,93 @@ export async function onClipboardWindowShown(
     (e) => handler(e.payload ?? {}),
   );
 }
+
+// --- Docker Widget ---
+
+export interface PortMapping {
+  hostIp: string | null;
+  hostPort: number | null;
+  containerPort: number;
+  protocol: string;
+}
+
+export type HealthState = "healthy" | "unhealthy" | "starting" | "none";
+
+export interface DockerContainer {
+  id: string;
+  name: string;
+  image: string;
+  /** "running" | "exited" | "restarting" | "created" | "paused" | "dead" | ... */
+  state: string;
+  /** Raw human string e.g. "Up 3 hours", "Restarting (1) 5 seconds ago" */
+  status: string;
+  health: HealthState;
+  restartLoop: boolean;
+  ports: PortMapping[];
+  composeProject: string | null;
+  composeService: string | null;
+  pinned: boolean;
+}
+
+export type OverallHealth = "green" | "amber" | "red";
+
+export interface DockerStatusPayload {
+  containers: DockerContainer[];
+  runningCount: number;
+  totalCount: number;
+  overall: OverallHealth;
+  engineUp: boolean;
+  error: string | null;
+}
+
+export function getDockerStatus(): Promise<DockerStatusPayload> {
+  return invoke<DockerStatusPayload>("get_docker_status");
+}
+
+export function dockerStart(id: string): Promise<void> {
+  return invoke<void>("docker_start", { id });
+}
+
+export function dockerStop(id: string): Promise<void> {
+  return invoke<void>("docker_stop", { id });
+}
+
+export function dockerRestart(id: string): Promise<void> {
+  return invoke<void>("docker_restart", { id });
+}
+
+export function dockerLogs(id: string, tail: number): Promise<string> {
+  return invoke<string>("docker_logs", { id, tail });
+}
+
+export function listPinnedContainers(): Promise<string[]> {
+  return invoke<string[]>("list_pinned_containers");
+}
+
+export function pinContainer(name: string): Promise<void> {
+  return invoke<void>("pin_container", { name });
+}
+
+export function unpinContainer(name: string): Promise<void> {
+  return invoke<void>("unpin_container", { name });
+}
+
+export function saveDockerWidgetPosition(x: number, y: number): Promise<void> {
+  return invoke<void>("save_docker_widget_position", { x, y });
+}
+
+export function getDockerWidgetPosition(): Promise<[number, number] | null> {
+  return invoke<[number, number] | null>("get_docker_widget_position");
+}
+
+/** Physical-px bottom edge of the primary work area (taskbar top), or null. */
+export function getDockerWidgetAnchorBottom(): Promise<number | null> {
+  return invoke<number | null>("docker_widget_anchor_bottom");
+}
+
+export async function onDockerStatus(
+  handler: (p: DockerStatusPayload) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<DockerStatusPayload>("docker-status", (e) => handler(e.payload));
+}

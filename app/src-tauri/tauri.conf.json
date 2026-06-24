@@ -113,6 +113,25 @@
         "visible": false,
         "alwaysOnTop": true,
         "skipTaskbar": true
+      },
+      {
+        "label": "docker-widget",
+        "title": "Docker",
+        "url": "index.html#docker-widget",
+        "width": 280,
+        "height": 96,
+        "x": 0,
+        "y": 0,
+        "resizable": true,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "visible": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false
       }
     ],
     "security": {

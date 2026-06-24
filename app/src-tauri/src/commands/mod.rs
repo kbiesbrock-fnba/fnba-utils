@@ -2,6 +2,7 @@ pub mod assume_identity;
 pub mod claude_io;
 pub mod clipboard_manager;
 pub mod directory;
+pub mod docker;
 pub mod fs;
 pub mod json_viewer;
 pub mod markdown_docs;

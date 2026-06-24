@@ -1,4 +1,5 @@
 pub mod clipboard_history;
+pub mod docker_widget;
 pub mod owned_sessions;
 pub mod paths;
 pub mod projects;
