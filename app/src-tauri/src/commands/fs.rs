@@ -105,15 +105,16 @@ pub async fn resolve_path(path: String) -> ResolvedPath {
 /// its OS-registered handler via `cmd /c start` (ShellExecute) — `explorer.exe
 /// <file>` only opens folders, so it would silently do nothing for a file.
 ///
-/// `-multiInst -nosession <file>` opens a fresh Notepad++ instance rather than
-/// hijacking an existing session.
+/// No `-multiInst`: Notepad++ is single-instance by default, so passing just the
+/// file path opens it as a new tab in the already-running window (or starts one
+/// if none is open) rather than spawning a fresh instance each time.
 #[tauri::command]
 pub async fn open_in_notepadpp(path: String) -> Result<(), String> {
     let windows = wsl_path_to_windows(&windows_path_to_wsl(&path));
 
     let exe = notepadpp_exe();
     if std::process::Command::new(&exe)
-        .args(["-multiInst", "-nosession", &windows])
+        .arg(&windows)
         .spawn()
         .is_ok()
     {

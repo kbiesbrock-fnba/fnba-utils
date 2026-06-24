@@ -161,6 +161,13 @@ pub fn run() {
                                 }
                                 let _ = w.show();
                                 let _ = w.set_focus();
+                                // Signal the frontend that the palette just
+                                // became visible so it can (re)focus the search
+                                // input. CommandInput's onMounted focus fires
+                                // only once (the component stays mounted across
+                                // hide/show), so without this the caret
+                                // intermittently fails to land in the box.
+                                let _ = app.emit("palette-shown", ());
                             }
                         }
                     }

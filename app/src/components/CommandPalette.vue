@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { usePalette } from "@/composables/usePalette";
 import { useKeyLayer, KEY_PRIORITY } from "@/composables/useKeyLayer";
-import { openAppDataFolder } from "@/lib/tauri";
+import { openAppDataFolder, onPaletteShown } from "@/lib/tauri";
 import CommandInput from "./CommandInput.vue";
 import CommandList from "./CommandList.vue";
 import StatusBar from "./StatusBar.vue";
@@ -20,6 +20,7 @@ const {
   chainSelection,
   selectByIndex,
   onSearchChange,
+  reset,
 } = usePalette();
 
 const commandRef = ref<{ step: string } | null>(null);
@@ -96,6 +97,22 @@ useKeyLayer(
   ],
   { priority: KEY_PRIORITY.PALETTE },
 );
+
+// Reset to a fresh browsing state whenever the palette is shown via the global
+// hotkey — the Rust side hides without resetting, so a palette left in
+// command-active mode would otherwise reopen without the search input. This
+// guarantees CommandInput is mounted; CommandInput re-focuses on the same event.
+let unlistenShown: (() => void) | null = null;
+let disposed = false;
+onMounted(async () => {
+  const un = await onPaletteShown(() => reset());
+  if (disposed) un();
+  else unlistenShown = un;
+});
+onBeforeUnmount(() => {
+  disposed = true;
+  unlistenShown?.();
+});
 </script>
 
 <template>

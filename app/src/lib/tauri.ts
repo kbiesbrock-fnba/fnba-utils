@@ -907,6 +907,12 @@ export function openInNotepadpp(path: string): Promise<void> {
   return invoke<void>("open_in_notepadpp", { path });
 }
 
+/** Fires when the command palette is shown via the Win+Shift+F global shortcut. */
+export async function onPaletteShown(handler: () => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("palette-shown", () => handler());
+}
+
 export function revealInExplorer(path: string): Promise<void> {
   return invoke<void>("reveal_in_explorer", { path });
 }
