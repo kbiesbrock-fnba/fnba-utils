@@ -41,7 +41,6 @@ export interface AssumeIdentityResult {
 }
 
 export interface SaveCustomEntryResult {
-  addedUser: boolean;
   addedConnection: boolean;
   addedImposter: boolean;
 }
@@ -530,15 +529,11 @@ export function executeAssumeIdentity(
 }
 
 export function saveCustomEntry(
-  user?: string,
-  userLabel?: string,
   connection?: string,
   connectionLabel?: string,
   imposter?: string,
 ): Promise<SaveCustomEntryResult> {
   return invoke<SaveCustomEntryResult>("save_custom_entry", {
-    user: user ?? null,
-    userLabel: userLabel ?? null,
     connection: connection ?? null,
     connectionLabel: connectionLabel ?? null,
     imposter: imposter ?? null,
