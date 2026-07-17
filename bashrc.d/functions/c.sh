@@ -11,14 +11,17 @@ c() {
     if tmux has-session -t "$session_name" 2>/dev/null; then
         exec tmux attach-session -t "$session_name"
     else
-        # 3. Determine if a Claude session with this name already exists
-        local claude_cmd
-        if claude --list 2>/dev/null | grep -qF "$session_name"; then
-            # If it exists, resume it
-            claude_cmd="bash -ic 'claude --resume \"$session_name\"'"
+        # 3. Resume the Claude session for this cwd+name if one exists.
+        # claude keys sessions by UUID (--resume with a non-UUID just opens
+        # the picker), so derive a stable v5 UUID from cwd+name and probe for
+        # its transcript under ~/.claude/projects to decide resume vs create.
+        local session_id project_dir claude_cmd
+        session_id=$(uuidgen --sha1 --namespace @dns --name "$PWD/$session_name")
+        project_dir="$HOME/.claude/projects/$(printf '%s' "$PWD" | tr -c 'a-zA-Z0-9' '-')"
+        if [ -f "$project_dir/$session_id.jsonl" ]; then
+            claude_cmd="bash -ic 'claude --resume $session_id'"
         else
-            # If it is new, create it with this specific name
-            claude_cmd="bash -ic 'claude --name \"$session_name\"'"
+            claude_cmd="bash -ic 'claude --session-id $session_id --name \"$session_name\"'"
         fi
 
         # 4. Create the tmux session detached
