@@ -59,14 +59,6 @@ impl SqlLibraryState {
         self.inner.lock().ok().and_then(|g| g.root.clone())
     }
 
-    /// Whether the one-time export has already been stamped.
-    pub fn has_exported(&self) -> bool {
-        self.inner
-            .lock()
-            .map(|g| g.exported_at.is_some())
-            .unwrap_or(true)
-    }
-
     /// Set (or change) the root and persist. Leaves `exported_at` untouched.
     pub fn set_root(&self, root: String) -> Result<SqlLibraryConfig, String> {
         let mut guard = self
