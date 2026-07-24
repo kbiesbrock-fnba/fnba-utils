@@ -23,8 +23,9 @@ const {
   users,
   connections,
   selectedUser,
-  selectedConnection,
-  result,
+  selectedConnections,
+  runResults,
+  executingProgress,
   error,
   loading,
   recentUsers,
@@ -35,7 +36,7 @@ const {
   reset,
   selectImposter,
   selectUser,
-  selectConnection,
+  selectConnections,
   pinUser,
   unpinFavorite,
   removeRecentUser,
@@ -60,22 +61,15 @@ onMounted(async () => {
 
 onUnmounted(() => reset());
 
-function goBackWithResultReset(): boolean {
-  if (step.value === "result") {
-    step.value = "connection";
-    selectedConnection.value = null;
-    result.value = null;
-    return true;
-  }
-  return goBack();
-}
-
 useCommandKeys({
   step,
-  goBack: goBackWithResultReset,
+  goBack,
   emitBack: () => emit("back"),
   emitDismiss: () => emit("dismiss"),
   escapeDismissSteps: ["error"],
+  // On the combined result step Escape does nothing (but is swallowed so it
+  // can't fall through and close/back the palette); only Enter closes.
+  escapeNoopSteps: ["result"],
   enterActions: {
     userRights: () => assumeInspected(),
     confirm: () => execute(),
@@ -119,8 +113,13 @@ defineExpose({ step });
   </template>
 
   <template v-else-if="step === 'connection'">
-    <ConnectionPicker :connections="connections" @select="selectConnection" @delete-custom="deleteCustomConnection" />
-    <StatusBar hint="↑↓ Navigate  ⏎ Select  ⎋ Back" />
+    <ConnectionPicker
+      :connections="connections"
+      :initial-checked="selectedConnections"
+      @select="selectConnections"
+      @delete-custom="deleteCustomConnection"
+    />
+    <StatusBar hint="↑↓ Navigate  ␣ Toggle  ⏎ Continue  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'confirm'">
@@ -129,28 +128,46 @@ defineExpose({ step });
       <div class="confirm-identity">{{ selectedUser?.username }}</div>
       <div v-if="selectedUserLabels.length" class="confirm-labels">{{ selectedUserLabels.join(' · ') }}</div>
       <div class="confirm-detail">
-        <span class="confirm-on">on</span>
-        <span class="confirm-connection">{{ selectedConnection?.server }}</span>
-      </div>
-      <div class="confirm-detail">
         <span class="confirm-on">as</span>
         <span class="confirm-connection">{{ selectedImposter }}</span>
       </div>
+      <div class="confirm-conn-header">
+        on {{ selectedConnections.length }} connection{{ selectedConnections.length === 1 ? '' : 's' }}
+      </div>
+      <ul class="confirm-conn-list">
+        <li v-for="conn in selectedConnections" :key="conn.server" class="confirm-conn-row">
+          <span class="confirm-connection">{{ conn.server }}</span>
+          <span class="confirm-conn-label">{{ conn.label }}</span>
+        </li>
+      </ul>
       <button class="confirm-btn" @click="execute">Go</button>
     </div>
     <StatusBar hint="⏎ Confirm  ⎋ Back" />
   </template>
 
   <template v-else-if="step === 'executing'">
-    <LoadingView :message="`Becoming ${selectedUser?.username} on ${selectedConnection?.server}...`" />
+    <LoadingView
+      :message="executingProgress
+        ? `Becoming ${selectedUser?.username} — ${executingProgress.current}/${executingProgress.total} · ${executingProgress.server}...`
+        : `Becoming ${selectedUser?.username}...`"
+    />
   </template>
 
-  <template v-else-if="step === 'result' && result">
-    <AssumeIdentityResult :result="result" />
+  <template v-else-if="step === 'result'">
+    <div class="multi-result">
+      <div v-for="run in runResults" :key="run.connection.server" class="multi-result-section">
+        <div class="multi-result-head">
+          <span class="multi-result-server">{{ run.connection.server }}</span>
+          <span class="multi-result-label">{{ run.connection.label }}</span>
+        </div>
+        <AssumeIdentityResult v-if="run.result" :result="run.result" />
+        <ErrorView v-else-if="run.error" :error="run.error" />
+      </div>
+    </div>
     <div class="close-row">
       <button class="confirm-btn" @click="emit('dismiss')">Close</button>
     </div>
-    <StatusBar hint="⏎ Close  ⎋ Back" />
+    <StatusBar hint="⏎ Close" />
   </template>
 
   <template v-else-if="step === 'error'">
@@ -226,6 +243,74 @@ defineExpose({ step });
 .confirm-btn:hover {
   border-color: var(--text-secondary);
   color: var(--text-primary);
+}
+
+.confirm-conn-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+
+.confirm-conn-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  width: 100%;
+  max-width: 320px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.confirm-conn-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.confirm-conn-row:last-child {
+  border-bottom: none;
+}
+
+.confirm-conn-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.multi-result {
+  overflow-y: auto;
+  max-height: 420px;
+}
+
+.multi-result-section + .multi-result-section {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.multi-result-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 20px 0;
+}
+
+.multi-result-server {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.multi-result-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .close-row {
