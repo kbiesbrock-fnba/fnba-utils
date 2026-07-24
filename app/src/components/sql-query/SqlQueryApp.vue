@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useSqlQuery } from "@/composables/useSqlQuery";
+import { openInNotepadpp } from "@/lib/tauri";
 import PinButton from "@/components/common/PinButton.vue";
 
 const {
@@ -33,17 +34,15 @@ const {
   closeWindow,
   // Filesystem library
   libraryRoot,
+  libraryConfigPath,
   libraryTruncated,
   libraryError,
-  setupError,
   libraryLoading,
   loadedRelPath,
   dirty,
   flatTree,
   libraryDirs,
-  refreshTree,
-  chooseFolder,
-  applyRoot,
+  reloadLibrary,
   openLibraryFile,
   saveLoadedFile,
   saveAsFile,
@@ -53,10 +52,7 @@ const {
   toggleTreeCollapsed,
 } = useSqlQuery();
 
-// ---- Library chooser (first-run + change root) ----
-const showChooser = ref(false);
-const rootInput = ref("");
-
+// ---- Library root (read-only, set in config.yaml) ----
 /** Middle-ellipsized root for the header bar; full path stays in the title. */
 const libraryRootDisplay = computed(() => {
   const r = libraryRoot.value ?? "";
@@ -64,26 +60,20 @@ const libraryRootDisplay = computed(() => {
   return `${r.slice(0, 6)}…${r.slice(-27)}`;
 });
 
-function openChooser() {
-  rootInput.value = libraryRoot.value ?? "";
-  showChooser.value = true;
-}
+/** Literal config.yaml location shown in the no-root notice. */
+const CONFIG_HINT_PATH = "%LOCALAPPDATA%\\fnba-utils\\config.yaml";
+/** Copyable YAML snippet for the no-root notice. */
+const CONFIG_SNIPPET = "sql_library:\n  root: \\\\wsl$\\Ubuntu\\home\\you\\dev\\sql";
 
-function cancelChooser() {
-  showChooser.value = false;
-  rootInput.value = "";
-}
-
-async function onUsePath() {
-  const p = rootInput.value.trim();
+/** Open config.yaml in the default editor (Notepad++ / OS handler). */
+async function onOpenConfig() {
+  const p = libraryConfigPath.value;
   if (!p) return;
-  const ok = await applyRoot(p);
-  if (ok) cancelChooser();
-}
-
-async function onChooseFolder() {
-  await chooseFolder();
-  if (libraryRoot.value && !setupError.value) cancelChooser();
+  try {
+    await openInNotepadpp(p);
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ---- Tree interactions ----
@@ -454,13 +444,6 @@ function onGlobalKeydown(e: KeyboardEvent) {
     cancelSaveAs();
     return;
   }
-  if (showChooser.value && libraryRoot.value) {
-    // Only cancelable when a root already exists — the first-run chooser IS
-    // the panel, so Escape there falls through to closing the window.
-    e.preventDefault();
-    cancelChooser();
-    return;
-  }
   if (showSaveInput.value) {
     e.preventDefault();
     cancelSave();
@@ -528,7 +511,7 @@ const totalSavedCount = computed(() =>
               :class="{ spinning: libraryLoading }"
               title="Refresh library"
               aria-label="Refresh library"
-              @click="refreshTree"
+              @click="reloadLibrary"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
                 <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
@@ -537,49 +520,36 @@ const totalSavedCount = computed(() =>
             </button>
           </div>
 
-          <!-- Current root + Change… (only once configured) -->
+          <!-- Current root (read-only; set in config.yaml). -->
           <div v-if="libraryRoot" class="sq-lib-rootbar" :title="libraryRoot">
             <span class="sq-lib-rootpath">{{ libraryRootDisplay }}</span>
-            <button class="sq-lib-change" @click="openChooser">Change…</button>
           </div>
 
-          <!-- Chooser: first-run (always) or change (toggled). -->
-          <div v-if="!libraryRoot || showChooser" class="sq-lib-setup">
-            <p v-if="!libraryRoot" class="sq-lib-explainer">
+          <!-- No root configured: point the user at config.yaml. -->
+          <div v-if="!libraryRoot" class="sq-lib-setup">
+            <p class="sq-lib-explainer">
               Save queries as <code>.sql</code> files in a folder — subfolders
-              become headings. Point it at a WSL path such as
-              <code>\\wsl$\Ubuntu\home\you\dev\sql</code>.
+              become headings. Set the folder in your config file, then Refresh:
             </p>
-            <button class="sq-save-confirm sq-lib-choose" @click="onChooseFolder">
-              Choose folder…
-            </button>
-            <input
-              v-model="rootInput"
-              class="sq-save-input"
-              placeholder="\\wsl$\Ubuntu\home\you\dev\sql"
-              spellcheck="false"
-              @keydown.enter="onUsePath"
-            />
+            <code class="sq-lib-configpath">{{ CONFIG_HINT_PATH }}</code>
+            <pre class="sq-lib-snippet">{{ CONFIG_SNIPPET }}</pre>
             <div class="sq-save-form-actions">
-              <button v-if="libraryRoot" class="sq-save-cancel" @click="cancelChooser">
-                Cancel
-              </button>
               <button
-                class="sq-save-confirm"
-                :disabled="!rootInput.trim()"
-                @click="onUsePath"
+                v-if="libraryConfigPath"
+                class="sq-save-cancel"
+                @click="onOpenConfig"
               >
-                Use path
+                Open config
               </button>
+              <button class="sq-save-confirm" @click="reloadLibrary">Refresh</button>
             </div>
-            <div v-if="setupError" class="sq-lib-error">{{ setupError }}</div>
           </div>
 
           <!-- Tree browser (root configured). -->
           <template v-if="libraryRoot">
             <div v-if="libraryError" class="sq-lib-banner">
               <span>{{ libraryError }}</span>
-              <button class="sq-lib-retry" @click="refreshTree">Retry</button>
+              <button class="sq-lib-retry" @click="reloadLibrary">Retry</button>
             </div>
             <div class="sq-saved-list">
               <div v-if="libraryTruncated" class="sq-lib-note">
@@ -1109,22 +1079,6 @@ const totalSavedCount = computed(() =>
   color: var(--text-secondary);
 }
 
-.sq-lib-change {
-  flex-shrink: 0;
-  font-size: 10px;
-  padding: 2px 6px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.sq-lib-change:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
 .sq-lib-setup {
   display: flex;
   flex-direction: column;
@@ -1147,14 +1101,28 @@ const totalSavedCount = computed(() =>
   word-break: break-all;
 }
 
-.sq-lib-choose {
-  width: 100%;
+/* Literal config path + copyable YAML snippet in the no-root notice. */
+.sq-lib-configpath {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-primary);
+  word-break: break-all;
+  user-select: all;
 }
 
-.sq-lib-error {
-  font-size: 10px;
-  color: var(--accent-red);
-  word-break: break-word;
+.sq-lib-snippet {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  white-space: pre;
+  overflow-x: auto;
+  user-select: all;
 }
 
 .sq-lib-banner {

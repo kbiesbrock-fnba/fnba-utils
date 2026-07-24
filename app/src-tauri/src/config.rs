@@ -7,6 +7,20 @@ use std::path::PathBuf;
 pub struct AppConfig {
     #[serde(default)]
     pub standup: Option<StandupConfig>,
+    #[serde(default)]
+    pub sql_library: Option<SqlLibraryConfig>,
+}
+
+/// Optional `sql_library:` section pointing the SQL Query panel at a folder of
+/// `.sql` files. Read-only from the app (config.yaml is never written back), so
+/// the user edits it by hand and hits Refresh in the panel to pick up changes.
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SqlLibraryConfig {
+    /// Root directory. Typically a WSL UNC path
+    /// (`\\wsl$\Ubuntu\home\you\dev\sql`); posix/`~` forms are normalized to a
+    /// Windows-reachable path by the sql_library commands.
+    #[serde(default)]
+    pub root: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -66,6 +80,15 @@ impl AppConfig {
 
     pub fn config_path() -> Option<PathBuf> {
         Some(crate::state::paths::data_file("config.yaml"))
+    }
+
+    /// The configured SQL-library root, trimmed and non-empty, or `None`.
+    pub fn sql_library_root(&self) -> Option<String> {
+        self.sql_library
+            .as_ref()
+            .and_then(|s| s.root.clone())
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
     }
 
     /// True only when standup is explicitly enabled AND both credentials are present.

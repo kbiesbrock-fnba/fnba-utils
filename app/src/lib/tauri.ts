@@ -224,12 +224,15 @@ export interface LegacySavedSqlQuery {
   database: string;
 }
 
-/** Config for the filesystem-backed SQL query library. */
+/** Status for the filesystem-backed SQL query library. Root comes from
+ *  `config.yaml` (`sql_library.root`), re-read on each call. */
 export interface SqlLibraryConfig {
-  /** Windows-reachable root dir (drive or `\\wsl$\…` UNC), or null if unset. */
+  /** Windows-reachable root from config.yaml, or null when the key is unset. */
   root: string | null;
   /** Epoch-ms of the one-time legacy export, or null if it never ran. */
   exportedAt: number | null;
+  /** Absolute path to config.yaml, for the "Open config" affordance. */
+  configPath: string | null;
 }
 
 /** A node in the SQL library tree — a directory (with children) or a .sql file. */
@@ -814,19 +817,10 @@ export async function onSqlQueriesChanged(
   return listen<null>("sql-queries-changed", () => handler());
 }
 
-/** Filesystem-backed SQL query library (root of `.sql` files). */
+/** Filesystem-backed SQL query library (root of `.sql` files). Re-reads
+ *  config.yaml, so it reflects hand-edits without an app restart. */
 export function getSqlLibrary(): Promise<SqlLibraryConfig> {
   return invoke<SqlLibraryConfig>("get_sql_library");
-}
-
-/** Native folder picker → chosen Windows-reachable path, or null on cancel. */
-export function pickSqlLibraryRoot(): Promise<string | null> {
-  return invoke<string | null>("pick_sql_library_root");
-}
-
-/** Set/change the library root; triggers the one-time export the first time. */
-export function setSqlLibraryRoot(path: string): Promise<SqlLibraryConfig> {
-  return invoke<SqlLibraryConfig>("set_sql_library_root", { path });
 }
 
 export function sqlLibraryTree(): Promise<SqlLibraryTree> {

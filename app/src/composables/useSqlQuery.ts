@@ -11,13 +11,11 @@ import {
   migrateLegacySqlQueries,
   moveSqlQueryToGroup,
   onSqlQueriesChanged,
-  pickSqlLibraryRoot,
   recordSqlQueryUsed,
   removeSqlGroup,
   removeSqlQuery,
   renameSqlGroup,
   setSqlGroupPinned,
-  setSqlLibraryRoot,
   sqlLibraryDelete,
   sqlLibraryMkdir,
   sqlLibraryRead,
@@ -29,7 +27,6 @@ import {
   type QueryResult,
   type SavedSqlQuery,
   type SqlGroup,
-  type SqlLibraryConfig,
   type SqlTreeNode,
 } from "@/lib/tauri";
 import {
@@ -141,14 +138,14 @@ const collapsedGroupIds = ref<Set<string>>(readCollapsed());
 const loading = ref(false);
 
 // ---- Filesystem-backed SQL library ----
-const libraryConfig = ref<SqlLibraryConfig | null>(null);
-const libraryRoot = computed(() => libraryConfig.value?.root ?? null);
+// The root lives in config.yaml (sql_library.root) — re-read on each reload,
+// there's no in-app setter. `libraryRoot` is null when the key is unset.
+const libraryRoot = ref<string | null>(null);
+const libraryConfigPath = ref<string | null>(null);
 const libraryTree = ref<SqlTreeNode[]>([]);
 const libraryTruncated = ref(false);
 /** Reachability / load error for the tree panel (drives the WSL banner). */
 const libraryError = ref<string | null>(null);
-/** Validation error shown on the pre-root setup card. */
-const setupError = ref<string | null>(null);
 const libraryLoading = ref(false);
 const treeCollapsed = ref<Set<string>>(new Set());
 /** Rel-path of the .sql file currently loaded into the editor, if any. */
@@ -310,79 +307,47 @@ async function loadConnections() {
 
 // ---- Library operations ----
 
-async function loadLibraryConfig() {
-  try {
-    libraryConfig.value = await getSqlLibrary();
-  } catch (e) {
-    console.warn("[sql-query] failed to load library config:", e);
-    libraryConfig.value = { root: null, exportedAt: null };
-  }
-}
-
-/** (Re)read the tree for the configured root. Never throws — reachability
- *  problems surface as `libraryError` so the panel keeps working. */
-async function refreshTree() {
-  const root = libraryRoot.value;
-  if (!root) return;
+/** Re-read config.yaml (for the root) then, if a root is set, walk the tree.
+ *  Called on init, by the Refresh button, on window focus, and after mutations
+ *  — so hand-edits to config.yaml take effect without an app restart. Never
+ *  throws; reachability problems surface as `libraryError` so the panel keeps
+ *  working (the query editor + run flow are independent of library state). */
+async function reloadLibrary() {
   libraryLoading.value = true;
   try {
+    const info = await getSqlLibrary();
+    libraryRoot.value = info.root;
+    libraryConfigPath.value = info.configPath;
+    if (!info.root) {
+      // No root configured → show the config-file setup notice.
+      libraryTree.value = [];
+      libraryTruncated.value = false;
+      libraryError.value = null;
+      return;
+    }
     const tree = await sqlLibraryTree();
     libraryTree.value = tree.entries;
     libraryTruncated.value = tree.truncated;
+    libraryRoot.value = tree.root; // normalized + authoritative
     libraryError.value = null;
-    treeCollapsed.value = readTreeCollapsed(root);
+    treeCollapsed.value = readTreeCollapsed(tree.root);
   } catch (e) {
+    // Root is configured but the walk failed (WSL down / share gone). Keep the
+    // root from getSqlLibrary so the header still shows it; surface the banner.
     libraryTree.value = [];
     libraryTruncated.value = false;
     libraryError.value = "SQL library unavailable — is WSL running?";
-    console.warn("[sql-query] tree load failed:", e);
+    console.warn("[sql-query] library reload failed:", e);
   } finally {
     libraryLoading.value = false;
   }
 }
 
 /** Clear the loaded-file association WITHOUT touching the editor text. Used on
- *  root change (the rel path is meaningless under a new root) and on delete. */
+ *  delete of the loaded file. */
 function clearLoadedFile() {
   loadedRelPath.value = null;
   loadedBaseline.value = "";
-}
-
-/** Set or change the root, then reload. Root is saved server-side even when
- *  unreachable, so a change survives WSL being down (Retry recovers it). */
-async function applyRoot(path: string): Promise<boolean> {
-  setupError.value = null;
-  libraryError.value = null;
-  try {
-    libraryConfig.value = await setSqlLibraryRoot(path);
-    clearLoadedFile();
-    await refreshTree();
-    return true;
-  } catch (e) {
-    // Reflect whether the root actually got saved (it is on unreachable, but
-    // not on an early validation reject like an empty path).
-    await loadLibraryConfig();
-    clearLoadedFile();
-    if (libraryRoot.value) {
-      libraryTree.value = [];
-      libraryError.value = String(e).startsWith("unreachable")
-        ? "SQL library unavailable — is WSL running?"
-        : humanErr(e);
-    } else {
-      setupError.value = humanErr(e);
-    }
-    return false;
-  }
-}
-
-/** Open the native folder picker and adopt the chosen path. */
-async function chooseFolder() {
-  try {
-    const picked = await pickSqlLibraryRoot();
-    if (picked) await applyRoot(picked);
-  } catch (e) {
-    setupError.value = humanErr(e);
-  }
 }
 
 /** Load a .sql file into the editor, tracking it for Ctrl+S + dirty state. */
@@ -426,7 +391,7 @@ async function saveAsFile(name: string, destDir: string): Promise<boolean> {
     loadedRelPath.value = rel;
     loadedBaseline.value = sql.value;
     error.value = null;
-    await refreshTree();
+    await reloadLibrary();
     return true;
   } catch (e) {
     error.value = `Save failed: ${humanErr(e)}`;
@@ -440,7 +405,7 @@ async function createFolder(rel: string): Promise<boolean> {
   if (!trimmed) return false;
   try {
     await sqlLibraryMkdir(trimmed);
-    await refreshTree();
+    await reloadLibrary();
     return true;
   } catch (e) {
     error.value = `Create folder failed: ${humanErr(e)}`;
@@ -453,7 +418,7 @@ async function deleteLibraryEntry(rel: string): Promise<boolean> {
   try {
     await sqlLibraryDelete(rel);
     if (loadedRelPath.value === rel) clearLoadedFile();
-    await refreshTree();
+    await reloadLibrary();
     return true;
   } catch (e) {
     error.value = `Delete failed: ${humanErr(e)}`;
@@ -480,7 +445,7 @@ async function ensureLoaded() {
   await Promise.all([
     migrateLegacyOnce().then(refresh),
     loadConnections(),
-    loadLibraryConfig().then(() => (libraryRoot.value ? refreshTree() : undefined)),
+    reloadLibrary(),
   ]);
 }
 
@@ -527,10 +492,11 @@ async function startListening() {
     }
   });
 
-  // No file watcher over the WSL 9p share — refresh the tree when the window
-  // regains focus so external edits/additions show up.
+  // No file watcher over the WSL 9p share — reload (config + tree) when the
+  // window regains focus so external edits/additions (and config.yaml changes)
+  // show up.
   window.addEventListener("focus", () => {
-    if (libraryRoot.value) void refreshTree();
+    void reloadLibrary();
   });
 
   // Saved queries + groups are global, not per-server. Every panel listens for
@@ -763,20 +729,17 @@ export function useSqlQuery() {
     togglePin,
     closeWindow,
     // ---- Filesystem library ----
-    libraryConfig,
     libraryRoot,
+    libraryConfigPath,
     libraryTree,
     libraryTruncated,
     libraryError,
-    setupError,
     libraryLoading,
     loadedRelPath,
     dirty,
     flatTree,
     libraryDirs,
-    refreshTree,
-    chooseFolder,
-    applyRoot,
+    reloadLibrary,
     openLibraryFile,
     saveLoadedFile,
     saveAsFile,

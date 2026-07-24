@@ -637,8 +637,6 @@ pub fn run() {
             commands::saved_queries::record_sql_query_used,
             commands::saved_queries::migrate_legacy_sql_queries,
             commands::sql_library::get_sql_library,
-            commands::sql_library::pick_sql_library_root,
-            commands::sql_library::set_sql_library_root,
             commands::sql_library::sql_library_tree,
             commands::sql_library::sql_library_read,
             commands::sql_library::sql_library_write,
