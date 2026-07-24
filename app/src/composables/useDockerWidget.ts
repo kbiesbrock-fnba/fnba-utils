@@ -11,6 +11,7 @@ import {
   unpinContainer,
   saveDockerWidgetPosition,
   getDockerWidgetAnchorBottom,
+  onDisplayChanged,
   copyText,
   runInTerminal,
   type DockerStatusPayload,
@@ -161,7 +162,13 @@ let lastProgrammaticMoveAt = -Infinity;
 // Pinned bottom edge in PHYSICAL px (primary work area = taskbar top). The
 // widget's bottom is anchored here on every resize so it stays flush above the
 // taskbar regardless of DPI/taskbar height. Null until fetched / on non-Windows.
+// Refreshed on `display-changed` (dock/undock) — a stale anchor pins the widget
+// to coordinates on a detached display.
 let anchorBottomPhysical: number | null = null;
+
+// Last content height passed to syncSizeToContent, so a display-change resync
+// can re-pin the widget without needing a fresh DOM measurement.
+let lastContentH = 0;
 
 // Re-entrancy guard: ResizeObserver + watch can both fire for one layout change.
 let syncing = false;
@@ -172,6 +179,7 @@ let positionDebounce: ReturnType<typeof setTimeout> | null = null;
 // Unlisten handles.
 let unlistenDockerStatus: (() => void) | null = null;
 let unlistenMove: (() => void) | null = null;
+let unlistenDisplayChanged: (() => void) | null = null;
 
 /**
  * Resize the Tauri window to fit the measured content height, keeping the
@@ -182,6 +190,7 @@ let unlistenMove: (() => void) | null = null;
 async function syncSizeToContent(contentH: number): Promise<void> {
   if (syncing) return;
   syncing = true;
+  lastContentH = contentH;
   try {
     const { getCurrentWindow, primaryMonitor } = await import("@tauri-apps/api/window");
     const { LogicalSize, LogicalPosition } = await import("@tauri-apps/api/dpi");
@@ -222,9 +231,15 @@ async function syncSizeToContent(contentH: number): Promise<void> {
     }
 
     const desiredH = Math.max(60, Math.min(Math.ceil(contentH), Math.floor(maxH)));
-    if (Math.abs(desiredH - curSize.height) < 1) return;
-
     const newY = Math.round(bottom - desiredH);
+
+    // Bail only when BOTH the height and the vertical anchor are already
+    // correct. After a redock the height is usually unchanged but the taskbar
+    // anchor (work-area bottom) has moved, so we must still reposition.
+    const heightUnchanged = Math.abs(desiredH - curSize.height) < 1;
+    const positionUnchanged = Math.abs(newY - Math.round(curPos.y)) < 1;
+    if (heightUnchanged && positionUnchanged) return;
+
     lastProgrammaticMoveAt = performance.now();
     await win.setSize(new LogicalSize(LOGICAL_WIDTH, desiredH));
     await win.setPosition(new LogicalPosition(Math.round(curPos.x), newY));
@@ -267,6 +282,25 @@ export function useDockerWidget() {
       console.warn("useDockerWidget: onDockerStatus subscription failed", e);
     }
 
+    // On a dock/undock the primary monitor and taskbar anchor can move; the
+    // anchor we fetched above is now stale. Re-fetch it and re-pin using the
+    // last measured content height (Rust also repositions the window, but this
+    // keeps our size/anchor math from fighting it on the next natural resize).
+    try {
+      unlistenDisplayChanged = await onDisplayChanged(async () => {
+        try {
+          anchorBottomPhysical = await getDockerWidgetAnchorBottom();
+        } catch {
+          anchorBottomPhysical = null;
+        }
+        if (lastContentH > 0) {
+          await syncSizeToContent(lastContentH);
+        }
+      });
+    } catch (e) {
+      console.warn("useDockerWidget: onDisplayChanged subscription failed", e);
+    }
+
     // Wire position persistence on window move. The bottom-anchor is read
     // fresh on every resize (syncSizeToContent), so we don't track it here.
     try {
@@ -303,6 +337,10 @@ export function useDockerWidget() {
     if (unlistenMove) {
       unlistenMove();
       unlistenMove = null;
+    }
+    if (unlistenDisplayChanged) {
+      unlistenDisplayChanged();
+      unlistenDisplayChanged = null;
     }
     if (positionDebounce) {
       clearTimeout(positionDebounce);

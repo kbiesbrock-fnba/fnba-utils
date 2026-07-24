@@ -1270,3 +1270,13 @@ export async function onDockerStatus(
   const { listen } = await import("@tauri-apps/api/event");
   return listen<DockerStatusPayload>("docker-status", (e) => handler(e.payload));
 }
+
+/**
+ * Fires (debounced, from Rust) after the display topology changes — laptop
+ * dock/undock, monitor add/remove, or a taskbar move/resize. Windows that
+ * cached anything against the old monitor layout should refresh on this.
+ */
+export async function onDisplayChanged(handler: () => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("display-changed", () => handler());
+}
