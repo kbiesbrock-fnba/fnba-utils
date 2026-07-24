@@ -31,7 +31,148 @@ const {
   toggleCollapsed,
   togglePin,
   closeWindow,
+  // Filesystem library
+  libraryRoot,
+  libraryTruncated,
+  libraryError,
+  setupError,
+  libraryLoading,
+  loadedRelPath,
+  dirty,
+  flatTree,
+  libraryDirs,
+  refreshTree,
+  chooseFolder,
+  applyRoot,
+  openLibraryFile,
+  saveLoadedFile,
+  saveAsFile,
+  createFolder,
+  deleteLibraryEntry,
+  isTreeCollapsed,
+  toggleTreeCollapsed,
 } = useSqlQuery();
+
+// ---- Library chooser (first-run + change root) ----
+const showChooser = ref(false);
+const rootInput = ref("");
+
+/** Middle-ellipsized root for the header bar; full path stays in the title. */
+const libraryRootDisplay = computed(() => {
+  const r = libraryRoot.value ?? "";
+  if (r.length <= 34) return r;
+  return `${r.slice(0, 6)}…${r.slice(-27)}`;
+});
+
+function openChooser() {
+  rootInput.value = libraryRoot.value ?? "";
+  showChooser.value = true;
+}
+
+function cancelChooser() {
+  showChooser.value = false;
+  rootInput.value = "";
+}
+
+async function onUsePath() {
+  const p = rootInput.value.trim();
+  if (!p) return;
+  const ok = await applyRoot(p);
+  if (ok) cancelChooser();
+}
+
+async function onChooseFolder() {
+  await chooseFolder();
+  if (libraryRoot.value && !setupError.value) cancelChooser();
+}
+
+// ---- Tree interactions ----
+function onTreeRowClick(node: { isDir: boolean; relPath: string }) {
+  if (node.isDir) toggleTreeCollapsed(node.relPath);
+  else openLibraryFile(node.relPath);
+}
+
+async function onTreeDelete(node: { isDir: boolean; relPath: string; name: string }) {
+  const ok = window.confirm(
+    node.isDir
+      ? `Delete empty folder "${node.name}"? (only works if it has no files)`
+      : `Delete "${node.name}.sql"?`,
+  );
+  if (ok) await deleteLibraryEntry(node.relPath);
+}
+
+function onTreeRowKeydown(
+  e: KeyboardEvent,
+  node: { isDir: boolean; relPath: string; name: string },
+) {
+  const rowEl = e.currentTarget as HTMLElement;
+  if (e.key === "Enter" || (node.isDir && e.key === " ")) {
+    e.preventDefault();
+    onTreeRowClick(node);
+  } else if (e.key === "Delete") {
+    e.preventDefault();
+    void onTreeDelete(node);
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    moveFocus(rowEl, 1);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    moveFocus(rowEl, -1);
+  }
+}
+
+// ---- Library save / save-as / new folder ----
+const showSaveAs = ref(false);
+const saveAsName = ref("");
+const saveAsDir = ref("");
+
+function deriveDefaultName(): string {
+  const rel = loadedRelPath.value;
+  if (!rel) return "";
+  const base = rel.split("/").pop() ?? rel;
+  return base.toLowerCase().endsWith(".sql") ? base.slice(0, -4) : base;
+}
+
+function deriveCurrentDir(): string {
+  const rel = loadedRelPath.value;
+  if (!rel) return "";
+  const idx = rel.lastIndexOf("/");
+  return idx >= 0 ? rel.slice(0, idx) : "";
+}
+
+function openSaveAs() {
+  saveAsName.value = deriveDefaultName();
+  saveAsDir.value = deriveCurrentDir();
+  showSaveAs.value = true;
+}
+
+function cancelSaveAs() {
+  showSaveAs.value = false;
+  saveAsName.value = "";
+  saveAsDir.value = "";
+}
+
+async function onSaveAs() {
+  if (!saveAsName.value.trim() || !sql.value.trim()) return;
+  const ok = await saveAsFile(saveAsName.value, saveAsDir.value);
+  if (ok) cancelSaveAs();
+}
+
+/** Ctrl+S / Save button: write the loaded file, or open Save As if none. */
+async function onSaveCurrent() {
+  if (loadedRelPath.value) {
+    await saveLoadedFile();
+  } else if (sql.value.trim()) {
+    openSaveAs();
+  }
+}
+
+async function onNewFolder() {
+  const name = window.prompt(
+    "New folder (nest with /, e.g. Projects/MIN-500):",
+  );
+  if (name && name.trim()) await createFolder(name.trim());
+}
 
 // Connection dropdown options: the canonical registry, with the currently
 // active connection unioned in so it always appears even if it's a custom
@@ -286,8 +427,17 @@ function onEditorKeydown(e: KeyboardEvent) {
   }
 }
 
-// ---- Global Escape: cascade through layers ----
+// ---- Global keydown: Ctrl+S (library save) + Escape cascade ----
 function onGlobalKeydown(e: KeyboardEvent) {
+  // Ctrl/Cmd+S saves to the library regardless of which element has focus
+  // (editor or a tree row). No-op when no library root is configured.
+  if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+    if (libraryRoot.value) {
+      e.preventDefault();
+      void onSaveCurrent();
+    }
+    return;
+  }
   if (e.key !== "Escape") return;
   if (menu.value) {
     e.preventDefault();
@@ -297,6 +447,18 @@ function onGlobalKeydown(e: KeyboardEvent) {
   if (rename.value) {
     e.preventDefault();
     cancelRename();
+    return;
+  }
+  if (showSaveAs.value) {
+    e.preventDefault();
+    cancelSaveAs();
+    return;
+  }
+  if (showChooser.value && libraryRoot.value) {
+    // Only cancelable when a root already exists — the first-run chooser IS
+    // the panel, so Escape there falls through to closing the window.
+    e.preventDefault();
+    cancelChooser();
     return;
   }
   if (showSaveInput.value) {
@@ -358,7 +520,169 @@ const totalSavedCount = computed(() =>
       <div class="sq-divider" />
       <div class="sq-body">
         <div class="sq-sidebar">
-          <div class="sq-sidebar-title">Saved Queries</div>
+          <div class="sq-sidebar-header">
+            <span class="sq-sidebar-title">Saved Queries</span>
+            <button
+              v-if="libraryRoot"
+              class="sq-lib-icon-btn"
+              :class="{ spinning: libraryLoading }"
+              title="Refresh library"
+              aria-label="Refresh library"
+              @click="refreshTree"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
+                <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+                <path d="M13.5 2v3h-3" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Current root + Change… (only once configured) -->
+          <div v-if="libraryRoot" class="sq-lib-rootbar" :title="libraryRoot">
+            <span class="sq-lib-rootpath">{{ libraryRootDisplay }}</span>
+            <button class="sq-lib-change" @click="openChooser">Change…</button>
+          </div>
+
+          <!-- Chooser: first-run (always) or change (toggled). -->
+          <div v-if="!libraryRoot || showChooser" class="sq-lib-setup">
+            <p v-if="!libraryRoot" class="sq-lib-explainer">
+              Save queries as <code>.sql</code> files in a folder — subfolders
+              become headings. Point it at a WSL path such as
+              <code>\\wsl$\Ubuntu\home\you\dev\sql</code>.
+            </p>
+            <button class="sq-save-confirm sq-lib-choose" @click="onChooseFolder">
+              Choose folder…
+            </button>
+            <input
+              v-model="rootInput"
+              class="sq-save-input"
+              placeholder="\\wsl$\Ubuntu\home\you\dev\sql"
+              spellcheck="false"
+              @keydown.enter="onUsePath"
+            />
+            <div class="sq-save-form-actions">
+              <button v-if="libraryRoot" class="sq-save-cancel" @click="cancelChooser">
+                Cancel
+              </button>
+              <button
+                class="sq-save-confirm"
+                :disabled="!rootInput.trim()"
+                @click="onUsePath"
+              >
+                Use path
+              </button>
+            </div>
+            <div v-if="setupError" class="sq-lib-error">{{ setupError }}</div>
+          </div>
+
+          <!-- Tree browser (root configured). -->
+          <template v-if="libraryRoot">
+            <div v-if="libraryError" class="sq-lib-banner">
+              <span>{{ libraryError }}</span>
+              <button class="sq-lib-retry" @click="refreshTree">Retry</button>
+            </div>
+            <div class="sq-saved-list">
+              <div v-if="libraryTruncated" class="sq-lib-note">
+                Showing the first 5000 entries.
+              </div>
+              <div
+                v-if="!libraryError && flatTree.length === 0 && !libraryLoading"
+                class="sq-saved-empty"
+              >
+                No .sql files here yet
+              </div>
+              <div
+                v-for="row in flatTree"
+                :key="row.node.relPath"
+                class="sq-row"
+                :class="row.node.isDir ? 'sq-group-row' : 'sq-query-row'"
+                tabindex="0"
+                :style="{ paddingLeft: 8 + row.depth * 12 + 'px' }"
+                :title="row.node.relPath"
+                @click="onTreeRowClick(row.node)"
+                @keydown="onTreeRowKeydown($event, row.node)"
+              >
+                <span
+                  v-if="row.node.isDir"
+                  class="sq-chevron"
+                  :class="{ collapsed: isTreeCollapsed(row.node.relPath) }"
+                >
+                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="9" height="9">
+                    <path d="M3 4l3 3 3-3" />
+                  </svg>
+                </span>
+                <span v-else class="sq-file-dot" />
+                <span
+                  class="sq-query-name"
+                  :class="{
+                    'sq-dir-label': row.node.isDir,
+                    active: !row.node.isDir && loadedRelPath === row.node.relPath,
+                  }"
+                >{{ row.node.name }}</span>
+                <button
+                  class="sq-menu-trigger"
+                  title="Delete"
+                  aria-label="Delete"
+                  @click.stop="onTreeDelete(row.node)"
+                  @keydown.stop
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" width="11" height="11">
+                    <path d="M3 4h10M6.5 4V3h3v1M5 4l.5 8h5L11 4" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="sq-save-area">
+              <div v-if="showSaveAs" class="sq-save-form" @click.stop>
+                <input
+                  v-model="saveAsName"
+                  class="sq-save-input"
+                  placeholder="File name..."
+                  spellcheck="false"
+                  autofocus
+                  @keydown.enter="onSaveAs"
+                  @keydown.escape.stop="cancelSaveAs"
+                />
+                <select v-model="saveAsDir" class="sq-save-group-select">
+                  <option v-for="d in libraryDirs" :key="d.relPath" :value="d.relPath">
+                    {{ d.label }}
+                  </option>
+                </select>
+                <div class="sq-save-form-actions">
+                  <button class="sq-save-cancel" @click="cancelSaveAs">Cancel</button>
+                  <button
+                    class="sq-save-confirm"
+                    :disabled="!saveAsName.trim() || !sql.trim()"
+                    @click="onSaveAs"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+              <div v-else class="sq-lib-actions">
+                <button
+                  class="sq-save-btn"
+                  :disabled="!loadedRelPath || !dirty"
+                  :title="loadedRelPath ? 'Save (Ctrl+S)' : 'Open a file first'"
+                  @click.stop="onSaveCurrent"
+                >
+                  {{ loadedRelPath && !dirty ? "Saved" : "Save" }}
+                </button>
+                <button
+                  class="sq-save-btn"
+                  :disabled="!sql.trim()"
+                  @click.stop="openSaveAs"
+                >
+                  Save As…
+                </button>
+                <button class="sq-save-btn" @click.stop="onNewFolder">New folder</button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Legacy in-app saved queries: only shown before a root is chosen,
+               so opting in never loses access to existing entries. -->
+          <template v-else>
           <div class="sq-saved-list">
             <div v-if="totalSavedCount === 0" class="sq-saved-empty">
               No saved queries
@@ -504,6 +828,7 @@ const totalSavedCount = computed(() =>
             </div>
             <button v-else class="sq-save-btn" :disabled="!sql.trim()" @click.stop="showSaveInput = true">+ Save current</button>
           </div>
+          </template>
         </div>
         <div class="sq-main">
           <div class="sq-editor">
@@ -718,13 +1043,185 @@ const totalSavedCount = computed(() =>
   flex-direction: column;
 }
 
+.sq-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 4px 10px;
+}
+
 .sq-sidebar-title {
   font-size: 10px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 8px 10px 4px;
+}
+
+/* --- Filesystem library --- */
+
+.sq-lib-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+}
+
+.sq-lib-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sq-lib-icon-btn.spinning svg {
+  animation: sq-spin 0.8s linear infinite;
+}
+
+@keyframes sq-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sq-lib-rootbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 6px;
+}
+
+.sq-lib-rootpath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.sq-lib-change {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.sq-lib-change:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sq-lib-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sq-lib-explainer {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.sq-lib-explainer code {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.sq-lib-choose {
+  width: 100%;
+}
+
+.sq-lib-error {
+  font-size: 10px;
+  color: var(--accent-red);
+  word-break: break-word;
+}
+
+.sq-lib-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 10px;
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--accent-red);
+  background: rgba(248, 113, 113, 0.08);
+  border-radius: var(--radius-sm);
+}
+
+.sq-lib-banner span {
+  flex: 1;
+}
+
+.sq-lib-retry {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.sq-lib-retry:hover {
+  background: var(--bg-hover);
+}
+
+.sq-lib-note {
+  padding: 4px 10px;
+  font-size: 9px;
+  color: var(--text-placeholder);
+  font-style: italic;
+}
+
+.sq-file-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin: 0 4px 0 2px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-placeholder);
+}
+
+.sq-dir-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sq-query-name.active {
+  color: var(--accent-blue);
+  font-weight: 500;
+}
+
+.sq-lib-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.sq-lib-actions .sq-save-btn {
+  flex: 1;
 }
 
 .sq-saved-list {

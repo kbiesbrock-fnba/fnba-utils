@@ -4,23 +4,33 @@ import {
   addSqlQuery,
   executeSqlQuery,
   getIdentityData,
+  getSqlLibrary,
   killSqlQuery,
   listSqlGroups,
   listSqlQueries,
   migrateLegacySqlQueries,
   moveSqlQueryToGroup,
   onSqlQueriesChanged,
+  pickSqlLibraryRoot,
   recordSqlQueryUsed,
   removeSqlGroup,
   removeSqlQuery,
   renameSqlGroup,
   setSqlGroupPinned,
+  setSqlLibraryRoot,
+  sqlLibraryDelete,
+  sqlLibraryMkdir,
+  sqlLibraryRead,
+  sqlLibraryTree,
+  sqlLibraryWrite,
   updateSqlQuery,
   type IdentityConnection,
   type LegacySavedSqlQuery,
   type QueryResult,
   type SavedSqlQuery,
   type SqlGroup,
+  type SqlLibraryConfig,
+  type SqlTreeNode,
 } from "@/lib/tauri";
 import {
   isPanelPinned,
@@ -34,6 +44,9 @@ import {
 const LEGACY_KEY = "fnba-utils:saved-sql-queries";
 const LEGACY_MIGRATED_KEY = "fnba-utils:saved-sql-queries:migrated";
 const COLLAPSE_KEY = "fnba-utils:sql-group-collapsed";
+// Tree-collapse state is namespaced by root, so switching roots starts fresh
+// and stale entries from an old root are simply never read.
+const TREE_COLLAPSE_KEY = "fnba-utils:sql-tree-collapsed";
 
 /** A section in the sidebar — either a real group, or the synthetic "Ungrouped" bucket (group=null). */
 export interface QuerySection {
@@ -55,6 +68,36 @@ function readCollapsed(): Set<string> {
 function writeCollapsed(ids: Set<string>) {
   try {
     localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Read the collapsed tree rel-paths for a given root (namespaced map). */
+function readTreeCollapsed(root: string | null): Set<string> {
+  if (!root) return new Set();
+  try {
+    const raw = localStorage.getItem(TREE_COLLAPSE_KEY);
+    if (!raw) return new Set();
+    const obj = JSON.parse(raw);
+    const arr = obj && typeof obj === "object" ? obj[root] : null;
+    return Array.isArray(arr) ? new Set(arr.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function writeTreeCollapsed(root: string | null, ids: Set<string>) {
+  if (!root) return;
+  try {
+    const raw = localStorage.getItem(TREE_COLLAPSE_KEY);
+    let obj: Record<string, string[]> = {};
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") obj = parsed;
+    }
+    obj[root] = [...ids];
+    localStorage.setItem(TREE_COLLAPSE_KEY, JSON.stringify(obj));
   } catch {
     /* ignore */
   }
@@ -97,8 +140,73 @@ const queries = ref<SavedSqlQuery[]>([]);
 const collapsedGroupIds = ref<Set<string>>(readCollapsed());
 const loading = ref(false);
 
+// ---- Filesystem-backed SQL library ----
+const libraryConfig = ref<SqlLibraryConfig | null>(null);
+const libraryRoot = computed(() => libraryConfig.value?.root ?? null);
+const libraryTree = ref<SqlTreeNode[]>([]);
+const libraryTruncated = ref(false);
+/** Reachability / load error for the tree panel (drives the WSL banner). */
+const libraryError = ref<string | null>(null);
+/** Validation error shown on the pre-root setup card. */
+const setupError = ref<string | null>(null);
+const libraryLoading = ref(false);
+const treeCollapsed = ref<Set<string>>(new Set());
+/** Rel-path of the .sql file currently loaded into the editor, if any. */
+const loadedRelPath = ref<string | null>(null);
+/** Baseline of the loaded file's content, for dirty detection. */
+const loadedBaseline = ref<string>("");
+const dirty = computed(
+  () => loadedRelPath.value != null && sql.value !== loadedBaseline.value,
+);
+
 let initialised = false;
 let listening = false;
+
+interface FlatTreeRow {
+  node: SqlTreeNode;
+  depth: number;
+}
+
+/** Depth-first flatten of the tree, honoring per-node collapse state. */
+const flatTree: ComputedRef<FlatTreeRow[]> = computed(() => {
+  const out: FlatTreeRow[] = [];
+  const walk = (nodes: SqlTreeNode[], depth: number) => {
+    for (const node of nodes) {
+      out.push({ node, depth });
+      if (
+        node.isDir &&
+        node.children &&
+        node.children.length > 0 &&
+        !treeCollapsed.value.has(node.relPath)
+      ) {
+        walk(node.children, depth + 1);
+      }
+    }
+  };
+  walk(libraryTree.value, 0);
+  return out;
+});
+
+/** All directories in the tree (root first), for Save As / New folder pickers. */
+const libraryDirs: ComputedRef<{ relPath: string; label: string }[]> = computed(() => {
+  const out: { relPath: string; label: string }[] = [{ relPath: "", label: "(root)" }];
+  const walk = (nodes: SqlTreeNode[], prefix: string) => {
+    for (const node of nodes) {
+      if (node.isDir) {
+        const label = prefix ? `${prefix}/${node.name}` : node.name;
+        out.push({ relPath: node.relPath, label });
+        if (node.children) walk(node.children, label);
+      }
+    }
+  };
+  walk(libraryTree.value, "");
+  return out;
+});
+
+/** Strip a Rust error's code prefix for display. */
+function humanErr(e: unknown): string {
+  return String(e).replace(/^(no-root|unreachable|path|io):\s*/, "");
+}
 
 const groupedQueries: ComputedRef<QuerySection[]> = computed(() => {
   // Sort groups: pinned section first, alphabetical within each section.
@@ -200,11 +308,180 @@ async function loadConnections() {
   }
 }
 
+// ---- Library operations ----
+
+async function loadLibraryConfig() {
+  try {
+    libraryConfig.value = await getSqlLibrary();
+  } catch (e) {
+    console.warn("[sql-query] failed to load library config:", e);
+    libraryConfig.value = { root: null, exportedAt: null };
+  }
+}
+
+/** (Re)read the tree for the configured root. Never throws — reachability
+ *  problems surface as `libraryError` so the panel keeps working. */
+async function refreshTree() {
+  const root = libraryRoot.value;
+  if (!root) return;
+  libraryLoading.value = true;
+  try {
+    const tree = await sqlLibraryTree();
+    libraryTree.value = tree.entries;
+    libraryTruncated.value = tree.truncated;
+    libraryError.value = null;
+    treeCollapsed.value = readTreeCollapsed(root);
+  } catch (e) {
+    libraryTree.value = [];
+    libraryTruncated.value = false;
+    libraryError.value = "SQL library unavailable — is WSL running?";
+    console.warn("[sql-query] tree load failed:", e);
+  } finally {
+    libraryLoading.value = false;
+  }
+}
+
+/** Clear the loaded-file association WITHOUT touching the editor text. Used on
+ *  root change (the rel path is meaningless under a new root) and on delete. */
+function clearLoadedFile() {
+  loadedRelPath.value = null;
+  loadedBaseline.value = "";
+}
+
+/** Set or change the root, then reload. Root is saved server-side even when
+ *  unreachable, so a change survives WSL being down (Retry recovers it). */
+async function applyRoot(path: string): Promise<boolean> {
+  setupError.value = null;
+  libraryError.value = null;
+  try {
+    libraryConfig.value = await setSqlLibraryRoot(path);
+    clearLoadedFile();
+    await refreshTree();
+    return true;
+  } catch (e) {
+    // Reflect whether the root actually got saved (it is on unreachable, but
+    // not on an early validation reject like an empty path).
+    await loadLibraryConfig();
+    clearLoadedFile();
+    if (libraryRoot.value) {
+      libraryTree.value = [];
+      libraryError.value = String(e).startsWith("unreachable")
+        ? "SQL library unavailable — is WSL running?"
+        : humanErr(e);
+    } else {
+      setupError.value = humanErr(e);
+    }
+    return false;
+  }
+}
+
+/** Open the native folder picker and adopt the chosen path. */
+async function chooseFolder() {
+  try {
+    const picked = await pickSqlLibraryRoot();
+    if (picked) await applyRoot(picked);
+  } catch (e) {
+    setupError.value = humanErr(e);
+  }
+}
+
+/** Load a .sql file into the editor, tracking it for Ctrl+S + dirty state. */
+async function openLibraryFile(rel: string) {
+  try {
+    const content = await sqlLibraryRead(rel);
+    sql.value = content;
+    loadedRelPath.value = rel;
+    loadedBaseline.value = content;
+    error.value = null;
+  } catch (e) {
+    error.value = `Failed to open ${rel}: ${humanErr(e)}`;
+  }
+}
+
+/** Ctrl+S: write the editor to the loaded file. Returns false if no file is
+ *  loaded (the caller should open Save As instead). */
+async function saveLoadedFile(): Promise<boolean> {
+  const rel = loadedRelPath.value;
+  if (!rel) return false;
+  try {
+    await sqlLibraryWrite(rel, sql.value);
+    loadedBaseline.value = sql.value;
+    error.value = null;
+    return true;
+  } catch (e) {
+    error.value = `Save failed: ${humanErr(e)}`;
+    return false;
+  }
+}
+
+/** Save the editor as a new .sql file under `destDir` ("" = root). */
+async function saveAsFile(name: string, destDir: string): Promise<boolean> {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const base = trimmed.toLowerCase().endsWith(".sql") ? trimmed.slice(0, -4) : trimmed;
+  const fileName = `${base}.sql`;
+  const rel = destDir ? `${destDir}/${fileName}` : fileName;
+  try {
+    await sqlLibraryWrite(rel, sql.value);
+    loadedRelPath.value = rel;
+    loadedBaseline.value = sql.value;
+    error.value = null;
+    await refreshTree();
+    return true;
+  } catch (e) {
+    error.value = `Save failed: ${humanErr(e)}`;
+    return false;
+  }
+}
+
+/** Create a folder at `rel` (may be nested, e.g. `Projects/MIN-500`). */
+async function createFolder(rel: string): Promise<boolean> {
+  const trimmed = rel.trim();
+  if (!trimmed) return false;
+  try {
+    await sqlLibraryMkdir(trimmed);
+    await refreshTree();
+    return true;
+  } catch (e) {
+    error.value = `Create folder failed: ${humanErr(e)}`;
+    return false;
+  }
+}
+
+/** Delete a file or empty folder. */
+async function deleteLibraryEntry(rel: string): Promise<boolean> {
+  try {
+    await sqlLibraryDelete(rel);
+    if (loadedRelPath.value === rel) clearLoadedFile();
+    await refreshTree();
+    return true;
+  } catch (e) {
+    error.value = `Delete failed: ${humanErr(e)}`;
+    return false;
+  }
+}
+
+function isTreeCollapsed(rel: string): boolean {
+  return treeCollapsed.value.has(rel);
+}
+
+function toggleTreeCollapsed(rel: string) {
+  const next = new Set(treeCollapsed.value);
+  if (next.has(rel)) next.delete(rel);
+  else next.add(rel);
+  treeCollapsed.value = next;
+  writeTreeCollapsed(libraryRoot.value, next);
+}
+
 async function ensureLoaded() {
   if (initialised) return;
   initialised = true;
   syncTitle();
-  await Promise.all([migrateLegacyOnce().then(refresh), loadConnections()]);
+  await Promise.all([
+    migrateLegacyOnce().then(refresh),
+    loadConnections(),
+    loadLibraryConfig().then(() => (libraryRoot.value ? refreshTree() : undefined)),
+  ]);
 }
 
 /** Reflect the active connection in the window/document title (taskbar,
@@ -248,6 +525,12 @@ async function startListening() {
       const { getCurrentWindow: getCW } = await import("@tauri-apps/api/window");
       await getCW().hide();
     }
+  });
+
+  // No file watcher over the WSL 9p share — refresh the tree when the window
+  // regains focus so external edits/additions show up.
+  window.addEventListener("focus", () => {
+    if (libraryRoot.value) void refreshTree();
   });
 
   // Saved queries + groups are global, not per-server. Every panel listens for
@@ -479,5 +762,27 @@ export function useSqlQuery() {
     toggleCollapsed,
     togglePin,
     closeWindow,
+    // ---- Filesystem library ----
+    libraryConfig,
+    libraryRoot,
+    libraryTree,
+    libraryTruncated,
+    libraryError,
+    setupError,
+    libraryLoading,
+    loadedRelPath,
+    dirty,
+    flatTree,
+    libraryDirs,
+    refreshTree,
+    chooseFolder,
+    applyRoot,
+    openLibraryFile,
+    saveLoadedFile,
+    saveAsFile,
+    createFolder,
+    deleteLibraryEntry,
+    isTreeCollapsed,
+    toggleTreeCollapsed,
   };
 }

@@ -4,6 +4,7 @@ pub mod owned_sessions;
 pub mod paths;
 pub mod projects;
 pub mod saved_queries;
+pub mod sql_library;
 pub mod test_users;
 pub mod tmux_sessions;
 pub mod wsl_helper;
