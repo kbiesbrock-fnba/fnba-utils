@@ -220,6 +220,7 @@ pub fn run() {
         .manage(state::owned_sessions::OwnedSessionsState::load())
         .manage(state::projects::ProjectsState::load())
         .manage(state::saved_queries::SavedQueriesState::load())
+        .manage(state::sql_library::SqlLibraryState::load())
         .manage(state::clipboard_history::ClipboardHistoryState::load())
         .manage(state::test_users::TestUsersState::load())
         .manage(state::docker_widget::DockerWidgetState::load())
@@ -635,6 +636,15 @@ pub fn run() {
             commands::saved_queries::remove_sql_query,
             commands::saved_queries::record_sql_query_used,
             commands::saved_queries::migrate_legacy_sql_queries,
+            commands::sql_library::get_sql_library,
+            commands::sql_library::pick_sql_library_root,
+            commands::sql_library::set_sql_library_root,
+            commands::sql_library::sql_library_tree,
+            commands::sql_library::sql_library_read,
+            commands::sql_library::sql_library_write,
+            commands::sql_library::sql_library_mkdir,
+            commands::sql_library::sql_library_delete,
+            commands::sql_library::sql_library_rename,
             commands::clipboard_manager::list_clipboard_entries,
             commands::clipboard_manager::get_clipboard_entry,
             commands::clipboard_manager::paste_clipboard_entry,

@@ -9,6 +9,7 @@ pub mod markdown_docs;
 pub mod mission_control;
 pub mod projects;
 pub mod saved_queries;
+pub mod sql_library;
 pub mod standup;
 pub mod terminal;
 
