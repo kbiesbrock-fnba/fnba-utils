@@ -3,6 +3,7 @@ mod clipboard;
 mod commands;
 mod config;
 mod db;
+mod display_watch;
 mod models;
 mod standup_db;
 mod state;
@@ -82,6 +83,53 @@ fn spawn_foreground_watch(app: AppHandle) {
 
 #[cfg(not(windows))]
 fn spawn_foreground_watch(_app: AppHandle) {}
+
+/// Position the always-on Docker widget flush above the taskbar on the primary
+/// monitor. Restores a saved X that still lands on the primary monitor, else
+/// centres horizontally; the bottom edge is always pinned to the work-area
+/// bottom (taskbar top). Called once at startup and again whenever the display
+/// topology changes (dock/undock) — both the primary monitor identity and the
+/// work-area rect can shift when a laptop is docked/undocked.
+fn position_docker_widget(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("docker-widget") else {
+        return;
+    };
+    let saved_pos = app
+        .try_state::<state::docker_widget::DockerWidgetState>()
+        .and_then(|s| s.position());
+
+    if let Ok(Some(monitor)) = w.primary_monitor() {
+        let mon_size = monitor.size();
+        let mon_pos = monitor.position();
+        let win_size = w
+            .outer_size()
+            .unwrap_or(tauri::PhysicalSize::new(280, 96));
+
+        // X: restore a saved x that's within the primary monitor, else centre
+        // horizontally.
+        let saved_x = saved_pos.and_then(|(sx, _sy)| {
+            if sx >= mon_pos.x && sx < mon_pos.x + mon_size.width as i32 {
+                Some(sx)
+            } else {
+                None
+            }
+        });
+        let x = saved_x.unwrap_or_else(|| {
+            mon_pos.x + (mon_size.width as i32 - win_size.width as i32) / 2
+        });
+
+        // Y: pin the window's bottom edge to the work-area bottom (taskbar top).
+        // Falls back to a small fixed clearance only if the work area can't be
+        // queried.
+        let bottom = commands::docker::work_area_bottom()
+            .unwrap_or(mon_pos.y + mon_size.height as i32 - 48);
+        let y = bottom - win_size.height as i32;
+
+        let _ = w.set_position(tauri::Position::Physical(
+            tauri::PhysicalPosition::new(x, y),
+        ));
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -402,43 +450,12 @@ pub fn run() {
             // pinned flush above the taskbar. The bottom edge is always anchored
             // to the work-area bottom (taskbar top); only the horizontal position
             // is restored from a saved value (so it can be nudged left/right).
+            //
+            // Positioning is factored into `position_docker_widget` so the
+            // display-change watcher can re-run it after a dock/undock.
+            position_docker_widget(app.handle());
+
             if let Some(w) = app.get_webview_window("docker-widget") {
-                let saved_pos = app
-                    .try_state::<state::docker_widget::DockerWidgetState>()
-                    .and_then(|s| s.position());
-
-                if let Ok(Some(monitor)) = w.primary_monitor() {
-                    let mon_size = monitor.size();
-                    let mon_pos = monitor.position();
-                    let win_size = w
-                        .outer_size()
-                        .unwrap_or(tauri::PhysicalSize::new(280, 96));
-
-                    // X: restore a saved x that's within the primary monitor,
-                    // else centre horizontally.
-                    let saved_x = saved_pos.and_then(|(sx, _sy)| {
-                        if sx >= mon_pos.x && sx < mon_pos.x + mon_size.width as i32 {
-                            Some(sx)
-                        } else {
-                            None
-                        }
-                    });
-                    let x = saved_x.unwrap_or_else(|| {
-                        mon_pos.x + (mon_size.width as i32 - win_size.width as i32) / 2
-                    });
-
-                    // Y: pin the window's bottom edge to the work-area bottom
-                    // (taskbar top). Falls back to a small fixed clearance only
-                    // if the work area can't be queried.
-                    let bottom = commands::docker::work_area_bottom()
-                        .unwrap_or(mon_pos.y + mon_size.height as i32 - 48);
-                    let y = bottom - win_size.height as i32;
-
-                    let _ = w.set_position(tauri::Position::Physical(
-                        tauri::PhysicalPosition::new(x, y),
-                    ));
-                }
-
                 // Allow the window to shrink to the heading height — the OS
                 // default minimum tracking size for a resizable window would
                 // otherwise clamp it, leaving the heading floating above the
@@ -460,6 +477,12 @@ pub fn run() {
             commands::docker::spawn_poll_thread(app.handle().clone());
             spawn_foreground_watch(app.handle().clone());
             widget_focus::spawn(app.handle().clone());
+
+            // Watch for display-topology changes (dock/undock, monitor add/
+            // remove, taskbar move). On a settled change it re-pins the docker
+            // widget and notifies windows so nothing is stranded on a detached
+            // display until the next app restart.
+            display_watch::install(app.handle().clone());
 
             Ok(())
         })
