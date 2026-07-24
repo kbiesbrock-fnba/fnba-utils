@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+- **Docking and undocking no longer needs an app restart.** After re-docking your laptop (or adding/removing a monitor), the command palette used to dim the screen without showing its search box, and the Docker Widget could vanish, until you restarted FNBA Utils. The app now notices the display change and recovers on its own — the palette repaints, the widget re-pins itself flush above the taskbar on your primary screen, and JSON/Markdown Viewer windows whose saved spot ended up on a disconnected monitor reopen centered on-screen instead of somewhere you can't reach.
+
 - **"Already acting as" reports the login you asked for.** When the person you're assuming owns more than one Windows login, re-running the assume no longer relabels your current identity as their alphabetically-first login — it names the login you actually requested.
 - **Directory search picks the login you typed.** When a person has more than one Windows login on file, searching by a specific login now selects that exact one instead of their most-recently-touched login — typing a login always shows that login; searching by name still falls back to the most-recently-touched one.
 - **The built-in default users list is gone.** Favorites are now only what you pin — there's no more hand-maintained list of ~36 sample users shipped with the app. Defaults you had actually assumed are auto-pinned into your favorites on first launch after this update, so nothing you were using disappears; everyone else is findable via directory search (pin them from there to keep them around).
