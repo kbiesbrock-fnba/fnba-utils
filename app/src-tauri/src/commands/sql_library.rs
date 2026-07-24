@@ -1,9 +1,14 @@
 //! Filesystem-backed SQL query library.
 //!
-//! Saved queries live as `.sql` files under a user-chosen root directory;
-//! subdirectories are the headings (nesting arbitrary). The root is typically a
-//! WSL UNC path (`\\wsl$\Ubuntu\home\…\sql` / `\\wsl.localhost\…`) or a plain
-//! drive path — `std::fs` handles all three directly on Windows.
+//! Saved queries live as `.sql` files under a root directory the user sets in
+//! `config.yaml` (`sql_library.root`); subdirectories are the headings (nesting
+//! arbitrary). The root is typically a WSL UNC path (`\\wsl$\Ubuntu\home\…\sql`
+//! / `\\wsl.localhost\…`) or a plain drive path — `std::fs` handles all three
+//! directly on Windows.
+//!
+//! The root is re-read from `config.yaml` on EVERY library call (see
+//! [`require_root`]), so editing the file + hitting Refresh in the panel picks
+//! up a new root with no app restart. The app never writes `config.yaml`.
 //!
 //! ## Path jail (security-critical)
 //! Every relative path the frontend supplies is validated component-wise by
@@ -27,8 +32,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::State;
 
+use crate::config::AppConfig;
 use crate::state::saved_queries::SavedQueriesState;
-use crate::state::sql_library::{SqlLibraryConfig, SqlLibraryState};
+use crate::state::sql_library::SqlLibraryState;
 use crate::util::paths::{wsl_home, wsl_path_to_windows};
 
 /// Recursion / size guards for the tree walk.
@@ -68,6 +74,19 @@ pub struct SqlLibraryTree {
     pub truncated: bool,
     /// Top-level entries (children of the root), dirs first then files, alpha.
     pub entries: Vec<SqlTreeNode>,
+}
+
+/// Lightweight status the panel reads to decide setup-notice vs. tree, show the
+/// configured root in the header, and open `config.yaml`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlLibraryInfo {
+    /// Normalized root from `config.yaml`, or `None` when the key is unset.
+    pub root: Option<String>,
+    /// One-time export stamp (epoch ms), or `None` if it hasn't run.
+    pub exported_at: Option<i64>,
+    /// Absolute path to `config.yaml` (for the "Open config" affordance).
+    pub config_path: Option<String>,
 }
 
 fn epoch_ms_now() -> i64 {
@@ -175,12 +194,32 @@ fn jail_join(root: &Path, rel: &str, require_sql: bool) -> Result<PathBuf, Strin
     Ok(out)
 }
 
-/// Resolve the configured root as a `PathBuf`, or the `no-root` error.
-fn require_root(lib: &SqlLibraryState) -> Result<PathBuf, String> {
-    lib.root()
-        .filter(|r| !r.trim().is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| "no-root".to_string())
+/// Re-read `config.yaml` and resolve `sql_library.root` to a Windows-reachable
+/// `PathBuf`. `no-root` when the key is unset; normalization errors (e.g. `~`
+/// with WSL down) propagate as `unreachable:`. Reading fresh each call is what
+/// lets an edited config.yaml take effect on the next Refresh.
+fn require_root() -> Result<PathBuf, String> {
+    match AppConfig::load().sql_library_root() {
+        Some(raw) => Ok(PathBuf::from(normalize_root(&raw)?)),
+        None => Err("no-root".to_string()),
+    }
+}
+
+/// Walk the root on a blocking worker, bounded by a timeout so a cold 9p share
+/// can't hang the panel. Returns the top-level entries + the `truncated` flag,
+/// or a coded `unreachable:` error.
+async fn walk_root(root: PathBuf) -> Result<(Vec<SqlTreeNode>, bool), String> {
+    let walk = tauri::async_runtime::spawn_blocking(move || {
+        let mut budget = MAX_ENTRIES;
+        let mut truncated = false;
+        walk_dir(&root, "", 0, &mut budget, &mut truncated).map(|entries| (entries, truncated))
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(WALK_TIMEOUT_SECS), walk).await {
+        Ok(Ok(Ok(pair))) => Ok(pair),
+        Ok(Ok(Err(e))) => Err(format!("unreachable: {e}")),
+        Ok(Err(e)) => Err(format!("unreachable: walk task failed: {e}")),
+        Err(_) => Err("unreachable: timed out reading the library (is WSL running?)".into()),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -346,126 +385,72 @@ fn export_saved_queries(root: &Path, queries: &SavedQueriesState) -> Result<u32,
 // Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Current library config (`{ root, exportedAt }`).
+/// Library status: the config-derived root (or `None`), the export stamp, and
+/// the `config.yaml` path. Re-reads `config.yaml` each call.
 #[tauri::command]
-pub async fn get_sql_library(lib: State<'_, SqlLibraryState>) -> Result<SqlLibraryConfig, String> {
-    Ok(lib.get())
-}
-
-/// Open the native folder picker; returns the chosen Windows-reachable path or
-/// None on cancel. Kept Rust-side (the frontend has no dialog plugin) and it
-/// deliberately does NOT convert to a WSL posix path — the library operates on
-/// the Windows form directly.
-#[tauri::command]
-pub async fn pick_sql_library_root(
-    app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel::<Option<PathBuf>>();
-    // Parent to the invoking SQL window so the picker is modal to it.
-    let builder = app
-        .dialog()
-        .file()
-        .set_title("Choose the SQL query library folder")
-        .set_parent(&window);
-    builder.pick_folder(move |path| {
-        let _ = tx.send(path.and_then(|p| p.into_path().ok()));
-    });
-    let picked = rx.await.map_err(|e| format!("Picker dropped: {e}"))?;
-    Ok(picked.map(|p| p.to_string_lossy().into_owned()))
-}
-
-/// Set (or change) the library root. Normalizes the path, ensures the dir
-/// exists (creating it if absent), then — the FIRST time any root is ever set —
-/// exports the legacy saved-query store into it. The export is keyed on
-/// `exported_at`, so changing the root later never re-exports.
-///
-/// If the dir can't be created (WSL down / share gone) the root is STILL saved
-/// and an `unreachable:` error is returned, so the frontend banner + Retry can
-/// succeed once WSL is back without the user re-typing the path.
-#[tauri::command]
-pub async fn set_sql_library_root(
-    path: String,
-    lib: State<'_, SqlLibraryState>,
-    queries: State<'_, SavedQueriesState>,
-) -> Result<SqlLibraryConfig, String> {
-    let normalized = normalize_root(&path)?;
-    // Persist the root up-front so a later retry doesn't need the path re-typed.
-    let cfg = lib.set_root(normalized.clone())?;
-    let already_exported = cfg.exported_at.is_some();
-
-    let root = PathBuf::from(&normalized);
-    let root_for_blocking = root.clone();
-    // Touch/create the dir off the UI thread — a cold UNC share can block.
-    let ensured = tauri::async_runtime::spawn_blocking(move || {
-        if root_for_blocking.is_dir() {
-            return Ok(());
-        }
-        if root_for_blocking.exists() {
-            return Err("path: root exists but is not a directory".to_string());
-        }
-        std::fs::create_dir_all(&root_for_blocking)
-            .map_err(|e| format!("unreachable: cannot create root: {e}"))
+pub async fn get_sql_library(lib: State<'_, SqlLibraryState>) -> Result<SqlLibraryInfo, String> {
+    // Normalize for display when possible; fall back to the raw configured
+    // value if normalization can't complete (e.g. `~` while WSL is down) so the
+    // header still shows what the user set.
+    let root = AppConfig::load()
+        .sql_library_root()
+        .map(|raw| normalize_root(&raw).unwrap_or(raw));
+    Ok(SqlLibraryInfo {
+        root,
+        exported_at: lib.exported_at(),
+        config_path: AppConfig::config_path().map(|p| p.to_string_lossy().into_owned()),
     })
-    .await
-    .map_err(|e| format!("unreachable: join error: {e}"))?;
-
-    if let Err(e) = ensured {
-        // Root is saved; surface the reachability problem so Retry can recover.
-        return Err(e);
-    }
-
-    // One-time export — only if it has never run for any root.
-    if !already_exported {
-        let root_for_export = root.clone();
-        // `SavedQueriesState` isn't `Send`-friendly across spawn_blocking (holds
-        // a Mutex<Connection>); run the export inline. It only writes small files.
-        match export_saved_queries(&root_for_export, queries.inner()) {
-            Ok(n) => eprintln!("sql_library: exported {n} legacy queries into {}", root.display()),
-            Err(e) => eprintln!("sql_library: legacy export error (stamping anyway): {e}"),
-        }
-        // Stamp regardless so the export never re-runs (per spec).
-        return lib.mark_exported(epoch_ms_now());
-    }
-
-    Ok(lib.get())
 }
 
-/// Recursive walk of the root → nested tree of dirs + `.sql` files.
+/// Recursive walk of the config-defined root → nested tree of dirs + `.sql`
+/// files.
+///
+/// The one-time legacy export runs LAZILY here: the first time the tree loads
+/// successfully (root configured AND reachable) with no export stamp yet, the
+/// SQLite saved-query store is exported into the root, stamped, and the tree is
+/// re-walked so the fresh files show immediately. Keyed on the stamp, so it
+/// runs once ever and never again on a root change.
 #[tauri::command]
 pub async fn sql_library_tree(
     lib: State<'_, SqlLibraryState>,
+    queries: State<'_, SavedQueriesState>,
 ) -> Result<SqlLibraryTree, String> {
-    let root = require_root(&lib)?;
+    let root = require_root()?;
     let root_str = root.to_string_lossy().into_owned();
 
-    let root_for_walk = root.clone();
-    let walk = tauri::async_runtime::spawn_blocking(move || {
-        let mut budget = MAX_ENTRIES;
-        let mut truncated = false;
-        walk_dir(&root_for_walk, "", 0, &mut budget, &mut truncated).map(|entries| (entries, truncated))
-    });
+    // Walk first — success is our proof the root is reachable.
+    let (entries, truncated) = walk_root(root.clone()).await?;
 
-    match tokio::time::timeout(std::time::Duration::from_secs(WALK_TIMEOUT_SECS), walk).await {
-        Ok(Ok(Ok((entries, truncated)))) => Ok(SqlLibraryTree {
-            root: root_str,
-            truncated,
-            entries,
-        }),
-        Ok(Ok(Err(e))) => Err(format!("unreachable: {e}")),
-        Ok(Err(e)) => Err(format!("unreachable: walk task failed: {e}")),
-        Err(_) => Err("unreachable: timed out reading the library (is WSL running?)".into()),
+    if lib.exported_at().is_none() {
+        // Reachable + never exported → run the one-time export, then re-walk so
+        // the exported files are in the returned tree. `SavedQueriesState` holds
+        // a Mutex<Connection> that isn't Send across spawn_blocking, so the
+        // export runs inline (it only writes small files).
+        match export_saved_queries(&root, queries.inner()) {
+            Ok(n) => eprintln!("sql_library: exported {n} legacy queries into {}", root.display()),
+            Err(e) => eprintln!("sql_library: legacy export error (stamping anyway): {e}"),
+        }
+        let _ = lib.mark_exported(epoch_ms_now());
+        if let Ok((entries2, truncated2)) = walk_root(root).await {
+            return Ok(SqlLibraryTree {
+                root: root_str,
+                truncated: truncated2,
+                entries: entries2,
+            });
+        }
     }
+
+    Ok(SqlLibraryTree {
+        root: root_str,
+        truncated,
+        entries,
+    })
 }
 
 /// Read a `.sql` file's contents.
 #[tauri::command]
-pub async fn sql_library_read(
-    rel: String,
-    lib: State<'_, SqlLibraryState>,
-) -> Result<String, String> {
-    let root = require_root(&lib)?;
+pub async fn sql_library_read(rel: String) -> Result<String, String> {
+    let root = require_root()?;
     let path = jail_join(&root, &rel, true)?;
     let p = path.clone();
     let read = tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(&p))
@@ -476,12 +461,8 @@ pub async fn sql_library_read(
 
 /// Write `content` to a `.sql` file, creating parent dirs within the root.
 #[tauri::command]
-pub async fn sql_library_write(
-    rel: String,
-    content: String,
-    lib: State<'_, SqlLibraryState>,
-) -> Result<(), String> {
-    let root = require_root(&lib)?;
+pub async fn sql_library_write(rel: String, content: String) -> Result<(), String> {
+    let root = require_root()?;
     let path = jail_join(&root, &rel, true)?;
     let p = path.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
@@ -496,11 +477,8 @@ pub async fn sql_library_write(
 
 /// Create a directory (and any missing parents) within the root.
 #[tauri::command]
-pub async fn sql_library_mkdir(
-    rel: String,
-    lib: State<'_, SqlLibraryState>,
-) -> Result<(), String> {
-    let root = require_root(&lib)?;
+pub async fn sql_library_mkdir(rel: String) -> Result<(), String> {
+    let root = require_root()?;
     let path = jail_join(&root, &rel, false)?;
     let p = path.clone();
     tauri::async_runtime::spawn_blocking(move || std::fs::create_dir_all(&p).map_err(classify_io))
@@ -510,11 +488,8 @@ pub async fn sql_library_mkdir(
 
 /// Delete a `.sql` file or an EMPTY directory. Non-empty dirs are rejected.
 #[tauri::command]
-pub async fn sql_library_delete(
-    rel: String,
-    lib: State<'_, SqlLibraryState>,
-) -> Result<(), String> {
-    let root = require_root(&lib)?;
+pub async fn sql_library_delete(rel: String) -> Result<(), String> {
+    let root = require_root()?;
     let path = jail_join(&root, &rel, false)?;
     let p = path.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
@@ -544,12 +519,8 @@ pub async fn sql_library_delete(
 /// Rename/move a file or directory to `new_rel` within the root. When the
 /// source is a file, the target must keep a `.sql` extension.
 #[tauri::command]
-pub async fn sql_library_rename(
-    rel: String,
-    new_rel: String,
-    lib: State<'_, SqlLibraryState>,
-) -> Result<(), String> {
-    let root = require_root(&lib)?;
+pub async fn sql_library_rename(rel: String, new_rel: String) -> Result<(), String> {
+    let root = require_root()?;
     let from = jail_join(&root, &rel, false)?;
     let from_meta = std::fs::symlink_metadata(&from).map_err(classify_io)?;
     let is_file = from_meta.is_file();
