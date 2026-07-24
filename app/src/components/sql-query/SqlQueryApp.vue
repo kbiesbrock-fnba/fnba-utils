@@ -47,10 +47,17 @@ const connOptions = computed(() => {
   return opts;
 });
 
+// The query editor, so switching connection can hand focus straight back to it
+// (the user is switching env to re-run — the dropdown otherwise keeps focus).
+const editorRef = ref<HTMLTextAreaElement | null>(null);
+
 function onConnChange(e: Event) {
   const sel = (e.target as HTMLSelectElement).value;
   const opt = connOptions.value.find((o) => o.server === sel);
-  if (opt) changeConnection(opt.server, opt.label);
+  if (opt) {
+    changeConnection(opt.server, opt.label);
+    nextTick(() => editorRef.value?.focus());
+  }
 }
 
 // ---- Save dialog state ----
@@ -501,6 +508,7 @@ const totalSavedCount = computed(() =>
         <div class="sq-main">
           <div class="sq-editor">
             <textarea
+              ref="editorRef"
               v-model="sql"
               class="sq-textarea"
               placeholder="SELECT TOP 10 * FROM ..."
