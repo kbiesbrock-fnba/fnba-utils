@@ -582,8 +582,49 @@ pub async fn get_docker_widget_position(
 /// of the taskbar. Used to pin the widget flush above the taskbar regardless of
 /// taskbar height or display scaling (a fixed offset guesses wrong under DPI
 /// scaling and leaves the widget floating).
+///
+/// Resolves via the primary monitor's `MONITORINFO.rcWork` (`MonitorFromPoint`
+/// + `GetMonitorInfoW`), which ties this Y anchor to the same monitor identity
+/// the widget is positioned against. Falls back to the process-wide
+/// `SPI_GETWORKAREA` snapshot if the monitor query fails.
 #[cfg(windows)]
 pub fn work_area_bottom() -> Option<i32> {
+    primary_monitor_work_area_bottom().or_else(work_area_bottom_spi)
+}
+
+/// Primary-monitor work-area bottom via `MonitorFromPoint((0,0),
+/// MONITOR_DEFAULTTOPRIMARY)` + `GetMonitorInfoW`. Unlike the SPI snapshot this
+/// is scoped to a concrete monitor handle, so it doesn't report the stale
+/// process-wide work area that lingers mid dock-transition.
+#[cfg(windows)]
+fn primary_monitor_work_area_bottom() -> Option<i32> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
+    let origin = POINT { x: 0, y: 0 };
+    let hmon: HMONITOR = unsafe { MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY) };
+    if hmon.0.is_null() {
+        return None;
+    }
+    // GetMonitorInfoW requires cbSize to be set to the struct size up front;
+    // Default() zeroes it, which the call would reject.
+    let mut mi = MONITORINFO {
+        cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { GetMonitorInfoW(hmon, &mut mi) };
+    if ok.as_bool() {
+        Some(mi.rcWork.bottom)
+    } else {
+        None
+    }
+}
+
+/// Fallback: process-wide work area via `SPI_GETWORKAREA` (primary-monitor-only
+/// snapshot; can report stale bounds during a dock/undock).
+#[cfg(windows)]
+fn work_area_bottom_spi() -> Option<i32> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
         SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
