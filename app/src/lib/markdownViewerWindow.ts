@@ -3,6 +3,8 @@
 // viewers are open, or spawns a fresh one when none exist. Mirrors the
 // dynamic-window pattern used by `jsonViewerWindow.ts`.
 
+import { rectVisibleOnAnyMonitor } from "./windowBounds";
+
 const MARKDOWN_VIEWER_OPTIONS: Record<string, unknown> = {
   url: "index.html#markdown-viewer",
   width: 1000,
@@ -75,19 +77,23 @@ export async function restoreMarkdownViewerWindows(): Promise<void> {
       if (!label.startsWith("markdown-viewer:")) continue;
       if (liveLabels.has(label)) continue;
 
-      // Build window options, overlaying saved geometry when available.
-      const opts: Record<string, unknown> = {
-        ...MARKDOWN_VIEWER_OPTIONS,
-        ...(entry.win
-          ? {
-              x: entry.win.x,
-              y: entry.win.y,
-              width: entry.win.width,
-              height: entry.win.height,
-              alwaysOnTop: entry.win.pinned,
-            }
-          : {}),
-      };
+      // Build window options, overlaying saved geometry when available. A saved
+      // position that no longer lands on any attached monitor (undocked /
+      // monitor removed) is dropped so the window centers on-screen instead of
+      // opening off on a detached display; size + pin are still honored.
+      const opts: Record<string, unknown> = { ...MARKDOWN_VIEWER_OPTIONS };
+      if (entry.win) {
+        const onScreen = await rectVisibleOnAnyMonitor(entry.win);
+        Object.assign(
+          opts,
+          onScreen ? { x: entry.win.x, y: entry.win.y } : { center: true },
+          {
+            width: entry.win.width,
+            height: entry.win.height,
+            alwaysOnTop: entry.win.pinned,
+          },
+        );
+      }
 
       // Reuse the saved label so the window hydrates itself from the same
       // registry entry on mount (label is the key into localStorage registry).
