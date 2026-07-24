@@ -45,13 +45,14 @@ export const PANEL_DEFAULTS: Record<PanelKind, Record<string, unknown>> = {
   },
 };
 
-/** Primary key per panel kind — `sessionId` for session-detail, `server` for sql-query. */
+/** Primary key per panel kind — `sessionId` for session-detail, the stable
+ *  per-window `id` for sql-query (decoupled from the connection). */
 export function panelKeyFor(
   kind: PanelKind,
   payload: SqlPanelPayload | DetailPanelPayload,
 ): string {
   return kind === "sql-query"
-    ? (payload as SqlPanelPayload).server
+    ? (payload as SqlPanelPayload).id
     : (payload as DetailPanelPayload).sessionId;
 }
 
@@ -77,7 +78,7 @@ export function payloadOf(
   panel: PinnedPanel,
 ): SqlPanelPayload | DetailPanelPayload {
   if (panel.kind === "sql-query") {
-    return { server: panel.server, label: panel.label };
+    return { id: panel.id, server: panel.server, label: panel.label };
   }
   return { sessionId: panel.sessionId, cwd: panel.cwd, pid: panel.pid };
 }
