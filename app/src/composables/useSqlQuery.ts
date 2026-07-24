@@ -3,6 +3,7 @@ import {
   addSqlGroup,
   addSqlQuery,
   executeSqlQuery,
+  getIdentityData,
   killSqlQuery,
   listSqlGroups,
   listSqlQueries,
@@ -15,6 +16,7 @@ import {
   renameSqlGroup,
   setSqlGroupPinned,
   updateSqlQuery,
+  type IdentityConnection,
   type LegacySavedSqlQuery,
   type QueryResult,
   type SavedSqlQuery,
@@ -25,6 +27,7 @@ import {
   readHashParams,
   rememberWindowFocus,
   setPanelPinned,
+  updatePinnedPanel,
   type PinnedPanel,
 } from "@/lib/panelStorage";
 
@@ -63,6 +66,13 @@ const UNGROUPED_KEY = "__ungrouped__";
 const params = readHashParams();
 const initialServer = params.get("server") ?? "";
 const initialLabel = params.get("label") ?? "";
+// Stable per-window identity, decoupled from the connection. Minted here for
+// legacy/direct opens that predate the id param so pin/restore still work.
+const panelId =
+  params.get("id") ||
+  (typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `sql-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 const server = ref(initialServer);
 const label = ref(initialLabel);
@@ -72,9 +82,12 @@ const result = ref<QueryResult | null>(null);
 const error = ref<string | null>(null);
 const running = ref(false);
 const currentQueryId = ref<string | null>(null);
+// Connections available in the header dropdown (canonical registry — same set
+// Mission Control lists, no health probing).
+const connections = ref<IdentityConnection[]>([]);
 
 function ownPanel(): PinnedPanel {
-  return { kind: "sql-query", server: server.value, label: label.value };
+  return { kind: "sql-query", id: panelId, server: server.value, label: label.value };
 }
 
 const pinned = ref(server.value ? isPanelPinned(ownPanel()) : false);
@@ -179,11 +192,48 @@ async function refresh() {
   }
 }
 
+async function loadConnections() {
+  try {
+    connections.value = (await getIdentityData()).connections;
+  } catch (e) {
+    console.warn("[sql-query] failed to load connections:", e);
+  }
+}
+
 async function ensureLoaded() {
   if (initialised) return;
   initialised = true;
-  await migrateLegacyOnce();
-  await refresh();
+  syncTitle();
+  await Promise.all([migrateLegacyOnce().then(refresh), loadConnections()]);
+}
+
+/** Reflect the active connection in the window/document title (taskbar,
+ *  alt-tab, restored-window identity for the user). */
+function syncTitle() {
+  document.title = server.value ? `SQL — ${label.value || server.value}` : "SQL Query";
+}
+
+/** Switch the panel to a different connection. Runs are per-call on the
+ *  backend (fresh connection each time), so this only swaps the target and
+ *  clears the now-stale result. If this panel is pinned, persist the new
+ *  connection so it restores here on next launch. */
+function changeConnection(nextServer: string, nextLabel: string) {
+  if (
+    nextServer.toLowerCase() === server.value.toLowerCase() &&
+    nextLabel === label.value
+  ) {
+    return;
+  }
+  server.value = nextServer;
+  label.value = nextLabel;
+  // The prior result belongs to the prior connection — drop it so the grid
+  // never misattributes rows to the newly-selected server.
+  result.value = null;
+  error.value = null;
+  syncTitle();
+  if (pinned.value) {
+    updatePinnedPanel(ownPanel());
+  }
 }
 
 async function startListening() {
@@ -228,13 +278,21 @@ async function runQuery() {
   error.value = null;
   result.value = null;
 
+  // Capture the target so a connection switch mid-run can't misattribute this
+  // result to the newly-selected server (the dropdown stays enabled while
+  // running). If the server changed by the time we resolve, discard silently.
+  const runServer = server.value;
+
   try {
-    result.value = await executeSqlQuery(server.value, database.value, queryText, queryId);
+    const res = await executeSqlQuery(runServer, database.value, queryText, queryId);
+    if (server.value === runServer) result.value = res;
   } catch (e) {
-    error.value = String(e);
+    if (server.value === runServer) error.value = String(e);
   } finally {
-    running.value = false;
-    currentQueryId.value = null;
+    if (currentQueryId.value === queryId) {
+      running.value = false;
+      currentQueryId.value = null;
+    }
   }
 }
 
@@ -394,6 +452,8 @@ export function useSqlQuery() {
   return {
     server,
     label,
+    connections,
+    changeConnection,
     sql,
     database,
     result,

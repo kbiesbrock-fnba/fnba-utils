@@ -8,6 +8,11 @@
 export type PanelKind = "sql-query" | "session-detail";
 
 export interface SqlPanelPayload {
+  /** Stable per-window identity (uuid). Decoupled from the connection so a
+   *  single SQL panel can switch connections while remaining the same window
+   *  (same label, same pin state, same restore slot). */
+  id: string;
+  /** Current/seed connection — mutable within the window. */
   server: string;
   label: string;
 }
@@ -45,6 +50,8 @@ function isPinnedPanel(p: unknown): p is PinnedPanel {
   if (!p || typeof p !== "object") return false;
   const k = (p as { kind?: unknown }).kind;
   if (k === "sql-query") {
+    // `id` is backfilled from `server` for legacy entries in readPinnedPanels,
+    // so it isn't required to pass the guard here.
     const q = p as { server?: unknown; label?: unknown };
     return typeof q.server === "string" && typeof q.label === "string";
   }
@@ -65,7 +72,15 @@ export function readPinnedPanels(): PinnedPanel[] {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isPinnedPanel);
+    return parsed.filter(isPinnedPanel).map((p) => {
+      // Legacy pin (pre per-window id): key it by server so it restores to the
+      // same window label as before — label is hash(id), and id === server
+      // reproduces the old hash(server).
+      if (p.kind === "sql-query" && !p.id) {
+        return { ...p, id: p.server };
+      }
+      return p;
+    });
   } catch {
     return [];
   }
@@ -82,7 +97,7 @@ export function writePinnedPanels(list: PinnedPanel[]) {
 function panelIdentityMatches(a: PinnedPanel, b: PinnedPanel): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "sql-query") {
-    return a.server === (b as Extract<PinnedPanel, { kind: "sql-query" }>).server;
+    return a.id === (b as Extract<PinnedPanel, { kind: "sql-query" }>).id;
   }
   return (
     a.sessionId ===
@@ -104,6 +119,17 @@ export function setPanelPinned(panel: PinnedPanel, pinned: boolean) {
   } else {
     return;
   }
+  writePinnedPanels(list);
+}
+
+/** If a pinned panel with this identity is stored, replace its record so
+ *  changed fields persist (e.g. a SQL panel's current connection). No-op when
+ *  the panel isn't pinned. */
+export function updatePinnedPanel(panel: PinnedPanel) {
+  const list = readPinnedPanels();
+  const idx = list.findIndex((p) => panelIdentityMatches(p, panel));
+  if (idx < 0) return;
+  list[idx] = panel;
   writePinnedPanels(list);
 }
 
