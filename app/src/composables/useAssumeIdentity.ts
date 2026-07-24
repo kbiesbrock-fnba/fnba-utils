@@ -26,6 +26,22 @@ export type AssumeIdentityStep =
   | "result"
   | "error";
 
+/** Outcome of assuming the chosen identity on ONE selected connection. Exactly
+ *  one of `result` / `error` is non-null. The combined result step renders one
+ *  of these per connection. */
+export interface ConnectionRunResult {
+  connection: IdentityConnection;
+  result: AssumeIdentityResult | null;
+  error: string | null;
+}
+
+/** Live progress of the sequential per-connection loop, for the executing view. */
+export interface ExecutingProgress {
+  current: number;
+  total: number;
+  server: string;
+}
+
 // --- Favorites ordering ---
 // Composite key matching the Rust `fav_key` (label + U+001F + username). A
 // username can repeat across labels in the defaults, so the hot-pick order is
@@ -101,12 +117,23 @@ const selectedImposter = ref<string | null>(null); // stores the name string
 const users = ref<IdentityUser[]>([]); // favorites, in saved hot-pick order
 const connections = ref<IdentityConnection[]>([]);
 const selectedUser = ref<IdentityUser | null>(null);
-const selectedConnection = ref<IdentityConnection | null>(null);
-const result = ref<AssumeIdentityResult | null>(null);
+// Multi-select: the connection picker can toggle several connections; the
+// assume runs sequentially against each. A single-select (row click / digit)
+// is just a one-element list — one unified flow.
+const selectedConnections = ref<IdentityConnection[]>([]);
+// Per-connection outcomes for the combined result step.
+const runResults = ref<ConnectionRunResult[]>([]);
+const executingProgress = ref<ExecutingProgress | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(false);
 const dataLoaded = ref(false);
 const recentUsers = ref<RecentEntry[]>(loadRecents());
+
+// Run-generation guard. execute() captures this token at loop start; reset()
+// bumps it. State refs are module-level singletons, so an execute() left
+// in-flight by a closed/reopened palette would otherwise keep mutating shared
+// state — between connections we bail if the token went stale.
+let runToken = 0;
 
 function recordRecentUser(label: string, username: string) {
   const filtered = readRecents().filter((e) => !sameComposite(e, label, username));
@@ -159,12 +186,15 @@ export function useAssumeIdentity() {
     step.value = "user";
     selectedImposter.value = currentUser.value || null;
     selectedUser.value = null;
-    selectedConnection.value = null;
+    selectedConnections.value = [];
+    runResults.value = [];
+    executingProgress.value = null;
     inspectedAssociate.value = null;
     inspectedRights.value = [];
-    result.value = null;
     error.value = null;
     loading.value = false;
+    // Invalidate any execute() loop still in flight from a prior open.
+    runToken++;
   }
 
   /** Audit a searched person's rights (the reverse "what can they do" view). */
@@ -211,8 +241,9 @@ export function useAssumeIdentity() {
     step.value = "connection";
   }
 
-  function selectConnection(conn: IdentityConnection) {
-    selectedConnection.value = conn;
+  function selectConnections(conns: IdentityConnection[]) {
+    if (conns.length === 0) return;
+    selectedConnections.value = conns;
     step.value = "confirm";
   }
 
@@ -249,90 +280,128 @@ export function useAssumeIdentity() {
 
 
   async function execute() {
-    if (!selectedImposter.value || !selectedUser.value || !selectedConnection.value) return;
+    if (!selectedImposter.value || !selectedUser.value || selectedConnections.value.length === 0)
+      return;
     step.value = "executing";
     loading.value = true;
+    runResults.value = [];
 
     const user = selectedUser.value;
-    const conn = selectedConnection.value;
     const imp = selectedImposter.value;
+    const conns = selectedConnections.value;
+    const token = runToken;
 
-    // Users are no longer auto-saved — favorites are explicit (see pinUser).
-    // Connections/imposters typed inline are still remembered.
-    const isNewConnection = !connections.value.some(
-      (c) => c.server.toLowerCase() === conn.server.toLowerCase(),
-    );
-    const isNewImposter = !imposters.value.some(
-      (i) => i.name.toLowerCase() === imp.toLowerCase(),
-    );
+    // The imposter is one value for the whole run — save it (if new) only once,
+    // regardless of how many connections we hit. `savedAnything` drives a single
+    // best-effort identity-data refresh after the loop.
+    let imposterSaved = false;
+    let savedAnything = false;
+    const results: ConnectionRunResult[] = [];
 
-    try {
-      result.value = await executeAssumeIdentity(imp, user.username, conn.server);
-
-      if (isNewConnection || isNewImposter) {
-        try {
-          const saved = await saveCustomEntry(
-            isNewConnection ? conn.server : undefined,
-            isNewConnection ? conn.label : undefined,
-            isNewImposter ? imp : undefined,
-          );
-          const parts: string[] = [];
-          if (saved.addedConnection) parts.push(conn.server);
-          if (saved.addedImposter) parts.push(imp);
-          if (parts.length > 0) {
-            const added = parts.join(" and ");
-            const existing = result.value.message ?? "";
-            result.value.message = existing
-              ? `${existing} — Saved ${added} for next time.`
-              : `Saved ${added} for next time.`;
-          }
-          dataLoaded.value = false;
-          // Fire-and-forget: the assume itself succeeded and step='result' is
-          // about to be set below — swallow any error from this background
-          // refresh so a transient DB blip in getIdentityData() can't clobber
-          // the success view with an error step. The next palette open will
-          // refetch.
-          loadData().catch(() => {
-            /* assume already succeeded; stale data refresh is best-effort */
-          });
-        } catch (saveErr) {
-          const existing = result.value!.message ?? "";
-          result.value!.message = existing
-            ? `${existing} — Failed to save custom entry: ${saveErr}`
-            : `Failed to save custom entry: ${saveErr}`;
-        }
+    for (let i = 0; i < conns.length; i++) {
+      // Bail if the palette was reset/reopened mid-run — the module-level state
+      // now belongs to a newer flow; don't keep mutating it.
+      if (token !== runToken) {
+        loading.value = false;
+        return;
       }
 
-      // Bubble this favorite to #1 — but only if the *exact* (label, username)
-      // pair is currently a favorite. One-off assumes from directory search
-      // never become "recents" and never reorder favorites; the favorites list
-      // stays a curated thing the user opts into via pinning. (A pin done in
-      // the same flow lands before this check, because pinUser awaits
-      // reloadData before the user reaches the connection step.)
-      const isExactFav = users.value.some(
-        (u) =>
-          u.username.toLowerCase() === user.username.toLowerCase() &&
-          u.label.toLowerCase() === user.label.toLowerCase(),
+      const conn = conns[i];
+      executingProgress.value = { current: i + 1, total: conns.length, server: conn.server };
+
+      // Users are no longer auto-saved — favorites are explicit (see pinUser).
+      // Connections/imposters typed inline are still remembered. Detect newness
+      // per connection so several new connections in one run each get saved.
+      const isNewConnection = !connections.value.some(
+        (c) => c.server.toLowerCase() === conn.server.toLowerCase(),
       );
-      if (isExactFav) {
-        try {
-          await markFavoriteUsed(user.label, user.username);
-          await reloadData();
-        } catch {
-          /* ignore — assume already succeeded */
+      const isNewImposter =
+        !imposterSaved &&
+        !imposters.value.some((iy) => iy.name.toLowerCase() === imp.toLowerCase());
+
+      try {
+        const res = await executeAssumeIdentity(imp, user.username, conn.server);
+
+        if (isNewConnection || isNewImposter) {
+          try {
+            const saved = await saveCustomEntry(
+              isNewConnection ? conn.server : undefined,
+              isNewConnection ? conn.label : undefined,
+              isNewImposter ? imp : undefined,
+            );
+            const parts: string[] = [];
+            if (saved.addedConnection) parts.push(conn.server);
+            if (saved.addedImposter) {
+              parts.push(imp);
+              imposterSaved = true;
+            }
+            if (parts.length > 0) {
+              savedAnything = true;
+              const added = parts.join(" and ");
+              const existing = res.message ?? "";
+              res.message = existing
+                ? `${existing} — Saved ${added} for next time.`
+                : `Saved ${added} for next time.`;
+            }
+          } catch (saveErr) {
+            const existing = res.message ?? "";
+            res.message = existing
+              ? `${existing} — Failed to save custom entry: ${saveErr}`
+              : `Failed to save custom entry: ${saveErr}`;
+          }
         }
-      } else {
-        // Unpinned assume → drop it in Recently Used (FIFO cap 5). The user
-        // can pin it later from the recents row; until then it cycles out
-        // naturally as new unpinned assumes push it down.
-        recordRecentUser(user.label, user.username);
+
+        results.push({ connection: conn, result: res, error: null });
+      } catch (e) {
+        // Per-connection failure never aborts the run — it's captured and shown
+        // inline in the combined result. The global "error" step is reserved for
+        // pre-flight guard failures only.
+        results.push({ connection: conn, result: null, error: String(e) });
       }
-      step.value = "result";
-    } catch (e) {
-      error.value = String(e);
-      step.value = "error";
-    } finally {
+    }
+
+    // Loop finished — bail without touching the view if a reset raced us.
+    if (token !== runToken) {
       loading.value = false;
+      return;
+    }
+
+    runResults.value = results;
+    executingProgress.value = null;
+    step.value = "result";
+    loading.value = false;
+
+    // Favorites/recents are keyed on (user, label), not connection — bump ONCE
+    // per run. These run after the result is on screen and never mutate `step`.
+    // Bubble this favorite to #1 — but only if the *exact* (label, username)
+    // pair is currently a favorite. One-off assumes from directory search never
+    // become "recents" and never reorder favorites; the favorites list stays a
+    // curated thing the user opts into via pinning.
+    const isExactFav = users.value.some(
+      (u) =>
+        u.username.toLowerCase() === user.username.toLowerCase() &&
+        u.label.toLowerCase() === user.label.toLowerCase(),
+    );
+    if (isExactFav) {
+      try {
+        await markFavoriteUsed(user.label, user.username);
+        await reloadData();
+      } catch {
+        /* ignore — assume already succeeded */
+      }
+    } else {
+      // Unpinned assume → drop it in Recently Used (FIFO cap 5).
+      recordRecentUser(user.label, user.username);
+      // Pick up any newly-saved connections/imposters for the next open. Fire-
+      // and-forget: the assume already succeeded, so a transient DB blip must
+      // not clobber the success view. (reloadData above already covers the fav
+      // branch.)
+      if (savedAnything) {
+        dataLoaded.value = false;
+        loadData().catch(() => {
+          /* best-effort refresh */
+        });
+      }
     }
   }
 
@@ -361,8 +430,10 @@ export function useAssumeIdentity() {
         selectedUser.value = null;
         return true;
       case "confirm":
+        // Back to the picker WITH the checked set intact, so reviewing the
+        // selection and backing out doesn't discard it. The picker re-seeds its
+        // checkboxes from selectedConnections on mount.
         step.value = "connection";
-        selectedConnection.value = null;
         return true;
       default:
         return false;
@@ -377,8 +448,9 @@ export function useAssumeIdentity() {
     users,
     connections,
     selectedUser,
-    selectedConnection,
-    result,
+    selectedConnections,
+    runResults,
+    executingProgress,
     error,
     loading,
     recentUsers,
@@ -389,7 +461,7 @@ export function useAssumeIdentity() {
     reset,
     selectImposter,
     selectUser,
-    selectConnection,
+    selectConnections,
     isFavorite,
     pinUser,
     unpinFavorite,
