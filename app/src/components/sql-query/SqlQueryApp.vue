@@ -6,6 +6,8 @@ import PinButton from "@/components/common/PinButton.vue";
 const {
   server,
   label,
+  connections,
+  changeConnection,
   sql,
   database,
   result,
@@ -30,6 +32,26 @@ const {
   togglePin,
   closeWindow,
 } = useSqlQuery();
+
+// Connection dropdown options: the canonical registry, with the currently
+// active connection unioned in so it always appears even if it's a custom
+// server not (yet) in the list.
+const connOptions = computed(() => {
+  const opts = connections.value.map((c) => ({ server: c.server, label: c.label }));
+  if (
+    server.value &&
+    !opts.some((o) => o.server.toLowerCase() === server.value.toLowerCase())
+  ) {
+    opts.unshift({ server: server.value, label: label.value });
+  }
+  return opts;
+});
+
+function onConnChange(e: Event) {
+  const sel = (e.target as HTMLSelectElement).value;
+  const opt = connOptions.value.find((o) => o.server === sel);
+  if (opt) changeConnection(opt.server, opt.label);
+}
 
 // ---- Save dialog state ----
 const showSaveInput = ref(false);
@@ -307,8 +329,16 @@ const totalSavedCount = computed(() =>
     <div v-if="!server" class="sq-empty">Click a connection in Mission Control</div>
     <template v-else>
       <div class="sq-header">
-        <span class="sq-server"><strong>{{ server.split('.')[0] }}</strong><span class="sq-domain">.{{ server.split('.').slice(1).join('.') }}</span></span>
-        <span class="sq-badge">{{ label }}</span>
+        <select
+          class="sq-conn-select"
+          :value="server"
+          title="Switch connection"
+          @change="onConnChange"
+        >
+          <option v-for="o in connOptions" :key="o.server" :value="o.server">
+            {{ o.label }} — {{ o.server }}
+          </option>
+        </select>
         <PinButton :pinned="pinned" @toggle="togglePin" />
         <input
           v-model="database"
@@ -614,29 +644,26 @@ const totalSavedCount = computed(() =>
   -webkit-app-region: drag;
 }
 
-.sq-server {
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--text-secondary);
-}
-
-.sq-server strong {
-  font-weight: 600;
+.sq-conn-select {
+  -webkit-app-region: no-drag;
+  max-width: 340px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
   color: var(--text-primary);
+  outline: none;
+  cursor: pointer;
 }
 
-.sq-domain {
-  font-size: 11px;
+.sq-conn-select:hover {
+  border-color: var(--text-secondary);
 }
 
-.sq-badge {
-  font-size: 10px;
-  padding: 0 5px;
-  border-radius: 3px;
-  font-weight: 500;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-secondary);
-  line-height: 16px;
+.sq-conn-select:focus {
+  border-color: var(--accent-blue);
 }
 
 .sq-db-input {
