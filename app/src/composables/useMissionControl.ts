@@ -281,7 +281,7 @@ async function hideAllSidePanels() {
   // (in lib.rs) bypasses this and hides everything regardless of pin.
   const pinnedLabels = new Set(
     readPinnedPanels().map((p) =>
-      panelLabelFor(p.kind, p.kind === "sql-query" ? p.server : p.sessionId),
+      panelLabelFor(p.kind, p.kind === "sql-query" ? p.id : p.sessionId),
     ),
   );
   const panels = await listSidePanels();
@@ -400,7 +400,16 @@ export function useMissionControl() {
   }
 
   async function selectConnection(status: ConnectionStatus) {
+    // SQL panels are now general-purpose workspaces with a switchable
+    // connection (identity is a per-window uuid, not the server). Each click
+    // opens a fresh panel seeded to this connection rather than focusing a
+    // per-server window, since a window's connection is no longer fixed.
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `sql-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     await openOrFocusPanel("sql-query", {
+      id,
       server: status.server,
       label: status.label,
     });
