@@ -64,6 +64,7 @@ All persistent app state lives under `%LOCALAPPDATA%\fnba-utils\` (resolved via 
 - `%LOCALAPPDATA%\fnba-utils\owned-sessions.json` -- MC's persisted Claude session registry
 - `%LOCALAPPDATA%\fnba-utils\projects.json` -- MC's project registry (pinned + MRU)
 - `%LOCALAPPDATA%\fnba-utils\clipboard.db` -- SQLite clipboard history (shared between main and daemon)
+- `%LOCALAPPDATA%\fnba-utils\sql-library.json` -- SQL Query panel's file-library config (`{ root, exportedAt }`); the queries themselves live as `.sql` files under the user-chosen `root` (typically a WSL UNC path), not under this dir
 - `%LOCALAPPDATA%\fnba-utils\config.yaml` -- standup configuration
 - `%LOCALAPPDATA%\fnba-utils\standup.db` + `standup-last-run.json` -- standup state and last-run record
 - `localStorage` -- a few small UI prefs (chat debug toggle, panel pin state). Recent projects moved to the backend registry above.
