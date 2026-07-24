@@ -224,6 +224,33 @@ export interface LegacySavedSqlQuery {
   database: string;
 }
 
+/** Config for the filesystem-backed SQL query library. */
+export interface SqlLibraryConfig {
+  /** Windows-reachable root dir (drive or `\\wsl$\…` UNC), or null if unset. */
+  root: string | null;
+  /** Epoch-ms of the one-time legacy export, or null if it never ran. */
+  exportedAt: number | null;
+}
+
+/** A node in the SQL library tree — a directory (with children) or a .sql file. */
+export interface SqlTreeNode {
+  /** Display name: dir name, or filename sans `.sql` for files. */
+  name: string;
+  /** Path relative to the root, forward-slashed. */
+  relPath: string;
+  isDir: boolean;
+  /** Present only for directories. */
+  children?: SqlTreeNode[];
+}
+
+/** Result of a recursive walk of the library root. */
+export interface SqlLibraryTree {
+  root: string;
+  /** True when the entry cap tripped and the walk stopped early. */
+  truncated: boolean;
+  entries: SqlTreeNode[];
+}
+
 // --- Claude SDK (stream-json) session types ---
 
 /**
@@ -785,6 +812,45 @@ export async function onSqlQueriesChanged(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<null>("sql-queries-changed", () => handler());
+}
+
+/** Filesystem-backed SQL query library (root of `.sql` files). */
+export function getSqlLibrary(): Promise<SqlLibraryConfig> {
+  return invoke<SqlLibraryConfig>("get_sql_library");
+}
+
+/** Native folder picker → chosen Windows-reachable path, or null on cancel. */
+export function pickSqlLibraryRoot(): Promise<string | null> {
+  return invoke<string | null>("pick_sql_library_root");
+}
+
+/** Set/change the library root; triggers the one-time export the first time. */
+export function setSqlLibraryRoot(path: string): Promise<SqlLibraryConfig> {
+  return invoke<SqlLibraryConfig>("set_sql_library_root", { path });
+}
+
+export function sqlLibraryTree(): Promise<SqlLibraryTree> {
+  return invoke<SqlLibraryTree>("sql_library_tree");
+}
+
+export function sqlLibraryRead(rel: string): Promise<string> {
+  return invoke<string>("sql_library_read", { rel });
+}
+
+export function sqlLibraryWrite(rel: string, content: string): Promise<void> {
+  return invoke<void>("sql_library_write", { rel, content });
+}
+
+export function sqlLibraryMkdir(rel: string): Promise<void> {
+  return invoke<void>("sql_library_mkdir", { rel });
+}
+
+export function sqlLibraryDelete(rel: string): Promise<void> {
+  return invoke<void>("sql_library_delete", { rel });
+}
+
+export function sqlLibraryRename(rel: string, newRel: string): Promise<void> {
+  return invoke<void>("sql_library_rename", { rel, newRel });
 }
 
 /** Wave 4 session history. */
