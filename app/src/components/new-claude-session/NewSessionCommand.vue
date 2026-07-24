@@ -5,7 +5,6 @@ import { useCommandKeys } from "@/composables/useCommandKeys";
 import StatusBar from "../StatusBar.vue";
 import LoadingView from "../LoadingView.vue";
 import ErrorView from "../ErrorView.vue";
-import { isTauri } from "@/lib/tauri";
 import { PANEL_DEFAULTS, panelLabelFor, panelUrlFor } from "@/lib/panels";
 
 const emit = defineEmits<{
@@ -41,7 +40,6 @@ const filteredProjects = computed(() => {
 });
 
 async function openSessionDetail(sessionId: string, sessionCwd: string, pid: number) {
-  if (!isTauri) return;
   // Same window-creation shape as MC's openOrFocusPanel, minus the
   // positioning + cascade logic — MC handles that on next focus.
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");

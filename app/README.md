@@ -29,15 +29,15 @@ For what's new per version, see `RELEASE_NOTES.md` next to this file.
 
 ## What's built in
 
-The three FNBA SQL servers and the default staff list are baked into the exe, so the app works out of the box:
+The three FNBA SQL servers are baked into the exe, so the app works out of the box:
 
 - **Local** — `dsqlaleroy.fnba-dev.network`
 - **Development** — `meleagris.fnba.com`
 - **Staging** — `caster.fnba.com`
 
-Plus ~36 default users (developers / QA / etc.) selectable from the picker. Your own Windows username is always available as an "imposter" (the identity you authenticate as before assuming someone else's).
+There's no shipped list of users — find anyone via the live directory search in the user picker (by name or Windows login) and pin the ones you use often to favorites. Your own Windows username is always available as an "imposter" (the identity you authenticate as before assuming someone else's).
 
-## Custom users / connections / imposters
+## Custom connections / imposters / pinned favorites
 
 Create this file to add extras beyond the defaults:
 
@@ -63,11 +63,13 @@ All three sections are optional:
 }
 ```
 
+`Users` here is the same list the picker's pin button writes to — it's your pinned favorites, hand-editable if you'd rather type them in directly.
+
 A ready-to-edit template ships next to this README: `example.assumeIdentity.json`.
 
 **Behavior:**
 
-- Entries merge with the built-in defaults (they don't replace them).
+- Connections and imposters merge with the built-in defaults (they don't replace them); users are entirely yours — there are no shipped defaults to merge with.
 - Duplicates are skipped case-insensitively (by username / server).
 - Custom entries are flagged in the UI and can be deleted from the picker — that writes back to your `.assumeIdentity.json`.
 - Changes are picked up on next launch of the app.

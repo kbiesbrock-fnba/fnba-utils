@@ -30,6 +30,7 @@ export function useClipboardManager() {
   const filter = ref<Filter>("all");
   const loading = ref(false);
   const error = ref<string | null>(null);
+  const windowReady = ref(false);
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -52,6 +53,7 @@ export function useClipboardManager() {
         query.value || undefined,
         kind,
         filter.value === "pinned",
+        filter.value !== "pinned",
         200,
         0,
       );
@@ -263,6 +265,7 @@ export function useClipboardManager() {
   }
 
   function close() {
+    windowReady.value = false;
     void hideClipboardWindow();
   }
 
@@ -295,10 +298,13 @@ export function useClipboardManager() {
         if (detail.value?.id === id) detail.value = fresh;
       })();
     });
-    unsubShown = await onClipboardWindowShown((p) => {
+    unsubShown = await onClipboardWindowShown(async (p) => {
       // When the window is reopened via the global shortcut, reset the
       // query so the user lands on the freshest entries. Win+Shift+V sends
       // initialFilter="pinned" to land directly on the pinned view.
+      // windowReady stays false until the load completes so the native window
+      // becomes visible but renders nothing until filter + data are consistent.
+      windowReady.value = false;
       query.value = "";
       filter.value = p?.initialFilter === "pinned" ? "pinned" : "all";
       // Drop the prior selection so the reload selects the top (freshest)
@@ -306,7 +312,8 @@ export function useClipboardManager() {
       // the old scroll offset across opens; re-selecting the first row makes
       // the selection-scroll watch pull the list back to the top.
       selectedId.value = null;
-      void load();
+      await load();
+      windowReady.value = true;
     });
   });
 
@@ -327,6 +334,7 @@ export function useClipboardManager() {
     filter,
     loading,
     error,
+    windowReady,
     load,
     selectIndex,
     selectFirst,

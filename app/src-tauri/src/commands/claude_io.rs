@@ -1439,7 +1439,7 @@ pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, Str
     let picked = rx
         .await
         .map_err(|e| format!("Picker dropped: {e}"))?;
-    Ok(picked.map(|p| windows_path_to_wsl(&p)))
+    Ok(picked.map(|p| windows_path_to_wsl(&p.to_string_lossy())))
 }
 
 /// Open a file path in the user's editor of choice (IntelliJ if available,
@@ -1495,50 +1495,7 @@ fn strip_line_suffix(s: &str) -> &str {
     &s[..end]
 }
 
-/// Translate a WSL path like `/mnt/c/dev/foo.ts` to `C:\dev\foo.ts`. Pure
-/// Linux paths (e.g. `/home/<u>/...`) become UNC (`\\wsl.localhost\Ubuntu\...`).
-/// Already-Windows paths pass through unchanged.
-fn wsl_path_to_windows(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("/mnt/") {
-        if let Some((drive, tail)) = rest.split_once('/') {
-            if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
-                return format!(
-                    "{}:\\{}",
-                    drive.to_uppercase(),
-                    tail.replace('/', "\\"),
-                );
-            }
-        } else if rest.len() == 1 {
-            return format!("{}:\\", rest.to_uppercase());
-        }
-    }
-    if path.starts_with('/') {
-        return format!(r"\\wsl.localhost\Ubuntu{}", path.replace('/', "\\"));
-    }
-    // Looks like a Windows path already, or relative — pass through.
-    path.to_string()
-}
-
-/// Translate a Windows path like `C:\dev\fnba-utils` to `/mnt/c/dev/fnba-utils`.
-/// UNC paths under `\\wsl.localhost\Ubuntu\...` become `/...`. Already-Linux
-/// paths pass through unchanged.
-fn windows_path_to_wsl(path: &Path) -> String {
-    let s = path.to_string_lossy().replace('\\', "/");
-    if let Some(rest) = s.strip_prefix("//wsl.localhost/") {
-        // //wsl.localhost/<distro>/<rest> → /<rest>. If no rest, return root.
-        return match rest.split_once('/') {
-            Some((_distro, tail)) => format!("/{tail}"),
-            None => "/".to_string(),
-        };
-    }
-    // Detect "X:/..." drive prefix.
-    if let Some((drive, rest)) = s.split_once(":/") {
-        if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
-            return format!("/mnt/{}/{rest}", drive.to_lowercase());
-        }
-    }
-    s
-}
+use crate::util::paths::{windows_path_to_wsl, wsl_path_to_windows};
 
 // =============================================================================
 // Misc

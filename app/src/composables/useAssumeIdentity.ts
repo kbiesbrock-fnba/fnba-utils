@@ -272,8 +272,6 @@ export function useAssumeIdentity() {
       if (isNewConnection || isNewImposter) {
         try {
           const saved = await saveCustomEntry(
-            undefined,
-            undefined,
             isNewConnection ? conn.server : undefined,
             isNewConnection ? conn.label : undefined,
             isNewImposter ? imp : undefined,

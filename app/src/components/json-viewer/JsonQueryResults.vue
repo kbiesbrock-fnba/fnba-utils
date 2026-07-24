@@ -5,6 +5,8 @@ import type { QueryResult } from "../../composables/useJsonViewer";
 const props = defineProps<{
   results: QueryResult[];
   query: string;
+  /** Header label — "JSONPath" for path queries, "Search" for plain text. */
+  label?: string;
 }>();
 
 const expanded = ref<Set<number>>(new Set());
@@ -49,7 +51,7 @@ function copyValue(index: number) {
 <template>
   <div class="query-results">
     <div class="query-info">
-      <span class="query-label">JSONPath:</span>
+      <span class="query-label">{{ label ?? "JSONPath" }}:</span>
       <code class="query-text">{{ query }}</code>
       <span class="result-count">{{ results.length }} result{{ results.length !== 1 ? "s" : "" }}</span>
     </div>
@@ -96,6 +98,7 @@ function copyValue(index: number) {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   padding: 8px;
   background: rgba(76, 175, 80, 0.1);
   border: 1px solid rgba(76, 175, 80, 0.3);
@@ -135,6 +138,9 @@ function copyValue(index: number) {
   border-radius: 4px;
   background: #2d2d2d;
   overflow: hidden;
+  /* overflow:hidden zeroes the flex min-height, letting a lone row collapse
+     below its content — never shrink rows, let the container scroll. */
+  flex-shrink: 0;
 }
 
 .result-header {

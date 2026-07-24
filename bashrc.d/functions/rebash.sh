@@ -1,2 +1,2 @@
-# Reload ~/.bashrc
-rebash() { source ~/.bashrc; }
+# Reload "$HOME/.bashrc"
+rebash() { source "$HOME/.bashrc"; }

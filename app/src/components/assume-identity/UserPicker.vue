@@ -49,6 +49,10 @@ const searching = ref(false);
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let searchVersion = 0;
 
+// Whether to expand the collapsed login-less section in directory / holders results.
+// Resets to false on each new search / drill so fresh queries always start collapsed.
+const showNoLogin = ref(false);
+
 onMounted(async () => {
   try {
     allRights.value = await loadRights(props.searchServer);
@@ -62,8 +66,9 @@ onUnmounted(() => {
 
 // --- Row model (single shape to keep template type-checking simple) ---
 interface Row {
-  kind: "header" | "person" | "right" | "searching" | "empty";
+  kind: "header" | "person" | "right" | "searching" | "empty" | "noLoginToggle";
   text?: string; // header label / empty text
+  count?: number; // noLoginToggle: number of hidden login-less people
   flatIndex?: number; // selectable position (drives digit / arrow selection)
   badge?: string; // 1–9 hot-pick digit
   // person
@@ -113,6 +118,48 @@ function isFavComposite(label: string, username: string): boolean {
   return props.users.some(
     (u) => u.label.toLowerCase() === lo && u.username.toLowerCase() === un,
   );
+}
+
+/**
+ * Append selectable associate rows (those with a login) followed by a
+ * collapsible toggle for any login-less associates. Returns the updated
+ * selectable-index counter so callers can continue numbering other sections.
+ *
+ * Login-less people are genuinely unassumable (no Windows login exists), so
+ * they are hidden by default. The toggle row has no flatIndex and therefore
+ * does not interfere with digit/arrow navigation.
+ */
+function pushAssociateRows(rows: Row[], withLogin: RightAssociate[], noLogin: RightAssociate[], idx: number): number {
+  for (const a of withLogin) {
+    const fi = idx++;
+    rows.push({
+      kind: "person",
+      flatIndex: fi,
+      badge: badgeFor(fi),
+      username: a.login,
+      roleLabel: personLabel(a),
+      primary: personPrimary(a),
+      secondary: personSecondary(a),
+      assoc: a,
+    });
+  }
+  if (noLogin.length) {
+    rows.push({ kind: "noLoginToggle", count: noLogin.length });
+    if (showNoLogin.value) {
+      for (const a of noLogin) {
+        rows.push({
+          kind: "person",
+          username: null,
+          roleLabel: personLabel(a),
+          primary: personPrimary(a),
+          secondary: personSecondary(a),
+          noLogin: true,
+          assoc: a,
+        });
+      }
+    }
+  }
+  return idx;
 }
 
 function buildPeopleRows(): { rows: Row[]; selectable: number } {
@@ -226,32 +273,17 @@ function buildPeopleRows(): { rows: Row[]; selectable: number } {
     if (dir.length === 0) {
       rows.push({ kind: "empty", text: "No directory matches" });
     } else {
-      for (const a of dir) {
-        if (a.login) {
-          const fi = idx++;
-          seen.add(a.login.toLowerCase());
-          rows.push({
-            kind: "person",
-            flatIndex: fi,
-            badge: badgeFor(fi),
-            username: a.login,
-            roleLabel: personLabel(a),
-            primary: personPrimary(a),
-            secondary: personSecondary(a),
-            assoc: a,
-          });
-        } else {
-          rows.push({
-            kind: "person",
-            username: null,
-            roleLabel: personLabel(a),
-            primary: personPrimary(a),
-            secondary: personSecondary(a),
-            noLogin: true,
-            assoc: a,
-          });
-        }
+      // Partition: associates with a Windows login are selectable and numbered;
+      // login-less associates are hidden behind a collapsible toggle (they cannot
+      // be assumed — no login exists — so they must not occupy selectable slots).
+      const withLogin = dir.filter((a) => a.login);
+      const noLogin = dir.filter((a) => !a.login);
+      // Populate seen with every login we're about to render so callers that
+      // later dedup against this set stay correct.
+      for (const a of withLogin) {
+        if (a.login) seen.add(a.login.toLowerCase());
       }
+      idx = pushAssociateRows(rows, withLogin, noLogin, idx);
     }
   }
   return { rows, selectable: idx };
@@ -269,31 +301,9 @@ function buildRightsRows(): { rows: Row[]; selectable: number } {
     } else if (holders.value.length === 0) {
       rows.push({ kind: "empty", text: "No holders found" });
     } else {
-      for (const a of holders.value) {
-        if (a.login) {
-          const fi = idx++;
-          rows.push({
-            kind: "person",
-            flatIndex: fi,
-            badge: badgeFor(fi),
-            username: a.login,
-            roleLabel: personLabel(a),
-            primary: personPrimary(a),
-            secondary: personSecondary(a),
-            assoc: a,
-          });
-        } else {
-          rows.push({
-            kind: "person",
-            username: null,
-            roleLabel: personLabel(a),
-            primary: personPrimary(a),
-            secondary: personSecondary(a),
-            noLogin: true,
-            assoc: a,
-          });
-        }
-      }
+      const withLogin = holders.value.filter((a) => a.login);
+      const noLogin = holders.value.filter((a) => !a.login);
+      idx = pushAssociateRows(rows, withLogin, noLogin, idx);
     }
     return { rows, selectable: idx };
   }
@@ -375,6 +385,7 @@ async function selectRight(right: RightInfo) {
   rightDrill.value = right;
   recordRecentRight(right);
   resetIndex();
+  showNoLogin.value = false;
   scrollListTop();
   holders.value = [];
   holdersLoading.value = true;
@@ -452,6 +463,7 @@ function scheduleSearch(value: string) {
 function onUpdate(value: string) {
   query.value = value;
   resetIndex();
+  showNoLogin.value = false;
   if (scope.value === "people") scheduleSearch(value);
 }
 
@@ -597,6 +609,16 @@ const { selectedIndex, resetIndex } = useListNavigation({
         <div v-else-if="row.kind === 'searching'" class="searching-row">
           <div class="mini-spinner" />
           <span>Searching…</span>
+        </div>
+
+        <div
+          v-else-if="row.kind === 'noLoginToggle'"
+          class="no-login-toggle"
+          @click="showNoLogin = !showNoLogin"
+        >
+          <span class="chev">{{ showNoLogin ? "▾" : "▸" }}</span>
+          {{ showNoLogin ? "Hide" : "Show" }} {{ row.count }}
+          {{ row.count === 1 ? "person" : "people" }} without a Windows login
         </div>
 
         <div
@@ -775,6 +797,27 @@ const { selectedIndex, resetIndex } = useListNavigation({
 
 .no-login:hover {
   background: transparent;
+}
+
+.no-login-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.no-login-toggle:hover {
+  color: var(--text-primary);
+}
+
+.chev {
+  font-size: 10px;
+  opacity: 0.7;
 }
 
 .searching-row {

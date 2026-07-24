@@ -806,17 +806,7 @@ pub async fn kill_session(pid: u32) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn open_in_explorer(cwd: String) -> Result<(), String> {
-    let windows_path = if let Some(rest) = cwd.strip_prefix("/mnt/") {
-        if let Some((drive, path)) = rest.split_once('/') {
-            format!("{}:\\{}", drive.to_uppercase(), path.replace('/', "\\"))
-        } else {
-            format!("{}:\\", rest.to_uppercase())
-        }
-    } else {
-        // Pure Linux path — open via UNC
-        format!(r"\\wsl.localhost\Ubuntu{}", cwd.replace('/', "\\"))
-    };
-
+    let windows_path = crate::util::paths::wsl_path_to_windows(&cwd);
     std::process::Command::new("explorer.exe")
         .arg(&windows_path)
         .spawn()

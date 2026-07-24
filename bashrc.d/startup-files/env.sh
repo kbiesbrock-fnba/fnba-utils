@@ -12,7 +12,7 @@ if [ -d "$HOME/.fnba" ]; then
   unset f
 fi
 
-export NODE_TLS_REJECT_UNAUTHORIZED=0
-export NODE_EXTRA_CA_CERTS="$HOME/corporate-ca.pem"
+#export NODE_TLS_REJECT_UNAUTHORIZED=0
+export NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt"
 export PATH="$HOME/.local/bin:$PATH"
 export JAVA_HOME="$HOME/.sdkman/candidates/java/current"

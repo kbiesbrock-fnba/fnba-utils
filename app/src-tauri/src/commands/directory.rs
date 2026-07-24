@@ -159,7 +159,9 @@ ORDER BY per.nickname";
 /// (consistent with `get_right_associates`); they render as `noLogin` rows in
 /// the picker. User input is escaped against SQL Server LIKE metacharacters so
 /// a literal `_` / `%` / `[` doesn't act as a wildcard or character class.
-/// Canonical login per person picked by most-recent `date_modified`.
+/// Canonical login per person prefers one matching the search text (so typing
+/// a login shows that exact login even if it's not the person's most-recent
+/// one); name-only matches fall back to most-recent `date_modified`.
 #[tauri::command]
 pub async fn search_associates(
     server: String,
@@ -190,7 +192,8 @@ OUTER APPLY (
     SELECT TOP 1 al2.domain_username
     FROM logincheck.fnba_reporting.associate_login al2
     WHERE al2.assoc_id = a.assoc_id
-    ORDER BY al2.date_modified DESC, al2.domain_username ASC
+    ORDER BY CASE WHEN al2.domain_username LIKE '%' + @search + '%' ESCAPE '\\' THEN 0 ELSE 1 END,
+             al2.date_modified DESC, al2.domain_username ASC
 ) canonical
 WHERE a.nickname LIKE '%' + @search + '%' ESCAPE '\\'
    OR a.first_name LIKE '%' + @search + '%' ESCAPE '\\'

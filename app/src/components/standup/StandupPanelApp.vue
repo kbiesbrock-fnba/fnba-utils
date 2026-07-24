@@ -5,7 +5,7 @@ import PinButton from "@/components/common/PinButton.vue";
 import StandupHistoryDrawer from "./StandupHistoryDrawer.vue";
 import IssueRowDetail from "./IssueRowDetail.vue";
 import StandupTaskRow from "./StandupTaskRow.vue";
-import { isTauri, getIssueDetail, type IssueDetail } from "@/lib/tauri";
+import { getIssueDetail, type IssueDetail } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
 
 const {
@@ -92,10 +92,6 @@ async function toggleExpand(key: string) {
 // --- Open detail panel (double click) ---
 
 async function openDetail(key: string) {
-  if (!isTauri) {
-    console.log("[mock] open issue detail:", key);
-    return;
-  }
   // localStorage handoff guarantees the detail window picks up the key even if
   // it loaded before the event listener was registered (first-open race).
   try {
@@ -134,7 +130,6 @@ type ResizeDir =
 async function startResize(dir: ResizeDir, e: MouseEvent) {
   e.preventDefault();
   e.stopPropagation();
-  if (!isTauri) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow().startResizeDragging(dir);
 }

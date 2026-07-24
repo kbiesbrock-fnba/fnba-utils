@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, onBeforeUnmount, watch, nextTick } from "vue";
+import { onPaletteShown } from "@/lib/tauri";
 
 const props = defineProps<{
   value: string;
@@ -12,13 +13,40 @@ const emit = defineEmits<{
 
 const inputRef = ref<HTMLInputElement | null>(null);
 
-onMounted(() => inputRef.value?.focus());
+// Focus the input, retrying briefly. When the palette is shown via the global
+// hotkey the webview isn't always focus-ready the instant we're notified, so a
+// single .focus() can silently no-op. Retry until the input actually holds
+// focus (or give up after ~250 ms) so the caret reliably lands in the box.
+function focusInput() {
+  let tries = 0;
+  const attempt = () => {
+    inputRef.value?.focus();
+    if (document.activeElement === inputRef.value || tries++ >= 10) return;
+    setTimeout(attempt, 25);
+  };
+  void nextTick(attempt);
+}
+
+let unlistenShown: (() => void) | null = null;
+let disposed = false;
+
+onMounted(async () => {
+  focusInput();
+  // Re-focus on every palette show: onMounted fires only once (the component
+  // stays mounted across hide/show), so the global hotkey needs this signal.
+  const un = await onPaletteShown(focusInput);
+  if (disposed) un();
+  else unlistenShown = un;
+});
+
+onBeforeUnmount(() => {
+  disposed = true;
+  unlistenShown?.();
+});
 
 watch(
   () => props.placeholder,
-  () => {
-    setTimeout(() => inputRef.value?.focus(), 0);
-  },
+  () => focusInput(),
 );
 
 function onInput(e: Event) {

@@ -8,7 +8,6 @@ import {
   clearManualOrder,
   hideWindow,
   onStandupUpdated,
-  isTauri,
   type JiraIssue,
   type StandupPanelState,
   type StandupRunSummary,
@@ -213,15 +212,13 @@ export function useStandupPanel() {
         cleanupListener = unlisten;
       });
 
-      if (isTauri) {
-        window.addEventListener("blur", () => {
-          if (pinned.value) return;
-          setTimeout(() => {
-            if (document.hasFocus()) return;
-            void hideWindow();
-          }, 50);
-        });
-      }
+      window.addEventListener("blur", () => {
+        if (pinned.value) return;
+        setTimeout(() => {
+          if (document.hasFocus()) return;
+          void hideWindow();
+        }, 50);
+      });
     }
   });
 

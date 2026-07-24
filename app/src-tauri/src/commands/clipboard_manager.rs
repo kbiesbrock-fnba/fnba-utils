@@ -80,6 +80,7 @@ pub async fn list_clipboard_entries(
     query: Option<String>,
     kind: Option<String>,
     pinned_only: Option<bool>,
+    exclude_pinned: Option<bool>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<ClipboardEntrySummary>, String> {
@@ -91,6 +92,7 @@ pub async fn list_clipboard_entries(
         q,
         kind.as_deref(),
         pinned_only.unwrap_or(false),
+        exclude_pinned.unwrap_or(false),
         limit.unwrap_or(100).min(500),
         offset.unwrap_or(0),
     )

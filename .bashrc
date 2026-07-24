@@ -1,6 +1,6 @@
 # fnba-utils shell extensions
 # Source this file from ~/.bashrc:
-#   source "$HOME/dev/kbiesbrock-fnba/fnba-utils/.bashrc"
+#   source "path/to/fnba-utils/.bashrc"
 
 export FNBA_UTILS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

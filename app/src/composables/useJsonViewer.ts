@@ -327,6 +327,40 @@ export function useJsonViewer() {
     return results;
   }
 
+  // Plain-text search: collect nodes whose key matches the query, plus scalar
+  // leaves whose value contains it. Containers are matched by key only so a
+  // hit near the root doesn't flood the results with every descendant.
+  function searchResults(query: string): QueryResult[] {
+    const results: QueryResult[] = [];
+    const q = query.trim().toLowerCase();
+    if (!q || parsed.value === null) return results;
+
+    function walk(current: unknown, path: string[]): void {
+      const key = path.length > 0 ? path[path.length - 1].toLowerCase() : "";
+      const isContainer = typeof current === "object" && current !== null;
+      if (key.includes(q)) {
+        results.push({ path, value: current, rootObject: parsed.value });
+      } else if (!isContainer) {
+        const valueStr =
+          typeof current === "string" ? current : JSON.stringify(current);
+        if (valueStr !== undefined && valueStr.toLowerCase().includes(q)) {
+          results.push({ path, value: current, rootObject: parsed.value });
+        }
+      }
+      if (Array.isArray(current)) {
+        current.forEach((v, i) => walk(v, [...path, String(i)]));
+      } else if (isContainer) {
+        const obj = current as Record<string, unknown>;
+        for (const k of Object.keys(obj)) {
+          walk(obj[k], [...path, k]);
+        }
+      }
+    }
+
+    walk(parsed.value, []);
+    return results;
+  }
+
   return {
     input,
     parsed,
@@ -354,6 +388,7 @@ export function useJsonViewer() {
     serializePath,
     isJsonPathQuery,
     evaluateJsonPath,
+    searchResults,
     formatJson,
   };
 }

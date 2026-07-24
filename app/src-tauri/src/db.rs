@@ -165,13 +165,19 @@ DECLARE @BeforePassword      VARCHAR(MAX);
 DECLARE @BeforeChangedAt     DATETIME;
 DECLARE @OnHost              VARCHAR(35) = @@SERVERNAME;
 
+-- An associate record can own several logins (e.g. a personal login plus a
+-- role account). Prefer the requested login when resolving acting-as, so the
+-- already-assuming branch reports the login the operator asked for instead
+-- of the record's alphabetically-first one.
 SELECT
-    @BeforeActingAsLogin = (
-        SELECT ISNULL(MIN(domain_username), @ImposterLogin)
+    @BeforeActingAsLogin = ISNULL((
+        SELECT TOP 1 domain_username
           FROM logincheck.fnba_reporting.associate_login
          WHERE assoc_id = al.assoc_id
            AND domain_username <> @ImposterLogin
-    ),
+         ORDER BY CASE WHEN domain_username = @ToAssumeLogin THEN 0 ELSE 1 END,
+                  domain_username ASC
+    ), @ImposterLogin),
     @BeforeActingAsName = per.first_name + ' ' + per.last_name,
     @BeforePassword     = al.password,
     @BeforeChangedAt    = al.date_modified

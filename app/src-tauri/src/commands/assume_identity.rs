@@ -3,7 +3,7 @@ use crate::models::identity::{
     AssumeIdentityResult, IdentityConnection, IdentityData, IdentityImposter, IdentityState,
     IdentityUser,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json");
 
@@ -11,7 +11,6 @@ const DEFAULT_DATA: &str = include_str!("../../../../data/identity-defaults.json
 struct DefaultsFile {
     #[serde(default)]
     imposters: Vec<String>,
-    users: Vec<IdentityUser>,
     connections: Vec<IdentityConnection>,
 }
 
@@ -32,30 +31,24 @@ struct CustomData {
         deserialize_with = "deserialize_connections"
     )]
     connections: Vec<IdentityConnection>,
-    /// Composite `label␟username` keys for shipped-default favorites the user
-    /// has removed from view. Custom favorites are deleted outright rather
-    /// than hidden, so they don't appear here.
-    #[serde(rename = "HiddenFavorites", default)]
-    hidden_favorites: Vec<String>,
     /// Last-assumed timestamp per favorite (epoch millis), keyed by composite
     /// `label␟username`. Drives the recency-based hot-pick ordering — the
-    /// most-recently-assumed favorite renders as #1. Defaults at 0 sort by
-    /// their original position in `identity-defaults.json` (stable sort).
+    /// most-recently-assumed favorite renders as #1. Never-assumed favorites
+    /// (LastUsed = 0) sort by their position in the pinned Users list (stable sort).
     #[serde(rename = "LastUsed", default)]
     last_used: HashMap<String, i64>,
 }
 
 /// Stable key identifying one favorite. A username can appear under several
-/// labels in the defaults (e.g. `mbeyers` is both BSA and Customer Service),
-/// so ordering keys on the `label`+`username` pair, not the username alone.
+/// labels (e.g. one person pinned as both BSA and Customer Service), so
+/// ordering keys on the `label`+`username` pair, not the username alone.
 /// Must match the frontend's key (`${label}${username}`).
 fn fav_key(label: &str, username: &str) -> String {
     format!("{label}\u{1f}{username}")
 }
 
 /// Sort favorites by recency of use, most recent first. Items never assumed
-/// keep their input order (stable sort), so a fresh install renders the
-/// shipped defaults in their `identity-defaults.json` sequence.
+/// keep their input order (stable sort) — i.e. the order they were pinned in.
 fn sort_favorites_by_recency(users: &mut [IdentityUser], last_used: &HashMap<String, i64>) {
     users.sort_by(|a, b| {
         let ta = last_used
@@ -193,48 +186,62 @@ pub async fn get_identity_data() -> Result<IdentityData, String> {
         }
     }
 
-    let mut all_users = defaults.users;
-    let mut hidden_favorites: Vec<String> = Vec::new();
-    let mut last_used: HashMap<String, i64> = HashMap::new();
+    let custom_path = crate::state::paths::data_file("assumeIdentity.json");
+    let mut custom: CustomData = if custom_path.exists() {
+        let contents = std::fs::read_to_string(&custom_path)
+            .map_err(|e| format!("Failed to read {}: {e}", custom_path.display()))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?
+    } else {
+        CustomData::default()
+    };
 
-    // Merge custom imposters and users from assumeIdentity.json
-    {
-        let custom_path = crate::state::paths::data_file("assumeIdentity.json");
-        if custom_path.exists() {
-            let contents = std::fs::read_to_string(&custom_path)
-                .map_err(|e| format!("Failed to read {}: {e}", custom_path.display()))?;
-            let custom: CustomData = serde_json::from_str(&contents)
-                .map_err(|e| format!("Custom config {} is malformed: {e}", custom_path.display()))?;
-            for imp in custom.imposters {
-                if !imposters
-                    .iter()
-                    .any(|i| i.name.eq_ignore_ascii_case(&imp))
-                {
-                    imposters.push(IdentityImposter {
-                        name: imp,
-                        is_custom: true,
-                    });
-                }
-            }
-            for mut user in custom.users {
-                user.is_custom = true;
-                all_users.push(user);
-            }
-            hidden_favorites = custom.hidden_favorites;
-            last_used = custom.last_used;
+    for imp in &custom.imposters {
+        if !imposters.iter().any(|i| i.name.eq_ignore_ascii_case(imp)) {
+            imposters.push(IdentityImposter {
+                name: imp.clone(),
+                is_custom: true,
+            });
         }
     }
 
-    // Filter out favorites the user has removed (shipped defaults; customs
-    // are already absent because remove_favorite deletes them outright).
-    if !hidden_favorites.is_empty() {
-        let hidden: HashSet<&str> = hidden_favorites.iter().map(|s| s.as_str()).collect();
-        all_users.retain(|u| !hidden.contains(fav_key(&u.label, &u.username).as_str()));
+    // One-time migration: `remove_favorite` strips a pin's LastUsed stamp on
+    // unpin, so a LastUsed entry with no matching Users pin can only be a
+    // retired shipped default the operator actually used — pin it so it
+    // survives the defaults removal. Idempotent: once pinned, every stamp
+    // matches a Users entry and this loop has nothing left to do.
+    let mut migrated: Vec<IdentityUser> = Vec::new();
+    for key in custom.last_used.keys() {
+        if custom
+            .users
+            .iter()
+            .any(|u| fav_key(&u.label, &u.username) == *key)
+        {
+            continue;
+        }
+        if let Some((label, username)) = key.split_once('\u{1f}') {
+            migrated.push(IdentityUser {
+                username: username.to_string(),
+                label: label.to_string(),
+                is_custom: true,
+            });
+        }
+    }
+    if !migrated.is_empty() {
+        custom.users.extend(migrated);
+        let json = serde_json::to_string_pretty(&custom)
+            .map_err(|e| format!("Serialization error: {e}"))?;
+        write_atomic_json(&custom_path, &json)?;
+    }
+
+    let mut all_users: Vec<IdentityUser> = custom.users;
+    for user in &mut all_users {
+        user.is_custom = true;
     }
 
     // Bubble the most-recently-assumed favorites to the top so the frontend's
     // 1–9 hot-pick digits track real usage.
-    sort_favorites_by_recency(&mut all_users, &last_used);
+    sort_favorites_by_recency(&mut all_users, &custom.last_used);
 
     Ok(IdentityData {
         current_user,
@@ -317,15 +324,12 @@ pub async fn execute_assume_identity(
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveResult {
-    added_user: bool,
     added_connection: bool,
     added_imposter: bool,
 }
 
 #[tauri::command]
 pub async fn save_custom_entry(
-    user: Option<String>,
-    user_label: Option<String>,
     connection: Option<String>,
     connection_label: Option<String>,
     imposter: Option<String>,
@@ -342,32 +346,12 @@ pub async fn save_custom_entry(
         CustomData::default()
     };
 
-    let mut added_user = false;
     let mut added_connection = false;
     let mut added_imposter = false;
 
     // Load defaults to check against both lists
     let defaults: DefaultsFile =
         serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
-
-    if let Some(username) = user {
-        let in_defaults = defaults
-            .users
-            .iter()
-            .any(|u| u.username.eq_ignore_ascii_case(&username));
-        let in_custom = data
-            .users
-            .iter()
-            .any(|u| u.username.eq_ignore_ascii_case(&username));
-        if !in_defaults && !in_custom {
-            data.users.push(IdentityUser {
-                label: user_label.unwrap_or_else(|| "Other".to_string()),
-                username,
-                is_custom: false,
-            });
-            added_user = true;
-        }
-    }
 
     if let Some(conn) = connection {
         let in_defaults = defaults
@@ -403,14 +387,13 @@ pub async fn save_custom_entry(
         }
     }
 
-    if added_user || added_connection || added_imposter {
+    if added_connection || added_imposter {
         let json = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("Serialization error: {e}"))?;
         write_atomic_json(&custom_path, &json)?;
     }
 
     Ok(SaveResult {
-        added_user,
         added_connection,
         added_imposter,
     })
@@ -512,41 +495,19 @@ pub async fn pin_favorite(username: String, label: String) -> Result<bool, Strin
         CustomData::default()
     };
 
-    let defaults: DefaultsFile =
-        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
-
-    let matches = |u: &IdentityUser| -> bool {
+    let already_favorite = data.users.iter().any(|u| {
         u.username.eq_ignore_ascii_case(&username) && u.label.eq_ignore_ascii_case(&label)
-    };
-    let in_defaults = defaults.users.iter().any(matches);
-    let in_custom = data.users.iter().any(matches);
-
-    if in_custom {
+    });
+    if already_favorite {
         // Already an explicit favorite — nothing to do.
         return Ok(false);
     }
 
-    let key = fav_key(&label, &username);
-    let was_hidden = data.hidden_favorites.iter().any(|k| k == &key);
-
-    if in_defaults {
-        if !was_hidden {
-            // Default favorite is already visible — pin is a no-op.
-            return Ok(false);
-        }
-        // Restore a previously-hidden default by clearing the hide marker;
-        // without this, a default the user removed (via remove_favorite) can
-        // never be re-added through the UI — its key would stay in
-        // HiddenFavorites and get_identity_data would keep filtering it out.
-        data.hidden_favorites.retain(|k| k != &key);
-    } else {
-        // Brand-new favorite: persist under the user's custom list.
-        data.users.push(IdentityUser {
-            username,
-            label,
-            is_custom: true,
-        });
-    }
+    data.users.push(IdentityUser {
+        username,
+        label,
+        is_custom: true,
+    });
 
     let json =
         serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;
@@ -554,10 +515,9 @@ pub async fn pin_favorite(username: String, label: String) -> Result<bool, Strin
     Ok(true)
 }
 
-/// Remove a favorite from view. If the entry exists in the user's custom list
-/// it's deleted outright; if it's a shipped default (which can't be edited),
-/// its composite key is added to `HiddenFavorites` so it stops appearing in
-/// `get_identity_data`. Idempotent — safe to call on an already-removed entry.
+/// Remove a favorite from view. Deletes the matching entry from the custom
+/// Users list outright and strips its `LastUsed` stamp. Idempotent — safe to
+/// call on an already-removed entry.
 #[tauri::command]
 pub async fn remove_favorite(label: String, username: String) -> Result<(), String> {
     let label = label.trim().to_string();
@@ -577,24 +537,14 @@ pub async fn remove_favorite(label: String, username: String) -> Result<(), Stri
         CustomData::default()
     };
 
-    // Drop any matching custom user and its recency timestamp (re-pinning
-    // later should start fresh rather than float back up via a stale entry).
+    // Drop the matching custom user and its recency timestamp. The LastUsed
+    // strip matters beyond tidiness: get_identity_data's migration treats any
+    // orphaned LastUsed stamp as "re-pin this retired default", so leaving the
+    // stamp behind would resurrect an entry the operator just unpinned.
     data.users.retain(|u| {
         !(u.label.eq_ignore_ascii_case(&label) && u.username.eq_ignore_ascii_case(&username))
     });
     data.last_used.remove(&key);
-
-    // If the entry is in the shipped defaults, hide it (defaults can't be
-    // mutated). Custom-only entries are now gone above and need no hide.
-    let defaults: DefaultsFile =
-        serde_json::from_str(DEFAULT_DATA).map_err(|e| format!("Failed to parse defaults: {e}"))?;
-    let in_defaults = defaults
-        .users
-        .iter()
-        .any(|u| u.label.eq_ignore_ascii_case(&label) && u.username.eq_ignore_ascii_case(&username));
-    if in_defaults && !data.hidden_favorites.iter().any(|k| k == &key) {
-        data.hidden_favorites.push(key);
-    }
 
     let json =
         serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))?;

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
-import { isTauri } from "@/lib/tauri";
 
 const emit = defineEmits<{
   back: [];
@@ -8,13 +7,6 @@ const emit = defineEmits<{
 }>();
 
 onMounted(async () => {
-  if (!isTauri) {
-    // Browser dev: the clipboard window doesn't exist as a separate Tauri
-    // window, so navigate the current frame to the hash route instead.
-    window.location.hash = "#clipboard-manager";
-    emit("dismiss");
-    return;
-  }
   try {
     const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
     const win = await WebviewWindow.getByLabel("clipboard-manager");

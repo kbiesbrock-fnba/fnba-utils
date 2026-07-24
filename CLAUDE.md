@@ -8,11 +8,6 @@ fnba-utils is a monorepo containing shell extensions for FNBA development and a 
 
 ## Build & Dev Commands
 
-### Desktop app (UI only, no Rust needed)
-```bash
-cd app && docker compose up     # serves at localhost:5173 with mock Tauri API
-```
-
 ### Desktop app (native, requires Windows Rust toolchain)
 ```bash
 cd app && bash scripts/dev.sh   # builds Rust + launches Tauri dev window
@@ -31,11 +26,9 @@ cd app/src-tauri && cargo build
 ## Architecture
 
 ### Tauri bridge pattern
-`app/src/lib/tauri.ts` is the single gateway between frontend and backend. It detects whether it's running inside Tauri or a browser and routes `invoke()` calls accordingly:
-- **Tauri mode**: forwards to real Rust commands via `@tauri-apps/api/core`
-- **Browser mode**: uses `mockInvoke()` with realistic sample data for UI development without Rust
+`app/src/lib/tauri.ts` is the single gateway between frontend and backend. `invoke()` always calls the real Rust commands via `@tauri-apps/api/core`.
 
-All Tauri command types (request/response interfaces) are defined in this file. The mock layer must stay in sync with the Rust command signatures.
+All Tauri command types (request/response interfaces) are defined in this file.
 
 ### Command structure
 Each command (e.g., Assume Identity) follows this pattern:
@@ -66,8 +59,8 @@ A separate `Win+Shift+C` window tracks Claude Code sessions launched **from** th
 ### Data sources
 All persistent app state lives under `%LOCALAPPDATA%\fnba-utils\` (resolved via `app/src-tauri/src/state/paths.rs`). The main process and the `fnba-clipd` daemon both call `migrate_legacy_files()` at startup to sweep files written by earlier builds (which lived at `~/.fnba-utils/`, `~/.assumeIdentity.json`, `~/.claude/fnba-mc/`, the exe's `resources/` sibling, or `%APPDATA%\Roaming\fnba-utils\`) into the new root.
 
-- `data/identity-defaults.json` -- default users/connections, embedded into Rust binary at compile time via `include_str!`
-- `%LOCALAPPDATA%\fnba-utils\assumeIdentity.json` -- user-added custom entries, merged at runtime
+- `data/identity-defaults.json` -- default connections/imposters, embedded into Rust binary at compile time via `include_str!`
+- `%LOCALAPPDATA%\fnba-utils\assumeIdentity.json` -- pinned favorites plus saved connections/imposters and recency stamps
 - `%LOCALAPPDATA%\fnba-utils\owned-sessions.json` -- MC's persisted Claude session registry
 - `%LOCALAPPDATA%\fnba-utils\projects.json` -- MC's project registry (pinned + MRU)
 - `%LOCALAPPDATA%\fnba-utils\clipboard.db` -- SQLite clipboard history (shared between main and daemon)

@@ -3,7 +3,6 @@ import {
   getClaudeSessions,
   getConnectionStatuses,
   hideWindow,
-  isTauri,
   type ClaudeSession,
   type ConnectionStatus,
   type SessionSource,
@@ -221,7 +220,6 @@ async function openOrFocusPanel(
   payload: SqlPanelPayload | DetailPanelPayload,
   options: { focus?: boolean } = {},
 ) {
-  if (!isTauri) return;
   const focus = options.focus ?? true;
 
   const key = panelKeyFor(kind, payload);
@@ -278,7 +276,6 @@ async function openOrFocusPanel(
 }
 
 async function hideAllSidePanels() {
-  if (!isTauri) return;
   // Honor each panel's own pin state — pinned session-detail / sql-query
   // panels survive MC's blur-hide. The explicit Win+Shift+C dismiss path
   // (in lib.rs) bypasses this and hides everything regardless of pin.
@@ -294,7 +291,6 @@ async function hideAllSidePanels() {
 }
 
 async function restorePinnedSidePanels() {
-  if (!isTauri) return;
   const list = readPinnedPanels();
   if (list.length === 0) return;
 
@@ -352,14 +348,12 @@ export function useMissionControl() {
       // OS focus is observable, then bail if any sub-panel now has focus
       // — that blur was internal to the MC group.
       setTimeout(async () => {
-        if (isTauri) {
-          try {
-            const panels = await listSidePanels();
-            const focused = await Promise.all(panels.map((w) => w.isFocused()));
-            if (focused.some(Boolean)) return;
-          } catch {
-            // fall through to dismiss
-          }
+        try {
+          const panels = await listSidePanels();
+          const focused = await Promise.all(panels.map((w) => w.isFocused()));
+          if (focused.some(Boolean)) return;
+        } catch {
+          // fall through to dismiss
         }
         dismiss();
       }, 50);
@@ -367,24 +361,22 @@ export function useMissionControl() {
 
     rememberWindowFocus("mission-control");
 
-    if (isTauri) {
-      import("@tauri-apps/api/event").then(({ listen }) => {
-        listen<{ pid: number }>("session-killed", () => {
-          selectedPid.value = null;
-          fetchSessions();
-        });
-        listen("mc-shown", () => {
-          restorePinnedSidePanels();
-        });
-        // MRU hotkey (Super+Shift+N) → backend looks up most-recent project
-        // and emits this. We do the actual spawn + window opening here so
-        // existing launcher logic (start_new_claude_session +
-        // openOrFocusPanel) is reused untouched.
-        listen<{ cwd: string; displayName: string }>("mc-mru-launch", async (e) => {
-          await launchMru(e.payload.cwd);
-        });
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<{ pid: number }>("session-killed", () => {
+        selectedPid.value = null;
+        fetchSessions();
       });
-    }
+      listen("mc-shown", () => {
+        restorePinnedSidePanels();
+      });
+      // MRU hotkey (Super+Shift+N) → backend looks up most-recent project
+      // and emits this. We do the actual spawn + window opening here so
+      // existing launcher logic (start_new_claude_session +
+      // openOrFocusPanel) is reused untouched.
+      listen<{ cwd: string; displayName: string }>("mc-mru-launch", async (e) => {
+        await launchMru(e.payload.cwd);
+      });
+    });
   }
 
   async function launchMru(cwd: string) {

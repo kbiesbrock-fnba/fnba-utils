@@ -1,6 +1,7 @@
 import { ref, computed } from "vue";
 import { hideWindow } from "@/lib/tauri";
 import { filterCommands } from "@/commands";
+import { buildSoftCommands } from "@/lib/softCommands";
 import type { PaletteCommand } from "@/commands/types";
 
 export type PaletteMode = "browsing" | "command-active";
@@ -12,7 +13,14 @@ const activeCommand = ref<PaletteCommand | null>(null);
 const previousCommand = ref<PaletteCommand | null>(null);
 const returningToPrevious = ref(false);
 
-const filteredCommands = computed(() => filterCommands(searchQuery.value));
+const filteredCommands = computed(() => {
+  const matches = filterCommands(searchQuery.value);
+  // When nothing matches, offer contextual "soft commands" for the raw text
+  // (URL, Jira key, JSON, math, …). Returns [] when no pattern matches, so the
+  // normal empty state still shows for unrecognized text.
+  if (matches.length > 0) return matches;
+  return buildSoftCommands(searchQuery.value);
+});
 
 export function usePalette() {
   function reset() {
@@ -62,9 +70,39 @@ export function usePalette() {
     selectedIndex.value = (selectedIndex.value + delta + len) % len;
   }
 
+  /** Soft commands carry a one-shot `action` (run + dismiss); normal commands
+   *  open their `component`. */
+  function runOrSelect(cmd: PaletteCommand) {
+    if (cmd.action) {
+      Promise.resolve(cmd.action())
+        .catch((e) => console.error("[soft-command]", e))
+        .finally(() => dismiss());
+      return;
+    }
+    selectCommand(cmd);
+  }
+
   function confirmSelection() {
     const cmd = filteredCommands.value[selectedIndex.value];
-    if (cmd) selectCommand(cmd);
+    if (cmd) runOrSelect(cmd);
+  }
+
+  /**
+   * Ctrl+Shift+Enter: if the selected command has a `chainQuery`, replace the
+   * search text with it and keep the palette open so the user can keep
+   * calculating. Falls back to normal `confirmSelection` when chainQuery is
+   * absent.
+   */
+  function chainSelection() {
+    const cmd = filteredCommands.value[selectedIndex.value];
+    if (!cmd) return;
+    if (cmd.chainQuery !== undefined) {
+      searchQuery.value = cmd.chainQuery;
+      selectedIndex.value = 0;
+      return;
+    }
+    // No chain target — behave like a plain Enter.
+    runOrSelect(cmd);
   }
 
   /** Activate the Nth visible command (0-indexed). Used by digit hotkeys
@@ -73,7 +111,7 @@ export function usePalette() {
     const cmd = filteredCommands.value[index];
     if (cmd) {
       selectedIndex.value = index;
-      selectCommand(cmd);
+      runOrSelect(cmd);
     }
   }
 
@@ -82,12 +120,17 @@ export function usePalette() {
     selectedIndex.value = 0;
   }
 
+  const selectedCommand = computed(
+    () => filteredCommands.value[selectedIndex.value] ?? null,
+  );
+
   return {
     mode,
     searchQuery,
     selectedIndex,
     activeCommand,
     filteredCommands,
+    selectedCommand,
     returningToPrevious,
     reset,
     dismiss,
@@ -95,6 +138,7 @@ export function usePalette() {
     back,
     moveSelection,
     confirmSelection,
+    chainSelection,
     selectByIndex,
     onSearchChange,
   };

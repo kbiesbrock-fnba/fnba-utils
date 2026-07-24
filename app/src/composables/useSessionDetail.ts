@@ -4,7 +4,6 @@ import {
   killSession,
   stopClaudeSession,
   openInExplorer,
-  isTauri,
   isTmuxSessionId,
   tmuxNameFromSessionId,
   type SessionDetail,
@@ -57,10 +56,8 @@ async function startListening() {
   if (!listening) {
     listening = true;
 
-    if (isTauri) {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      rememberWindowFocus(getCurrentWindow().label);
-    }
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    rememberWindowFocus(getCurrentWindow().label);
 
     // Terminal is always live in the panel; we don't auto-hide on blur
     // anymore. Pin still has its original sticky-panel semantic.
@@ -149,12 +146,10 @@ async function kill() {
     if (pinned.value) togglePin();
     detail.value = null;
 
-    if (isTauri) {
-      const { emit } = await import("@tauri-apps/api/event");
-      await emit("session-killed", { pid });
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().destroy();
-    }
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("session-killed", { pid });
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().destroy();
   } catch (e) {
     error.value = String(e);
   }
