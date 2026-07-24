@@ -90,45 +90,110 @@ fn spawn_foreground_watch(_app: AppHandle) {}
 /// bottom (taskbar top). Called once at startup and again whenever the display
 /// topology changes (dock/undock) — both the primary monitor identity and the
 /// work-area rect can shift when a laptop is docked/undocked.
-fn position_docker_widget(app: &AppHandle) {
+///
+/// Returns `true` only if it moved the window to a validated location. Returns
+/// `false` — WITHOUT moving the window — when the primary monitor is unknown,
+/// the work-area bottom can't be resolved sanely, or the computed rect lands
+/// off every live monitor. A `false` result means the topology is still
+/// unsettled (Windows reporting stale monitor/work-area data mid dock-change);
+/// the caller retries rather than overriding the OS's off-screen auto-move with
+/// garbage coordinates.
+fn position_docker_widget(app: &AppHandle) -> bool {
+    reposition_docker_widget(app, false)
+}
+
+/// Terminal fallback for the retry chain: force-centre the widget on the
+/// current primary monitor's work area. Ignores any saved X. Used only when the
+/// validating reposition never settled but a primary monitor exists — better a
+/// centred widget on a live monitor than a window stranded off-screen.
+fn force_center_docker_widget(app: &AppHandle) -> bool {
+    reposition_docker_widget(app, true)
+}
+
+fn reposition_docker_widget(app: &AppHandle, force_center: bool) -> bool {
     let Some(w) = app.get_webview_window("docker-widget") else {
-        return;
+        return false;
     };
     let saved_pos = app
         .try_state::<state::docker_widget::DockerWidgetState>()
         .and_then(|s| s.position());
 
-    if let Ok(Some(monitor)) = w.primary_monitor() {
-        let mon_size = monitor.size();
-        let mon_pos = monitor.position();
-        let win_size = w
-            .outer_size()
-            .unwrap_or(tauri::PhysicalSize::new(280, 96));
+    // No identifiable primary monitor — can't compute a target. Leave the
+    // window where the OS put it and let the caller retry.
+    let Ok(Some(monitor)) = w.primary_monitor() else {
+        return false;
+    };
+    let mon_size = monitor.size();
+    let mon_pos = monitor.position();
+    let win_size = w.outer_size().unwrap_or(tauri::PhysicalSize::new(280, 96));
 
-        // X: restore a saved x that's within the primary monitor, else centre
-        // horizontally.
-        let saved_x = saved_pos.and_then(|(sx, _sy)| {
-            if sx >= mon_pos.x && sx < mon_pos.x + mon_size.width as i32 {
-                Some(sx)
-            } else {
-                None
-            }
-        });
-        let x = saved_x.unwrap_or_else(|| {
-            mon_pos.x + (mon_size.width as i32 - win_size.width as i32) / 2
-        });
+    let mon_top = mon_pos.y;
+    let mon_bottom = mon_pos.y + mon_size.height as i32;
 
-        // Y: pin the window's bottom edge to the work-area bottom (taskbar top).
-        // Falls back to a small fixed clearance only if the work area can't be
-        // queried.
-        let bottom = commands::docker::work_area_bottom()
-            .unwrap_or(mon_pos.y + mon_size.height as i32 - 48);
-        let y = bottom - win_size.height as i32;
+    // Y: pin the bottom edge to the work-area bottom (taskbar top). Only trust a
+    // value that falls within the primary monitor's vertical span — a stale
+    // reading from a just-detached display lands outside it. If it can't be
+    // resolved sanely we bail (normal path) or fall back to the monitor's own
+    // bottom minus a taskbar clearance (force-centre path).
+    let sane_bottom = match commands::docker::work_area_bottom() {
+        Some(b) if b > mon_top && b <= mon_bottom => Some(b),
+        _ => None,
+    };
+    let bottom = match sane_bottom {
+        Some(b) => b,
+        None if force_center => mon_bottom - 48,
+        None => return false,
+    };
 
-        let _ = w.set_position(tauri::Position::Physical(
-            tauri::PhysicalPosition::new(x, y),
-        ));
+    // X: force-centre ignores the saved X; otherwise restore a saved X that's
+    // still within the primary monitor, else centre horizontally.
+    let center_x = mon_pos.x + (mon_size.width as i32 - win_size.width as i32) / 2;
+    let x = if force_center {
+        center_x
+    } else {
+        saved_pos
+            .and_then(|(sx, _sy)| {
+                if sx >= mon_pos.x && sx < mon_pos.x + mon_size.width as i32 {
+                    Some(sx)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(center_x)
+    };
+    let y = bottom - win_size.height as i32;
+
+    // Validate the final rect intersects some live monitor before committing
+    // (skipped on the force-centre path — that rect is derived from the primary
+    // monitor we just resolved, so it's live by construction).
+    if !force_center
+        && !rect_intersects_any_monitor(app, x, y, win_size.width as i32, win_size.height as i32)
+    {
+        return false;
     }
+
+    let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        x, y,
+    )));
+    true
+}
+
+/// Whether the rect `(x, y, w, h)` (physical px) overlaps any monitor currently
+/// reported by `available_monitors()`. Guards against committing coordinates on
+/// a display that was just detached.
+fn rect_intersects_any_monitor(app: &AppHandle, x: i32, y: i32, w: i32, h: i32) -> bool {
+    let monitors = match app.available_monitors() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let (rl, rt, rr, rb) = (x, y, x + w, y + h);
+    monitors.iter().any(|m| {
+        let mp = m.position();
+        let ms = m.size();
+        let (ml, mt, mr, mb) = (mp.x, mp.y, mp.x + ms.width as i32, mp.y + ms.height as i32);
+        // Standard half-open AABB overlap test.
+        rl < mr && rr > ml && rt < mb && rb > mt
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -459,8 +524,14 @@ pub fn run() {
             // is restored from a saved value (so it can be nudged left/right).
             //
             // Positioning is factored into `position_docker_widget` so the
-            // display-change watcher can re-run it after a dock/undock.
-            position_docker_widget(app.handle());
+            // display-change watcher can re-run it after a dock/undock. It's
+            // fallible now (validates against the live monitor layout); at
+            // startup the topology is settled, so a false result is just logged.
+            if !position_docker_widget(app.handle()) {
+                eprintln!(
+                    "docker-widget: initial positioning deferred (no valid monitor/work-area yet)"
+                );
+            }
 
             if let Some(w) = app.get_webview_window("docker-widget") {
                 // Allow the window to shrink to the heading height — the OS

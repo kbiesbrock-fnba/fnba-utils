@@ -176,6 +176,12 @@ let syncing = false;
 // Debounce timer for position persistence.
 let positionDebounce: ReturnType<typeof setTimeout> | null = null;
 
+// One-shot "late settle" timer, reset on every `display-changed`. Windows can
+// publish the final work area a beat after the last WM burst without emitting a
+// further Rust event, so we re-fetch+resync once ~2s after the last event.
+let lateResyncTimer: ReturnType<typeof setTimeout> | null = null;
+const LATE_RESYNC_MS = 2000;
+
 // Unlisten handles.
 let unlistenDockerStatus: (() => void) | null = null;
 let unlistenMove: (() => void) | null = null;
@@ -250,6 +256,52 @@ async function syncSizeToContent(contentH: number): Promise<void> {
   }
 }
 
+/**
+ * Fetch the taskbar-top anchor, but only accept it if it's plausible for the
+ * current primary monitor. During a dock/undock Windows can briefly report a
+ * work-area bottom from a just-detached display; adopting it would strand the
+ * widget off-screen. Returns null (→ caller keeps the last-known-good anchor)
+ * when the fetch fails, returns null/none, or lands outside the primary
+ * monitor's physical vertical span.
+ */
+async function fetchPlausibleAnchor(): Promise<number | null> {
+  let next: number | null;
+  try {
+    next = await getDockerWidgetAnchorBottom();
+  } catch {
+    return null; // fetch failed — keep last-known-good
+  }
+  if (next == null) return null;
+  try {
+    const { primaryMonitor } = await import("@tauri-apps/api/window");
+    const mon = await primaryMonitor();
+    if (mon) {
+      // Monitor bounds are physical px, same units as the anchor.
+      const monTop = mon.position.y;
+      const monBottom = mon.position.y + mon.size.height;
+      if (next <= monTop || next > monBottom) {
+        return null; // implausible — keep last-known-good
+      }
+    }
+  } catch {
+    // Monitor query unavailable (dev/non-Tauri) — accept the fetched value.
+  }
+  return next;
+}
+
+/**
+ * Re-fetch the anchor (tolerantly) and re-pin the widget using the last
+ * measured content height. Adopts a new anchor only when it's plausible;
+ * otherwise the previous anchor is retained.
+ */
+async function refetchAnchorAndResync(): Promise<void> {
+  const next = await fetchPlausibleAnchor();
+  if (next != null) anchorBottomPhysical = next; // else keep last-known-good
+  if (lastContentH > 0) {
+    await syncSizeToContent(lastContentH);
+  }
+}
+
 export function useDockerWidget() {
   async function init(): Promise<void> {
     // Initial data fetch for first paint.
@@ -267,11 +319,10 @@ export function useDockerWidget() {
     }
 
     // Fetch the taskbar-top anchor so resizes pin the widget flush above it.
-    try {
-      anchorBottomPhysical = await getDockerWidgetAnchorBottom();
-    } catch {
-      anchorBottomPhysical = null; // dev/non-Windows — fall back to current bottom
-    }
+    // Tolerant: only adopts a plausible value (else leaves it null → resize
+    // falls back to the current bottom).
+    const initialAnchor = await fetchPlausibleAnchor();
+    if (initialAnchor != null) anchorBottomPhysical = initialAnchor;
 
     // Subscribe to push events (~3s interval from backend).
     try {
@@ -283,19 +334,21 @@ export function useDockerWidget() {
     }
 
     // On a dock/undock the primary monitor and taskbar anchor can move; the
-    // anchor we fetched above is now stale. Re-fetch it and re-pin using the
-    // last measured content height (Rust also repositions the window, but this
-    // keeps our size/anchor math from fighting it on the next natural resize).
+    // anchor we fetched above is now stale. Re-fetch it (tolerantly — keep the
+    // last-known-good on an implausible/failed read) and re-pin using the last
+    // measured content height (Rust also repositions the window, but this keeps
+    // our size/anchor math from fighting it on the next natural resize).
     try {
       unlistenDisplayChanged = await onDisplayChanged(async () => {
-        try {
-          anchorBottomPhysical = await getDockerWidgetAnchorBottom();
-        } catch {
-          anchorBottomPhysical = null;
-        }
-        if (lastContentH > 0) {
-          await syncSizeToContent(lastContentH);
-        }
+        await refetchAnchorAndResync();
+        // Belt-and-braces: catch a late work-area settle that emits no further
+        // Rust event. Re-check once ~2s after the LAST display-changed (the
+        // timer is reset per event so a burst collapses to a single late check).
+        if (lateResyncTimer) clearTimeout(lateResyncTimer);
+        lateResyncTimer = setTimeout(() => {
+          lateResyncTimer = null;
+          void refetchAnchorAndResync();
+        }, LATE_RESYNC_MS);
       });
     } catch (e) {
       console.warn("useDockerWidget: onDisplayChanged subscription failed", e);
@@ -345,6 +398,10 @@ export function useDockerWidget() {
     if (positionDebounce) {
       clearTimeout(positionDebounce);
       positionDebounce = null;
+    }
+    if (lateResyncTimer) {
+      clearTimeout(lateResyncTimer);
+      lateResyncTimer = null;
     }
   });
 
