@@ -235,6 +235,13 @@ pub fn run() {
                                 }
                                 let _ = w.show();
                                 let _ = w.set_focus();
+                                // If the display topology changed while the
+                                // palette was hidden, its WebView2 surface can
+                                // come back stalled (backdrop paints, card never
+                                // does). Kick it once now that it's visible.
+                                if display_watch::take_display_changed_flag() {
+                                    display_watch::kick_window(&w);
+                                }
                                 // Signal the frontend that the palette just
                                 // became visible so it can (re)focus the search
                                 // input. CommandInput's onMounted focus fires

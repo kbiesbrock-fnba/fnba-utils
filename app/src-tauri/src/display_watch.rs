@@ -14,7 +14,34 @@
 //! wndproc itself must return fast.
 
 #[cfg(windows)]
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set true by the debounced display-change handler and consumed (swapped back
+/// to false) by the palette show-path, which then kicks its own surface once.
+/// The palette is hidden during a dock transition, so it isn't in the
+/// visible-window sweep and needs the kick on its next show instead.
+static DISPLAY_CHANGED_SINCE_SHOW: AtomicBool = AtomicBool::new(false);
+
+/// Consume the "a display change happened since the last palette show" flag.
+pub fn take_display_changed_flag() -> bool {
+    DISPLAY_CHANGED_SINCE_SHOW.swap(false, Ordering::SeqCst)
+}
+
+/// Nudge a window's outer size by 1px and restore it, forcing WebView2 to
+/// recomposite. Clears the surface stall that can leave a window painting its
+/// last pre-topology-change frame (e.g. the palette backdrop with no card)
+/// after a dock/undock.
+pub fn kick_window(window: &tauri::WebviewWindow) {
+    if let Ok(size) = window.outer_size() {
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+            size.width + 1,
+            size.height + 1,
+        )));
+        let _ = window.set_size(tauri::Size::Physical(size));
+    }
+}
 
 /// Install the display-topology watcher by subclassing the always-alive
 /// docker-widget window. Best-effort: logs and returns on any failure so a
@@ -37,6 +64,16 @@ fn react(app: &AppHandle) {
     // Let the frontend re-fetch anything it cached against the old layout
     // (e.g. the docker widget's taskbar anchor).
     let _ = app.emit("display-changed", ());
+
+    // Kick every currently-visible window's WebView2 surface out of a possible
+    // compositor stall. Hidden windows (e.g. the closed palette) are handled on
+    // their next show via take_display_changed_flag().
+    for (_label, win) in app.webview_windows() {
+        if win.is_visible().unwrap_or(false) {
+            kick_window(&win);
+        }
+    }
+    DISPLAY_CHANGED_SINCE_SHOW.store(true, Ordering::SeqCst);
 }
 
 #[cfg(windows)]
