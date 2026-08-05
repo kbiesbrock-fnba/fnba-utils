@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
-import type { CloseRequestedEvent } from "@tauri-apps/api/window";
 import { renderMarkdown } from "../../lib/markdown";
-import { touchEntry, removeEntry, saveState, readRegistry, type MarkdownViewerState } from "../../lib/fileViewerRegistry";
-import { readMarkdownDoc, writeMarkdownDoc, deleteMarkdownDoc, openMarkdownFile, saveMarkdownAs, saveMarkdownFile, statMarkdownFile, readMarkdownFile } from "../../lib/tauri";
 import { openNewFileViewerWindow } from "../../lib/fileViewerWindow";
 import { openExternal } from "../../lib/external";
 import { useViewerWindowChrome } from "../../composables/useViewerWindowChrome";
+import { useFileBackedDoc } from "../../composables/useFileBackedDoc";
+import { useRevealSearch } from "../../composables/useRevealSearch";
+import { baseName } from "../../lib/pathUtils";
 import ViewerTitleBar from "../file-viewer/ViewerTitleBar.vue";
+import ViewerToolbarRow1 from "../file-viewer/ViewerToolbarRow1.vue";
+import ViewerSearchBar from "../file-viewer/ViewerSearchBar.vue";
+import ExternalChangeBanner from "../file-viewer/ExternalChangeBanner.vue";
+import SaveCloseModal from "../file-viewer/SaveCloseModal.vue";
 import SplitPane from "../common/SplitPane.vue";
 import StatusBar from "../StatusBar.vue";
 
@@ -15,17 +19,6 @@ const source = ref("");
 // Default to edit: a brand-new/empty window should drop straight into typing.
 // Hydration below flips to the saved mode (usually preview) when there's content.
 const mode = ref<"preview" | "edit" | "split">("edit");
-let currentDocPath: string | null = null;
-
-// --- File-backed editor state ---
-const filePath = ref<string | null>(null);
-const dirty = ref(false);
-const showCloseModal = ref(false);
-let forceClose = false; // set right before a programmatic close so onNativeCloseRequest allows it
-
-// --- External-change detection ---
-let diskBaseline: { mtimeMs: number; size: number } | null = null;
-const externalChange = ref<null | "changed" | "deleted">(null);
 
 const splitEditorRef = ref<HTMLTextAreaElement | null>(null);
 const splitPreviewRef = ref<HTMLElement | null>(null);
@@ -39,16 +32,33 @@ let syncing = false;
 
 const renderedHtml = computed(() => renderMarkdown(source.value));
 
+// --- File-backed doc: docPath persistence, dirty-tracking, external-change
+// detection, unsaved-changes close-prompt, Open/Save/Save-As, Ctrl+S/O. ---
+const fileDoc = useFileBackedDoc({
+  kind: "markdown",
+  content: source,
+  suggestedName: (val) => {
+    const first = val.split("\n").find((l) => l.trim()) ?? "";
+    const slug = first
+      .replace(/^#+\s*/, "")
+      .trim()
+      .slice(0, 40)
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return (slug || "untitled") + ".md";
+  },
+  extraState: () => ({ mode: mode.value }),
+  hydrateExtra: (s) => {
+    mode.value = (s.mode as "preview" | "edit" | "split") ?? "preview";
+  },
+});
+
 // --- Window title ---
 // For bound files: show filename + dirty indicator.
 // For unbound (scratch): shows the first heading or first non-empty line, else "Markdown Viewer".
-function baseName(p: string): string {
-  return p.split(/[\\/]/).pop() || p;
-}
-
 const windowTitle = computed(() => {
-  if (filePath.value) {
-    return baseName(filePath.value) + (dirty.value ? " ●" : "");
+  if (fileDoc.filePath.value) {
+    return baseName(fileDoc.filePath.value) + (fileDoc.dirty.value ? " ●" : "");
   }
   const s = source.value.trim();
   if (!s) return "Markdown Viewer";
@@ -350,66 +360,9 @@ function onPreviewClick(e: MouseEvent) {
   editor.scrollTop = Math.max(0, scrollForLine(editor, clamped) - editor.clientHeight / 3);
 }
 
-// --- Persistence ---
-let persistDocTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Write the full viewer state (docPath + mode + filePath + dirty + disk baseline) immediately. */
-function persistState(label: string): void {
-  saveState(label, {
-    docPath: currentDocPath,
-    mode: mode.value,
-    filePath: filePath.value,
-    dirty: dirty.value,
-    diskMtimeMs: diskBaseline?.mtimeMs ?? null,
-    diskSize: diskBaseline?.size ?? null,
-  });
-}
-
-/** Persist state immediately using the current window label. */
-async function persistCurrent(): Promise<void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    persistState(getCurrentWindow().label);
-  } catch {
-    // ignore
-  }
-}
-
-function schedulePersistDoc(label: string): void {
-  if (persistDocTimer) clearTimeout(persistDocTimer);
-  persistDocTimer = setTimeout(() => {
-    persistDocTimer = null;
-    void (async () => {
-      try {
-        currentDocPath = await writeMarkdownDoc(label, source.value);
-        persistState(label);
-      } catch {
-        // ignore — file I/O is best-effort
-      }
-    })();
-  }, 400);
-}
-
-// Watch source: update preview, touch registry, debounce doc persist.
-watch(source, (val) => {
-  void (async () => {
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const label = getCurrentWindow().label;
-      const preview = val.replace(/\s+/g, " ").trim().slice(0, 60);
-      touchEntry(label, preview);
-      schedulePersistDoc(label);
-      // Mark dirty for bound docs when content changes.
-      if (filePath.value) dirty.value = true;
-    } catch {
-      // ignore
-    }
-  })();
-});
-
 // Watch mode: persist immediately, and carry any preview selection into the editor.
 watch(mode, async (newMode) => {
-  void persistCurrent();
+  void fileDoc.persistCurrent();
   if (previewSelRange && (newMode === "edit" || newMode === "split")) {
     const saved = previewSelRange;
     previewSelRange = null;
@@ -430,225 +383,77 @@ watch(mode, async (newMode) => {
   }
 });
 
-// --- External-change detection helpers ---
+// --- Find in document (Ctrl+F) ---
+const mdSearchQuery = ref("");
+const mdMatchIndex = ref(0);
 
-/** Snapshot the current disk fingerprint so our own writes never self-trigger the banner. */
-async function refreshBaseline(): Promise<void> {
-  if (!filePath.value) { diskBaseline = null; return; }
-  try {
-    const s = await statMarkdownFile(filePath.value);
-    diskBaseline = s.exists ? { mtimeMs: s.mtimeMs, size: s.size } : null;
-    await persistCurrent();
-  } catch { /* best-effort */ }
-}
-
-/** Check whether the on-disk file differs from our baseline. Sets externalChange. */
-async function checkExternalChange(): Promise<void> {
-  if (!filePath.value) { externalChange.value = null; return; }
-  try {
-    const s = await statMarkdownFile(filePath.value);
-    if (!s.exists) {
-      externalChange.value = "deleted";
-      return;
-    }
-    if (diskBaseline && (s.mtimeMs !== diskBaseline.mtimeMs || s.size !== diskBaseline.size)) {
-      externalChange.value = "changed";
-    } else {
-      externalChange.value = null;
-    }
-  } catch { /* ignore */ }
-}
-
-/** Banner action: discard local edits and reload from disk. */
-async function reloadFromDisk(): Promise<void> {
-  if (!filePath.value) return;
-  try {
-    const f = await readMarkdownFile(filePath.value);
-    source.value = f.content;
-    dirty.value = false;
-    diskBaseline = { mtimeMs: f.mtimeMs, size: f.size };
-    externalChange.value = null;
-    await persistCurrent();
-  } catch (e) { console.error("reload failed", e); }
-}
-
-/** Banner action: dismiss; re-baseline to stop nagging about THIS change. */
-async function keepMine(): Promise<void> {
-  externalChange.value = null;
-  await refreshBaseline();
-}
-
-/** Banner action: open the on-disk version in a separate unbound scratch window. */
-async function openDiskCopy(): Promise<void> {
-  if (!filePath.value) return;
-  try {
-    const f = await readMarkdownFile(filePath.value);
-    await openNewFileViewerWindow({ kind: "markdown", content: f.content });
-  } catch (e) { console.error(e); }
-  await keepMine();
-}
-
-/** Banner action: write the current content back to a file that was deleted on disk. */
-async function saveOverDeleted(): Promise<void> {
-  const ok = await save();
-  if (ok) { externalChange.value = null; }
-}
-
-/** Banner action: dismiss without re-baselining (deleted-file case). */
-function dismissExternal(): void { externalChange.value = null; }
-
-// --- File I/O ---
-
-function suggestedName(): string {
-  if (filePath.value) return baseName(filePath.value);
-  const first = source.value.split("\n").find((l) => l.trim()) ?? "";
-  const slug = first
-    .replace(/^#+\s*/, "")
-    .trim()
-    .slice(0, 40)
-    .replace(/[^\w.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return (slug || "untitled") + ".md";
-}
-
-async function saveAs(): Promise<boolean> {
-  const p = await saveMarkdownAs(source.value, suggestedName());
-  if (!p) return false;
-  filePath.value = p;
-  dirty.value = false;
-  await refreshBaseline();
-  return true;
-}
-
-async function save(): Promise<boolean> {
-  if (!filePath.value) return saveAs();
-  try {
-    await saveMarkdownFile(filePath.value, source.value);
-    dirty.value = false;
-    await refreshBaseline();
-    return true;
-  } catch (e) {
-    console.error("save failed", e);
-    return false;
+function findMatches(text: string, query: string): number[] {
+  const positions: number[] = [];
+  if (!query) return positions;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  let idx = lowerText.indexOf(lowerQuery);
+  while (idx !== -1) {
+    positions.push(idx);
+    idx = lowerText.indexOf(lowerQuery, idx + 1);
   }
+  return positions;
 }
 
-async function openFile() {
-  const f = await openMarkdownFile();
-  if (f) await openNewFileViewerWindow({ kind: "markdown", content: f.content, filePath: f.path });
+const mdMatches = computed(() => findMatches(source.value, mdSearchQuery.value));
+
+async function jumpToMatch(idx: number) {
+  if (mode.value === "preview") mode.value = "split"; // keeps rendered context rather than bare "edit"
+  await nextTick();
+  const editor = mode.value === "edit" ? editRef.value : splitEditorRef.value;
+  const m = mdMatches.value[idx];
+  if (!editor || m === undefined) return;
+  editor.focus();
+  editor.setSelectionRange(m, m + mdSearchQuery.value.length);
+  const line = source.value.slice(0, m).split("\n").length - 1;
+  editor.scrollTop = Math.max(0, scrollForLine(editor, line) - editor.clientHeight / 3);
+  // scrollTop change fires the existing @scroll="onEditorScroll" listener (split mode) —
+  // preview pane follows via the already-existing scroll-sync machinery, no new code.
 }
 
-// --- Close ---
-
-function needsSavePrompt(): boolean {
-  if (filePath.value) return dirty.value;
-  return source.value.trim() !== "";
+function nextMatch() {
+  if (!mdMatches.value.length) return;
+  mdMatchIndex.value = (mdMatchIndex.value + 1) % mdMatches.value.length;
+  void jumpToMatch(mdMatchIndex.value);
 }
 
-async function doClose() {
-  forceClose = true;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  try {
-    if (currentDocPath) await deleteMarkdownDoc(currentDocPath);
-  } catch {
-    // ignore
-  }
-  removeEntry(w.label);
-  await w.close();
+function prevMatch() {
+  if (!mdMatches.value.length) return;
+  mdMatchIndex.value = (mdMatchIndex.value - 1 + mdMatches.value.length) % mdMatches.value.length;
+  void jumpToMatch(mdMatchIndex.value);
 }
 
-function closeWindow() {
-  if (needsSavePrompt()) { showCloseModal.value = true; return; }
-  void doClose();
-}
+watch(mdSearchQuery, (q) => {
+  mdMatchIndex.value = 0;
+  if (q && mdMatches.value.length) void jumpToMatch(0);
+});
 
-async function onModalSave() {
-  const ok = await save();
-  showCloseModal.value = false;
-  if (ok) await doClose();
-  // if saveAs was cancelled (ok=false), stay open
-}
-
-function onModalDiscard() { showCloseModal.value = false; void doClose(); }
-function onModalCancel() { showCloseModal.value = false; }
-
-// --- OS-level close (Alt+F4 / taskbar ✕) ---
-// Copied verbatim from the pre-unification onCloseRequested body — this is the
-// one place JSON and Markdown genuinely differ (see useViewerWindowChrome.ts),
-// so it's supplied as an override rather than folded into shared chrome.
-// `label` is threaded in as a parameter (the composable owns the mount-time
-// closure that used to carry it) rather than changed in substance.
-async function onNativeCloseRequest(event: CloseRequestedEvent, label: string) {
-  if (forceClose) return; // our own doClose() — allow
-  if (needsSavePrompt()) {
-    event.preventDefault();
-    showCloseModal.value = true;
-  } else {
-    if (currentDocPath) void deleteMarkdownDoc(currentDocPath).catch(() => {});
-    removeEntry(label);
-  }
+const { isOpen: searchOpen, close: closeSearchRaw, toggle: toggleSearch } = useRevealSearch();
+function closeSearch() {
+  mdSearchQuery.value = "";
+  closeSearchRaw();
 }
 
 // --- Title bar controls ---
 // Shared window chrome (pin/minimize/maximize, geometry persistence,
-// Escape/F11, title-watch, focus/close Tauri-event wiring). Markdown overrides
-// the close request (dirty-check + modal) and adds an external-change recheck
-// on focus gain.
+// Escape/F11/Ctrl+F, title-watch, focus/close Tauri-event wiring). Markdown
+// overrides the close request (dirty-check + modal, via fileDoc) and adds an
+// external-change recheck on focus gain.
 const { pinned, isMaximized, togglePin, minimize, toggleMaximize } = useViewerWindowChrome({
   title: windowTitle,
-  onEscapeClose: closeWindow,
-  onNativeCloseRequest,
-  onFocusGained: () => void checkExternalChange(),
+  onEscapeClose: fileDoc.closeWindow,
+  onNativeCloseRequest: fileDoc.onNativeCloseRequest,
+  onFocusGained: () => void fileDoc.checkExternalChange(),
+  onToggleSearch: toggleSearch,
 });
 
-function onKeydown(e: KeyboardEvent) {
-  // Save / Save As / Open — handled globally regardless of focus.
-  if (e.ctrlKey && (e.key === "s" || e.key === "S")) {
-    e.preventDefault();
-    if (e.shiftKey) void saveAs(); else void save();
-    return;
-  }
-  if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
-    e.preventDefault();
-    void openFile();
-    return;
-  }
-}
-
 onMounted(async () => {
-  window.addEventListener("keydown", onKeydown);
-
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const label = getCurrentWindow().label;
-
-  // --- Hydrate from saved state ---
-  // (A restored window reuses its old label, so the registry entry is present.
-  //  A brand-new window seeded via openNewFileViewerWindow also has a
-  //  pre-seeded registry entry — no pending-localStorage handoff needed.)
-  try {
-    const registry = readRegistry();
-    const entry = registry[label];
-    const state = entry?.state as MarkdownViewerState | undefined;
-    if (state?.docPath) {
-      currentDocPath = state.docPath;
-      source.value = await readMarkdownDoc(currentDocPath);
-      mode.value = (state.mode as "preview" | "edit" | "split") ?? "preview";
-      filePath.value = state.filePath ?? null;
-      dirty.value = state.dirty ?? false;
-      // Hydrate disk baseline so external-change detection works across restarts.
-      const dm = state.diskMtimeMs, ds = state.diskSize;
-      diskBaseline = (typeof dm === "number" && typeof ds === "number") ? { mtimeMs: dm, size: ds } : null;
-      // If bound, check immediately for changes that happened while the app was closed.
-      if (filePath.value) void checkExternalChange();
-    }
-  } catch {
-    // ignore — hydration is best-effort
-  }
-
-  // For a new bound window (opened via openFile()) where no baseline was
-  // persisted yet, establish the baseline now.
-  if (filePath.value && diskBaseline === null) void refreshBaseline();
+  await fileDoc.hydrate();
 
   // No content (new window, or a restored/empty doc) → start in edit mode so
   // the user can type immediately rather than facing an empty preview.
@@ -658,17 +463,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown);
-  if (persistDocTimer) {
-    clearTimeout(persistDocTimer);
-    persistDocTimer = null;
-  }
   if (mirrorEl) { mirrorEl.remove(); mirrorEl = null; cachedTops = null; }
-  // NOTE: deleteMarkdownDoc / removeEntry are intentionally NOT called here.
-  // onUnmounted fires on every Vite HMR reload while the window stays open —
-  // calling them here would destroy the doc for a window the user never closed.
-  // Process death never runs onUnmounted at all. Intentional closes are handled
-  // by closeWindow() (Esc / ✕) and onNativeCloseRequest (Alt+F4 / taskbar).
 });
 </script>
 
@@ -682,89 +477,45 @@ onUnmounted(() => {
       @pin="togglePin"
       @minimize="minimize"
       @maximize="toggleMaximize"
-      @close="closeWindow"
+      @close="fileDoc.closeWindow"
     />
 
-    <!-- Toolbar -->
-    <div class="toolbar">
-      <div class="toolbar-buttons">
-        <button
-          :class="{ active: mode === 'preview' }"
-          @click="mode = 'preview'"
-          title="Rendered preview"
-        >
-          👁 Preview
-        </button>
-        <button
-          :class="{ active: mode === 'edit' }"
-          @click="mode = 'edit'"
-          title="Edit source"
-        >
-          ✏ Edit
-        </button>
-        <button
-          :class="{ active: mode === 'split' }"
-          @click="mode = 'split'"
-          title="Edit and preview side by side"
-        >
-          ⇆ Split
-        </button>
-        <span class="toolbar-divider"></span>
-        <button
-          class="util-btn"
-          @click="openFile"
-          title="Open a Markdown file (Ctrl+O)"
-        >
-          📂 Open
-        </button>
-        <button
-          class="util-btn"
-          @click="save"
-          title="Save (Ctrl+S)"
-        >
-          💾 Save
-        </button>
-        <button
-          class="util-btn"
-          @click="saveAs"
-          title="Save As… (Ctrl+Shift+S)"
-        >
-          Save As…
-        </button>
-        <span class="toolbar-divider"></span>
-        <button
-          class="util-btn"
-          @click="source = ''; mode = 'edit'"
-          title="Clear content"
-        >
-          🗑 Clear
-        </button>
-        <button
-          class="util-btn"
-          @click="() => openNewFileViewerWindow({ kind: 'markdown' })"
-          title="Open a new Markdown Viewer window"
-        >
-          ＋ New
-        </button>
-      </div>
-    </div>
+    <!-- Toolbar row 1 (Preview/Edit/Split + file actions + utility actions) -->
+    <ViewerToolbarRow1 v-model:layout-mode="mode">
+      <template #file-actions>
+        <button class="util-btn" @click="fileDoc.openFile" title="Open a Markdown file (Ctrl+O)">📂 Open</button>
+        <button class="util-btn" @click="fileDoc.save" title="Save (Ctrl+S)">💾 Save</button>
+        <button class="util-btn" @click="fileDoc.saveAs" title="Save As… (Ctrl+Shift+S)">Save As…</button>
+      </template>
+      <template #utility-actions>
+        <button class="util-btn" :class="{ active: searchOpen }" @click="toggleSearch" title="Find in document (Ctrl+F)">🔍 Find</button>
+        <button class="util-btn" @click="source = ''; mode = 'edit'" title="Clear content">🗑 Clear</button>
+        <button class="util-btn" @click="() => openNewFileViewerWindow({ kind: 'markdown' })" title="Open a new Markdown Viewer window">＋ New</button>
+      </template>
+    </ViewerToolbarRow1>
 
-    <!-- External-change banners (between toolbar and content; push content down) -->
-    <div v-if="externalChange === 'changed'" class="ext-banner">
-      <span class="ext-msg">⚠ This file changed on disk{{ dirty ? " — you have unsaved edits" : "" }}.</span>
-      <span class="ext-actions">
-        <button class="ext-btn ext-primary" @click="reloadFromDisk">{{ dirty ? "Reload (discard mine)" : "Reload" }}</button>
-        <button v-if="dirty" class="ext-btn" @click="openDiskCopy">Open disk copy ↗</button>
-        <button class="ext-btn" @click="keepMine">Keep mine</button>
-      </span>
-    </div>
-    <div v-else-if="externalChange === 'deleted'" class="ext-banner ext-deleted">
-      <span class="ext-msg">⚠ This file was deleted on disk.</span>
-      <span class="ext-actions">
-        <button class="ext-btn ext-primary" @click="saveOverDeleted">Save again</button>
-        <button class="ext-btn" @click="dismissExternal">Dismiss</button>
-      </span>
-    </div>
+    <!-- Find-in-document search bar (Ctrl+F reveal) -->
+    <ViewerSearchBar
+      v-if="searchOpen"
+      v-model="mdSearchQuery"
+      placeholder="Find in document..."
+      :match-count="mdMatches.length"
+      :match-index="mdMatches.length ? mdMatchIndex + 1 : 0"
+      @close="closeSearch"
+      @next="nextMatch"
+      @prev="prevMatch"
+    />
+
+    <!-- External-change banner (between toolbar and content; pushes content down) -->
+    <ExternalChangeBanner
+      :state="fileDoc.externalChange.value"
+      :dirty="fileDoc.dirty.value"
+      @reload="fileDoc.reloadFromDisk"
+      @open-disk-copy="fileDoc.openDiskCopy"
+      @keep-mine="fileDoc.keepMine"
+      @save-again="fileDoc.saveOverDeleted"
+      @dismiss="fileDoc.dismissExternal"
+    />
 
     <!-- Content area -->
     <div class="content">
@@ -813,17 +564,13 @@ onUnmounted(() => {
     <StatusBar :hint="statusHint" />
 
     <!-- Save-on-close modal -->
-    <div v-if="showCloseModal" class="close-modal-backdrop">
-      <div class="close-modal">
-        <div class="cm-title">Save changes?</div>
-        <div class="cm-msg">{{ filePath ? baseName(filePath) : "This document" }} has unsaved changes.</div>
-        <div class="cm-actions">
-          <button class="cm-btn cm-primary" @click="onModalSave">Save</button>
-          <button class="cm-btn" @click="onModalDiscard">Don't save</button>
-          <button class="cm-btn" @click="onModalCancel">Cancel</button>
-        </div>
-      </div>
-    </div>
+    <SaveCloseModal
+      :show="fileDoc.showCloseModal.value"
+      :label="fileDoc.filePath.value ? baseName(fileDoc.filePath.value) : 'This document'"
+      @save="fileDoc.onModalSave"
+      @discard="fileDoc.onModalDiscard"
+      @cancel="fileDoc.onModalCancel"
+    />
   </div>
 </template>
 
@@ -835,60 +582,6 @@ onUnmounted(() => {
   background: #1e1e1e;
   color: #e0e0e0;
   font-family: "Segoe UI", "Inter", sans-serif;
-}
-
-/* --- Toolbar --- */
-.toolbar {
-  display: flex;
-  align-items: center;
-  padding: 10px 16px;
-  background: #2d2d2d;
-  border-bottom: 1px solid #404040;
-  flex-shrink: 0;
-}
-
-.toolbar-buttons {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.toolbar-buttons button {
-  padding: 6px 12px;
-  background: #404040;
-  border: 1px solid #555;
-  color: #aaa;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.15s;
-}
-
-.toolbar-buttons button:hover {
-  background: #505050;
-  color: #ddd;
-}
-
-.toolbar-buttons button.active {
-  background: #4CAF50;
-  border-color: #45a049;
-  color: white;
-}
-
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  background: #555;
-  margin: 0 4px;
-}
-
-.toolbar-buttons button.util-btn {
-  background: #2d2d2d;
-}
-
-.toolbar-buttons button.util-btn:hover {
-  background: #3a3a3a;
-  color: #ddd;
 }
 
 /* --- Content --- */
@@ -1071,145 +764,5 @@ onUnmounted(() => {
 .md-body :deep(img) {
   max-width: 100%;
   border-radius: 4px;
-}
-
-/* --- Save-on-close modal --- */
-.close-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.close-modal {
-  background: #2d2d2d;
-  border: 1px solid #555;
-  border-radius: 8px;
-  padding: 24px;
-  width: 320px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.cm-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #f0f0f0;
-}
-
-.cm-msg {
-  font-size: 13px;
-  color: #aaa;
-  word-break: break-all;
-}
-
-.cm-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 4px;
-}
-
-.cm-btn {
-  padding: 6px 14px;
-  background: #404040;
-  border: 1px solid #555;
-  color: #ddd;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: background 0.12s;
-}
-
-.cm-btn:hover {
-  background: #505050;
-}
-
-.cm-btn.cm-primary {
-  background: #4CAF50;
-  border-color: #45a049;
-  color: white;
-}
-
-.cm-btn.cm-primary:hover {
-  background: #45a049;
-}
-
-/* --- External-change banner --- */
-.ext-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  background: #3a2f1a;
-  border-bottom: 1px solid #5c4a1f;
-  color: #e0c66a;
-  font-size: 12px;
-  flex-shrink: 0;
-  gap: 12px;
-}
-
-.ext-banner.ext-deleted {
-  background: #3a1e1e;
-  border-bottom-color: #5c2a2a;
-  color: #e08080;
-}
-
-.ext-msg {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ext-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.ext-btn {
-  padding: 4px 10px;
-  background: #4a3a20;
-  border: 1px solid #7a6030;
-  color: #e0c66a;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: background 0.12s, color 0.12s;
-  white-space: nowrap;
-}
-
-.ext-btn:hover {
-  background: #5a4a28;
-  color: #f0d87a;
-}
-
-.ext-banner.ext-deleted .ext-btn {
-  background: #4a2020;
-  border-color: #7a3030;
-  color: #e08080;
-}
-
-.ext-banner.ext-deleted .ext-btn:hover {
-  background: #5a2828;
-  color: #f09090;
-}
-
-.ext-btn.ext-primary {
-  background: #4CAF50;
-  border-color: #45a049;
-  color: white;
-}
-
-.ext-btn.ext-primary:hover {
-  background: #45a049;
-  color: white;
 }
 </style>

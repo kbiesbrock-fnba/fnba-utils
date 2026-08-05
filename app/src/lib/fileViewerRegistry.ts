@@ -6,31 +6,42 @@
 // intersects this with the live window list, so stale entries (from a crash,
 // etc.) are harmless.
 //
-// NOTE: a multi-MB pasted JSON blob stored in `state.input` can exceed the
-// localStorage quota. The try/catch wrappers mean persistence silently degrades
-// (the viewer keeps working; state just won't survive a restart) — it never
-// breaks the viewer.
+// NOTE: JSON used to store its whole buffer as a `state.input` localStorage
+// string, which a large pasted blob could exceed the quota for. Both kinds
+// now doc-cache their buffer to disk (see useFileBackedDoc.ts) and keep only
+// the `docPath` in this registry — that failure mode no longer applies, but
+// the try/catch wrappers below stay as defense-in-depth: persistence silently
+// degrades (the viewer keeps working; state just won't survive a restart) —
+// it never breaks the viewer.
 
 const STORAGE_KEY = "fnba-utils:file-viewer-registry";
 
 export type ViewerKind = "json" | "markdown";
 
-export interface JsonViewerState {
-  input: string;
-  diffInput: string;
-  mode: string;
-  formatStyle: string;
-  sortKeys: boolean;
-  search: string;
-}
-
-export interface MarkdownViewerState {
+export interface FileBackedState {
   docPath: string | null;
-  mode: string;
   filePath?: string | null;
   dirty?: boolean;
   diskMtimeMs?: number | null;
   diskSize?: number | null;
+}
+
+export interface JsonViewerState extends FileBackedState {
+  /** @deprecated legacy localStorage-string content; superseded by docPath.
+   *  Optional only so the one-time migration shim in JsonViewerApp.vue can
+   *  still read old entries. */
+  input?: string;
+  diffInput?: string;
+  mode?: string;
+  formatStyle?: string;
+  sortKeys?: boolean;
+  layoutMode?: string;
+  // search is intentionally NOT persisted — it's ephemeral (see Part C of the
+  // File Viewer parity plan): it resets to empty on every fresh window.
+}
+
+export interface MarkdownViewerState extends FileBackedState {
+  mode: string;
 }
 
 export interface FileViewerEntry {

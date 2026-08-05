@@ -38,9 +38,15 @@ pub fn data_file(name: &str) -> PathBuf {
 }
 
 /// `%LOCALAPPDATA%\fnba-utils\markdown-docs`, creating it on demand. Holds the
-/// body of each open Markdown Viewer document so large docs never hit the
-/// webview localStorage quota; localStorage keeps only the file path.
-pub fn markdown_docs_dir() -> std::path::PathBuf {
+/// body of each open File Viewer document (JSON or Markdown) so large docs
+/// never hit the webview localStorage quota; localStorage keeps only the file
+/// path. The on-disk folder name stays `markdown-docs` even though it now
+/// holds both kinds — this directory is disposable scratch space (self-healed
+/// by the cleanup sweep every startup), so renaming it would be pure
+/// migration cost for zero benefit. Deliberately NOT part of
+/// `migrate_legacy_files()` for the same reason: that machinery exists for
+/// durable user data.
+pub fn viewer_docs_dir() -> std::path::PathBuf {
     let dir = app_data_dir().join("markdown-docs");
     let _ = std::fs::create_dir_all(&dir);
     dir

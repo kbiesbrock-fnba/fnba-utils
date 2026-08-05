@@ -275,7 +275,7 @@ function buildPathRows(rawPath: string): PaletteCommand[] {
     action: async () => {
       const r = await resolvePath(rawPath);
       const content = await readTextFile(r.windows);
-      await openNewFileViewerWindow({ kind: "json", content });
+      await openNewFileViewerWindow({ kind: "json", content, filePath: r.windows });
     },
   });
 

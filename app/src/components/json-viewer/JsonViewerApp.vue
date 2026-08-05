@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import { useJsonViewer, type CopyFormat, type ViewMode, type FormatStyle } from "../../composables/useJsonViewer";
-import { copyText } from "../../lib/tauri";
+import { copyText, writeViewerDoc } from "../../lib/tauri";
 import { openNewFileViewerWindow } from "../../lib/fileViewerWindow";
-import { removeEntry, saveState, touchEntry, readRegistry, type JsonViewerState } from "../../lib/fileViewerRegistry";
+import { saveState, readRegistry, type JsonViewerState } from "../../lib/fileViewerRegistry";
 import { useViewerWindowChrome } from "../../composables/useViewerWindowChrome";
+import { useFileBackedDoc } from "../../composables/useFileBackedDoc";
+import { useRevealSearch } from "../../composables/useRevealSearch";
+import { baseName } from "../../lib/pathUtils";
 import ViewerTitleBar from "../file-viewer/ViewerTitleBar.vue";
+import ViewerToolbarRow1 from "../file-viewer/ViewerToolbarRow1.vue";
+import ViewerSearchBar from "../file-viewer/ViewerSearchBar.vue";
+import ExternalChangeBanner from "../file-viewer/ExternalChangeBanner.vue";
+import SaveCloseModal from "../file-viewer/SaveCloseModal.vue";
 import JsonTreeNode from "./JsonTreeNode.vue";
 import JsonQueryResults from "./JsonQueryResults.vue";
 import SplitPane from "../common/SplitPane.vue";
@@ -36,6 +43,12 @@ const {
   searchResults,
   formatJson,
 } = useJsonViewer();
+
+// Preview/Edit/Split layout axis — a DIFFERENT concept than `mode` above
+// (useJsonViewer's tree/flatten/schema/diff/format/query view-type axis).
+// Kept as a separate local ref per the naming-collision note in the File
+// Viewer parity plan; useJsonViewer.ts's `mode` and its exports are untouched.
+const layoutMode = ref<"preview" | "edit" | "split">("split");
 
 const justCopied = ref(false);
 let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -110,17 +123,43 @@ function selectedPathStr(): string {
   return result;
 }
 
-// All JSON Viewer windows are dynamic (`json-viewer:*`) — always close.
-async function closeWindow() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  removeEntry(w.label);
-  await w.close();
-}
+// --- File-backed doc: docPath persistence, dirty-tracking, external-change
+// detection, unsaved-changes close-prompt, Open/Save/Save-As, Ctrl+S/O. ---
+const fileDoc = useFileBackedDoc({
+  kind: "json",
+  content: input,
+  suggestedName: (val) => {
+    const first = val.split("\n").find((l) => l.trim()) ?? "";
+    const slug = first
+      .trim()
+      .slice(0, 40)
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return (slug || "untitled") + ".json";
+  },
+  extraState: () => ({
+    diffInput: diffInput.value,
+    mode: mode.value,
+    formatStyle: formatStyle.value,
+    sortKeys: sortKeys.value,
+    layoutMode: layoutMode.value,
+  }),
+  hydrateExtra: (s) => {
+    if (typeof s.diffInput === "string") diffInput.value = s.diffInput;
+    if (typeof s.mode === "string") mode.value = s.mode as ViewMode;
+    if (typeof s.formatStyle === "string") formatStyle.value = s.formatStyle as FormatStyle;
+    if (typeof s.sortKeys === "boolean") sortKeys.value = s.sortKeys;
+    if (typeof s.layoutMode === "string") layoutMode.value = s.layoutMode as "preview" | "edit" | "split";
+  },
+});
 
 // --- Window title ---
-// Shows the first few root keys (object) or item count (array), else "JSON Viewer".
+// Bound files show filename + dirty indicator. Otherwise shows the first few
+// root keys (object) or item count (array), else "JSON Viewer".
 const windowTitle = computed(() => {
+  if (fileDoc.filePath.value) {
+    return baseName(fileDoc.filePath.value) + (fileDoc.dirty.value ? " ●" : "");
+  }
   const p = parsed.value;
   if (p === null || p === undefined) return "JSON Viewer";
   if (Array.isArray(p)) return `JSON · [${p.length} item${p.length === 1 ? "" : "s"}]`;
@@ -134,120 +173,53 @@ const windowTitle = computed(() => {
   return "JSON Viewer";
 });
 
+// --- Ctrl+F reveal search ---
+const { isOpen: searchOpen, close: closeSearchRaw, toggle: toggleSearch } = useRevealSearch();
+function closeSearch() {
+  search.value = "";
+  closeSearchRaw();
+}
+watch(search, (q) => {
+  if (q.trim() && layoutMode.value === "edit") layoutMode.value = "split";
+});
+
 // --- Title bar controls ---
 // Shared window chrome (pin/minimize/maximize, geometry persistence,
-// Escape/F11, title-watch, focus/close Tauri-event wiring). JSON passes no
-// overrides — today's unconditional close becomes the composable's default.
+// Escape/F11/Ctrl+F, title-watch, focus/close Tauri-event wiring). JSON now
+// gets the same unsaved-changes-close-prompt + external-change recheck
+// Markdown already had.
 const { pinned, isMaximized, togglePin, minimize, toggleMaximize } = useViewerWindowChrome({
   title: windowTitle,
-  onEscapeClose: closeWindow,
-});
-
-// --- Persistence helpers ---
-
-// Debounce timer handle for state persistence.
-let persistStateTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Debounced: persist viewer state (input, mode, search, etc.) to localStorage. */
-function schedulePersistState(label: string): void {
-  if (persistStateTimer) clearTimeout(persistStateTimer);
-  persistStateTimer = setTimeout(() => {
-    persistStateTimer = null;
-    saveState(label, {
-      input: input.value,
-      diffInput: diffInput.value,
-      mode: mode.value,
-      formatStyle: formatStyle.value,
-      sortKeys: sortKeys.value,
-      search: search.value,
-    });
-  }, 400);
-}
-
-onMounted(async () => {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const label = getCurrentWindow().label;
-
-  // --- Hydrate from saved state BEFORE the pending-blob handoff ---
-  // (A restored window reuses its old label, so the registry entry is present.)
-  try {
-    const registry = readRegistry();
-    const entry = registry[label];
-    if (entry?.state) {
-      const s = entry.state as JsonViewerState;
-      input.value = s.input;
-      diffInput.value = s.diffInput;
-      mode.value = s.mode as ViewMode;
-      formatStyle.value = s.formatStyle as FormatStyle;
-      sortKeys.value = s.sortKeys;
-      search.value = s.search;
-      // Trigger parse so parsed/diffParsed are populated from restored input.
-      parse();
-      if (diffInput.value) parseDiffInput();
-    }
-  } catch {
-    // ignore — hydration is best-effort
-  }
-
-  // --- Pending-blob handoff (palette "Open in JSON Viewer" soft command) ---
-  // This runs AFTER hydration. A brand-new window has a fresh label with no
-  // registry state, so hydration is a no-op and the pending blob wins cleanly.
-  // A restored window won't have a pending blob (they share a label, not the
-  // pending key) so the two paths don't collide in practice.
-  try {
-    const pending = localStorage.getItem("fnba-utils:file-viewer-pending");
-    if (pending != null) {
-      localStorage.removeItem("fnba-utils:file-viewer-pending");
-      input.value = pending;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Persist initial state once so an immediate recompile can restore it.
-  schedulePersistState(label);
-});
-
-onUnmounted(() => {
-  if (persistStateTimer) {
-    clearTimeout(persistStateTimer);
-    persistStateTimer = null;
-  }
-  // NOTE: removeEntry is intentionally NOT called here. onUnmounted fires on
-  // every webview reload (Vite HMR / F5) while the window stays open — calling
-  // removeEntry here would wipe persisted state for a window the user never
-  // closed. Process death never runs onUnmounted at all. Intentional closes are
-  // handled by closeWindow() (Esc / ✕) and the composable's default
-  // onNativeCloseRequest (Alt+F4 / taskbar).
-});
-
-// Update registry preview as the user types (first 60 chars, single-line),
-// and debounce full state persistence.
-watch(input, (val) => {
-  void (async () => {
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const label = getCurrentWindow().label;
-      const preview = val.replace(/\s+/g, " ").trim().slice(0, 60);
-      touchEntry(label, preview);
-      schedulePersistState(label);
-    } catch {
-      // ignore
-    }
-  })();
+  onEscapeClose: fileDoc.closeWindow,
+  onNativeCloseRequest: fileDoc.onNativeCloseRequest,
+  onFocusGained: () => void fileDoc.checkExternalChange(),
+  onToggleSearch: toggleSearch,
 });
 
 // Persist state on any viewer-state change beyond input (mode, formatStyle,
-// sortKeys, search, diffInput). Debounced together with the input watcher above.
-watch([diffInput, mode, formatStyle, sortKeys, search], () => {
-  void (async () => {
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      schedulePersistState(getCurrentWindow().label);
-    } catch {
-      // ignore
+// sortKeys, layoutMode, diffInput). `search` is intentionally excluded — it's
+// ephemeral (never persisted; resets to empty on every fresh window).
+watch([diffInput, mode, formatStyle, sortKeys, layoutMode], () => fileDoc.schedulePersist());
+
+onMounted(async () => {
+  // --- One-time legacy-shape migration ---
+  // Existing installs have JSON registry entries shaped `{ input: "...", ... }`
+  // with no docPath. Upgrade them to the doc-cache before hydrating.
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const label = getCurrentWindow().label;
+    const legacy = readRegistry()[label]?.state as (JsonViewerState & { input?: string }) | undefined;
+    if (legacy && !legacy.docPath && typeof legacy.input === "string" && legacy.input) {
+      const docPath = await writeViewerDoc(label, "json", legacy.input);
+      saveState(label, { ...legacy, docPath, filePath: null, dirty: false });
     }
-  })();
+  } catch {
+    // ignore — migration is best-effort
+  }
+
+  await fileDoc.hydrate();
+  parse();
+  if (diffInput.value) parseDiffInput();
 });
 </script>
 
@@ -261,64 +233,18 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
       @pin="togglePin"
       @minimize="minimize"
       @maximize="toggleMaximize"
-      @close="closeWindow"
+      @close="fileDoc.closeWindow"
     />
 
-    <!-- Toolbar -->
-    <div class="toolbar">
-      <div class="search-bar">
-        <span class="search-icon">🔍</span>
-        <input
-          v-model="search"
-          type="text"
-          placeholder="Search by path or value..."
-          class="search-input"
-        />
-      </div>
-      <div class="toolbar-buttons">
-        <button
-          :class="{ active: mode === 'format' }"
-          @click="mode = 'format'"
-          title="Format and display"
-        >
-          ✨ Format
-        </button>
-        <button
-          :class="{ active: mode === 'tree' }"
-          @click="mode = 'tree'"
-          title="Tree view"
-        >
-          🌳 Tree
-        </button>
-        <button
-          :class="{ active: mode === 'flatten' }"
-          @click="mode = 'flatten'"
-          title="Flattened dot-notation"
-        >
-          → Flatten
-        </button>
-        <button
-          :class="{ active: mode === 'schema' }"
-          @click="mode = 'schema'"
-          title="JSON Schema"
-        >
-          📋 Schema
-        </button>
-        <button
-          :class="{ active: mode === 'diff' }"
-          @click="mode = 'diff'"
-          title="Compare two JSON blobs"
-        >
-          📊 Diff
-        </button>
-        <button
-          :class="{ active: sortKeys }"
-          @click="sortKeys = !sortKeys"
-          title="Sort object keys alphabetically"
-        >
-          A-Z
-        </button>
-        <span class="toolbar-divider"></span>
+    <!-- Toolbar row 1 (Preview/Edit/Split + file actions + utility actions) -->
+    <ViewerToolbarRow1 v-model:layout-mode="layoutMode">
+      <template #file-actions>
+        <button class="util-btn" @click="fileDoc.openFile" title="Open a JSON file (Ctrl+O)">📂 Open</button>
+        <button class="util-btn" @click="fileDoc.save" title="Save (Ctrl+S)">💾 Save</button>
+        <button class="util-btn" @click="fileDoc.saveAs" title="Save As… (Ctrl+Shift+S)">Save As…</button>
+      </template>
+      <template #utility-actions>
+        <button class="util-btn" :class="{ active: searchOpen }" @click="toggleSearch" title="Find (Ctrl+F)">🔍 Find</button>
         <button
           class="util-btn"
           @click="clearAll"
@@ -333,12 +259,149 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
         >
           ＋ New
         </button>
-      </div>
+      </template>
+    </ViewerToolbarRow1>
+
+    <!-- Toolbar row 2 (JSON-only: view-type buttons) -->
+    <div class="toolbar-row2">
+      <button
+        :class="{ active: mode === 'format' }"
+        @click="mode = 'format'"
+        title="Format and display"
+      >
+        ✨ Format
+      </button>
+      <button
+        :class="{ active: mode === 'tree' }"
+        @click="mode = 'tree'"
+        title="Tree view"
+      >
+        🌳 Tree
+      </button>
+      <button
+        :class="{ active: mode === 'flatten' }"
+        @click="mode = 'flatten'"
+        title="Flattened dot-notation"
+      >
+        → Flatten
+      </button>
+      <button
+        :class="{ active: mode === 'schema' }"
+        @click="mode = 'schema'"
+        title="JSON Schema"
+      >
+        📋 Schema
+      </button>
+      <button
+        :class="{ active: mode === 'diff' }"
+        @click="mode = 'diff'"
+        title="Compare two JSON blobs"
+      >
+        📊 Diff
+      </button>
+      <button
+        :class="{ active: sortKeys }"
+        @click="sortKeys = !sortKeys"
+        title="Sort object keys alphabetically"
+      >
+        A-Z
+      </button>
     </div>
+
+    <!-- Find search bar (Ctrl+F reveal) -->
+    <ViewerSearchBar
+      v-if="searchOpen"
+      v-model="search"
+      placeholder="Search by path or value..."
+      :match-count="searchActive ? queryResults.length : null"
+      @close="closeSearch"
+    />
+
+    <!-- External-change banner (between toolbar and content; pushes content down) -->
+    <ExternalChangeBanner
+      :state="fileDoc.externalChange.value"
+      :dirty="fileDoc.dirty.value"
+      @reload="fileDoc.reloadFromDisk"
+      @open-disk-copy="fileDoc.openDiskCopy"
+      @keep-mine="fileDoc.keepMine"
+      @save-again="fileDoc.saveOverDeleted"
+      @dismiss="fileDoc.dismissExternal"
+    />
 
     <!-- Main content -->
     <div class="content">
-      <SplitPane storageKey="fnba-utils:json-split" :default-ratio="0.4">
+      <template v-if="layoutMode === 'preview'">
+        <!-- Output pane (right side) -->
+        <!-- An active search takes over the output pane in every mode -->
+        <div v-if="searchActive" class="output-pane">
+          <json-query-results
+            :results="queryResults"
+            :query="search"
+            :label="isQueryMode ? 'JSONPath' : 'Search'"
+          />
+        </div>
+        <div v-else-if="mode === 'tree'" class="output-pane">
+          <json-tree-node
+            v-if="parsed !== null"
+            :path="rootPath"
+            :value="parsed"
+            :expanded="rootIsExpanded"
+            :is-selected="selectedPath.length === 0"
+            :search="search"
+            :sort-keys="sortKeys"
+            @toggle="toggleExpand"
+            @select="selectNode"
+          />
+          <div v-else class="placeholder">Paste JSON to view tree</div>
+        </div>
+        <div v-else-if="mode === 'flatten'" class="output-pane">
+          <pre v-if="flattenedOutput" class="output-text">{{ flattenedOutput }}</pre>
+          <div v-else class="placeholder">Paste JSON to flatten</div>
+        </div>
+        <div v-else-if="mode === 'schema'" class="output-pane">
+          <pre v-if="schemaOutput" class="output-text">{{ schemaOutput }}</pre>
+          <div v-else class="placeholder">Paste JSON to generate schema</div>
+        </div>
+        <div v-else-if="mode === 'format'" class="output-pane">
+          <div v-if="parsed !== null" class="format-controls">
+            <label>Format style:</label>
+            <select v-model="formatStyle" class="format-select">
+              <option value="pretty2">Pretty (2-space indent)</option>
+              <option value="pretty4">Pretty (4-space indent)</option>
+              <option value="minified">Minified</option>
+              <option value="compact">Compact (one item per line)</option>
+            </select>
+          </div>
+          <pre v-if="parsed !== null" class="output-text format-output">{{ formatJson(formatStyle) }}</pre>
+          <div v-else class="placeholder">Paste JSON to format</div>
+        </div>
+        <div v-else-if="mode === 'diff'" class="output-pane">
+          <div v-if="parsed && diffParsed" class="diff-view">
+            <div>Diff view (simplified)</div>
+            <pre class="output-text">{{ JSON.stringify({ json1: parsed, json2: diffParsed }, null, 2) }}</pre>
+          </div>
+          <div v-else class="placeholder">Paste both JSON blobs to compare</div>
+        </div>
+      </template>
+      <template v-else-if="layoutMode === 'edit'">
+        <!-- Input pane (left side for tree, side-by-side for diff) -->
+        <div v-if="mode === 'diff'" class="input-panes">
+          <div class="input-pane">
+            <label>JSON 1</label>
+            <textarea v-model="input" placeholder="Paste first JSON..." />
+            <div v-if="parseError" class="error">{{ parseError }}</div>
+          </div>
+          <div class="input-pane">
+            <label>JSON 2</label>
+            <textarea v-model="diffInput" placeholder="Paste second JSON..." />
+          </div>
+        </div>
+        <div v-else class="input-pane single">
+          <textarea v-model="input" placeholder="Paste JSON here..." />
+          <div v-if="parseError" class="error">{{ parseError }}</div>
+        </div>
+      </template>
+      <SplitPane v-else storageKey="fnba-utils:json-split" :default-ratio="0.4">
         <template #left>
           <!-- Input pane (left side for tree, side-by-side for diff) -->
           <div v-if="mode === 'diff'" class="input-panes">
@@ -437,6 +500,15 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
         </div>
       </div>
     </div>
+
+    <!-- Save-on-close modal -->
+    <SaveCloseModal
+      :show="fileDoc.showCloseModal.value"
+      :label="fileDoc.filePath.value ? baseName(fileDoc.filePath.value) : 'This document'"
+      @save="fileDoc.onModalSave"
+      @discard="fileDoc.onModalDiscard"
+      @cancel="fileDoc.onModalCancel"
+    />
   </div>
 </template>
 
@@ -450,47 +522,18 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
   font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
 }
 
-/* --- Toolbar --- */
-.toolbar {
+/* --- Toolbar row 2 (JSON-only view-type buttons) --- */
+.toolbar-row2 {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 16px;
-  background: #2d2d2d;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #262626;
   border-bottom: 1px solid #404040;
   flex-shrink: 0;
 }
 
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  background: #333;
-  border-radius: 4px;
-  padding: 6px 10px;
-}
-
-.search-icon {
-  font-size: 14px;
-}
-
-.search-input {
-  background: none;
-  border: none;
-  color: inherit;
-  outline: none;
-  flex: 1;
-  font-size: 13px;
-}
-
-.toolbar-buttons {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.toolbar-buttons button {
+.toolbar-row2 button {
   padding: 6px 12px;
   background: #404040;
   border: 1px solid #555;
@@ -501,31 +544,15 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
   transition: all 0.15s;
 }
 
-.toolbar-buttons button:hover {
+.toolbar-row2 button:hover {
   background: #505050;
   color: #ddd;
 }
 
-.toolbar-buttons button.active {
+.toolbar-row2 button.active {
   background: #4CAF50;
   border-color: #45a049;
   color: white;
-}
-
-.toolbar-divider {
-  width: 1px;
-  align-self: stretch;
-  background: #555;
-  margin: 2px 4px;
-}
-
-.toolbar-buttons button.util-btn {
-  background: #2d2d2d;
-}
-
-.toolbar-buttons button.util-btn:hover {
-  background: #3a3a3a;
-  color: #ddd;
 }
 
 .content {

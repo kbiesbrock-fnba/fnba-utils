@@ -23,21 +23,21 @@ if (!window.location.hash) {
   // app quit, or crash. Windows the user explicitly closed are not in the
   // registry and stay closed. This also runs the one-time legacy-registry
   // migration sweep on its first call (see fileViewerWindow.ts) — the
-  // markdown-doc cleanup sweep below is chained to run only AFTER this
+  // viewer-doc cleanup sweep below is chained to run only AFTER this
   // resolves, so it never sees a not-yet-migrated legacy entry as "absent"
-  // and deletes an unsaved Markdown doc that's about to be migrated forward.
+  // and deletes an unsaved doc that's about to be migrated forward.
   void import("./lib/fileViewerWindow").then(async (m) => {
     await m.restoreFileViewerWindows();
 
-    // Sweep markdown-doc files orphaned by a crash: keep only paths still in the registry.
+    // Sweep doc-cache files (both kinds) orphaned by a crash: keep only paths
+    // still referenced by the registry.
     try {
       const { readRegistry } = await import("./lib/fileViewerRegistry");
-      const { cleanupMarkdownDocs } = await import("./lib/tauri");
+      const { cleanupViewerDocs } = await import("./lib/tauri");
       const keep = Object.values(readRegistry())
-        .filter((e: any) => e?.kind === "markdown")
         .map((e: any) => e?.state?.docPath)
         .filter((p): p is string => typeof p === "string" && p.length > 0);
-      await cleanupMarkdownDocs(keep);
+      await cleanupViewerDocs(keep);
     } catch { /* best-effort */ }
   });
 }

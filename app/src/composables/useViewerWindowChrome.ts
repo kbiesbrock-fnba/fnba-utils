@@ -32,6 +32,10 @@ export interface ViewerWindowChromeOptions {
   onNativeCloseRequest?: (event: CloseRequestedEvent, label: string) => void | Promise<void>;
   /** Extra work to run after touchEntry(label) on OS-level focus gain. */
   onFocusGained?: () => void;
+  /** Ctrl+F — reveal/hide the search bar. Fires unconditionally (even while
+   *  an input/textarea has focus), unlike Escape which deliberately skips
+   *  editable targets. */
+  onToggleSearch?: () => void;
 }
 
 export function useViewerWindowChrome(options: ViewerWindowChromeOptions) {
@@ -127,6 +131,10 @@ export function useViewerWindowChrome(options: ViewerWindowChromeOptions) {
         const w = getCurrentWindow();
         await w.setFullscreen(!(await w.isFullscreen()));
       })();
+    }
+    if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      options.onToggleSearch?.();
     }
   }
 

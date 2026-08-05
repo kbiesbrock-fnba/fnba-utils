@@ -61,47 +61,34 @@ let seq = 0;
 
 export interface OpenFileViewerOptions {
   kind: ViewerKind;
-  /** JSON: raw text handed off via a pending-blob localStorage key. Markdown: initial doc body. */
+  /** Initial doc body, written through the shared doc-cache before the window is created. */
   content?: string;
-  /** Markdown only: binds the window to a real file on disk (Open / Save flow). */
+  /** Binds the window to a real file on disk (Open / Save flow). */
   filePath?: string;
 }
 
 /**
  * Create and focus a brand-new File Viewer window with a unique label.
  *
- * JSON: `content`, if given, is stashed in localStorage
- * (`fnba-utils:file-viewer-pending`) and picked up by the new window on mount
- * — used by the palette's "Open in JSON Viewer" soft command to seed the
- * window with a pasted blob.
- *
- * Markdown: `content`/`filePath`, if given, are written to disk and
- * pre-seeded into the registry BEFORE the window is created — the new window
- * hydrates from its registry entry on mount (no pending-localStorage handoff
- * needed).
+ * Both kinds doc-cache-seed identically: `content`/`filePath`, if given, are
+ * written to disk and pre-seeded into the registry BEFORE the window is
+ * created — the new window hydrates from its registry entry on mount (no
+ * pending-localStorage handoff needed).
  */
 export async function openNewFileViewerWindow(opts: OpenFileViewerOptions): Promise<void> {
   const { kind, content, filePath } = opts;
   const label = `${labelPrefix(kind)}${Date.now()}-${seq++}`;
   seedEntry(label, kind);
 
-  if (kind === "markdown") {
-    if ((content != null && content.trim() !== "") || filePath) {
-      try {
-        const { writeMarkdownDoc } = await import("./tauri");
-        const docPath = await writeMarkdownDoc(label, content ?? "");
-        const seedMode = content && content.trim() ? "preview" : "edit";
-        saveState(label, { docPath, mode: seedMode, filePath: filePath ?? null, dirty: false });
-        touchEntry(label, (content ?? "").replace(/\s+/g, " ").trim().slice(0, 60));
-      } catch {
-        // best-effort; window still opens empty
-      }
-    }
-  } else if (content != null) {
+  if ((content != null && content.trim() !== "") || filePath) {
     try {
-      localStorage.setItem("fnba-utils:file-viewer-pending", content);
+      const { writeViewerDoc } = await import("./tauri");
+      const docPath = await writeViewerDoc(label, kind, content ?? "");
+      const extra = kind === "markdown" ? { mode: content?.trim() ? "preview" : "edit" } : {};
+      saveState(label, { ...extra, docPath, filePath: filePath ?? null, dirty: false });
+      touchEntry(label, (content ?? "").replace(/\s+/g, " ").trim().slice(0, 60));
     } catch {
-      // ignore
+      // best-effort; window still opens empty
     }
   }
 

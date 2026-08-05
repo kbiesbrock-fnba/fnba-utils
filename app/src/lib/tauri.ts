@@ -1,3 +1,5 @@
+import type { ViewerKind } from "./fileViewerRegistry";
+
 export interface IdentityUser {
   username: string;
   label: string;
@@ -1021,45 +1023,45 @@ export function copyText(text: string): Promise<void> {
   return invoke<void>("copy_text", { text });
 }
 
-export function writeMarkdownDoc(label: string, content: string): Promise<string> {
-  return invoke<string>("write_markdown_doc", { label, content });
+export function writeViewerDoc(label: string, kind: ViewerKind, content: string): Promise<string> {
+  return invoke<string>("write_viewer_doc", { label, kind, content });
 }
 
-export function readMarkdownDoc(path: string): Promise<string> {
-  return invoke<string>("read_markdown_doc", { path });
+export function readViewerDoc(path: string): Promise<string> {
+  return invoke<string>("read_viewer_doc", { path });
 }
 
-export function deleteMarkdownDoc(path: string): Promise<void> {
-  return invoke<void>("delete_markdown_doc", { path });
+export function deleteViewerDoc(path: string): Promise<void> {
+  return invoke<void>("delete_viewer_doc", { path });
 }
 
-export function cleanupMarkdownDocs(keepPaths: string[]): Promise<number> {
-  return invoke<number>("cleanup_markdown_docs", { keepPaths });
+export function cleanupViewerDocs(keepPaths: string[]): Promise<number> {
+  return invoke<number>("cleanup_viewer_docs", { keepPaths });
 }
 
-export interface MarkdownFile { path: string; content: string; }
+export interface ViewerFile { path: string; content: string; }
 
-export function openMarkdownFile(): Promise<MarkdownFile | null> {
-  return invoke<MarkdownFile | null>("open_markdown_file");
+export function openViewerFile(kind: ViewerKind): Promise<ViewerFile | null> {
+  return invoke<ViewerFile | null>("open_viewer_file", { kind });
 }
 
-export function saveMarkdownAs(content: string, suggestedName?: string): Promise<string | null> {
-  return invoke<string | null>("save_markdown_as", { content, suggestedName: suggestedName ?? null });
+export function saveViewerFileAs(kind: ViewerKind, content: string, suggestedName?: string): Promise<string | null> {
+  return invoke<string | null>("save_viewer_file_as", { kind, content, suggestedName: suggestedName ?? null });
 }
 
-export function saveMarkdownFile(path: string, content: string): Promise<void> {
-  return invoke<void>("save_markdown_file", { path, content });
+export function saveViewerFile(path: string, content: string): Promise<void> {
+  return invoke<void>("save_viewer_file", { path, content });
 }
 
-export interface MarkdownFileStat { mtimeMs: number; size: number; exists: boolean; }
-export interface MarkdownFileRead { content: string; mtimeMs: number; size: number; }
+export interface ViewerFileStat { mtimeMs: number; size: number; exists: boolean; }
+export interface ViewerFileRead { content: string; mtimeMs: number; size: number; }
 
-export function statMarkdownFile(path: string): Promise<MarkdownFileStat> {
-  return invoke<MarkdownFileStat>("stat_markdown_file", { path });
+export function statViewerFile(path: string): Promise<ViewerFileStat> {
+  return invoke<ViewerFileStat>("stat_viewer_file", { path });
 }
 
-export function readMarkdownFile(path: string): Promise<MarkdownFileRead> {
-  return invoke<MarkdownFileRead>("read_markdown_file", { path });
+export function readViewerFile(path: string): Promise<ViewerFileRead> {
+  return invoke<ViewerFileRead>("read_viewer_file", { path });
 }
 
 /** Spawn a detached terminal window running `command` via wsl.exe bash -ilc. */
