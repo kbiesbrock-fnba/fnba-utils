@@ -27,14 +27,11 @@ const IssueDetailApp = defineAsyncComponent(
 const ClipboardManagerWindow = defineAsyncComponent(
   () => import("./components/clipboard-manager/ClipboardManagerWindow.vue"),
 );
-const JsonViewerApp = defineAsyncComponent(
-  () => import("./components/json-viewer/JsonViewerApp.vue"),
-);
 const JsonSwitcher = defineAsyncComponent(
   () => import("./components/json-viewer/JsonSwitcher.vue"),
 );
-const MarkdownViewerApp = defineAsyncComponent(
-  () => import("./components/markdown-viewer/MarkdownViewerApp.vue"),
+const FileViewerApp = defineAsyncComponent(
+  () => import("./components/file-viewer/FileViewerApp.vue"),
 );
 const DockerWidgetApp = defineAsyncComponent(
   () => import("./components/docker-widget/DockerWidgetApp.vue"),
@@ -49,8 +46,7 @@ const isStandupPanel = window.location.hash.startsWith("#standup-panel");
 const isIssueDetail = window.location.hash.startsWith("#issue-detail");
 const isClipboardManager = window.location.hash.startsWith("#clipboard-manager");
 const isJsonSwitcher = window.location.hash.startsWith("#json-switcher");
-const isJsonViewer = window.location.hash.startsWith("#json-viewer");
-const isMarkdownViewer = window.location.hash.startsWith("#markdown-viewer");
+const isFileViewer = window.location.hash.startsWith("#file-viewer");
 const isDockerWidget = window.location.hash.startsWith("#docker-widget");
 
 function onBackdropClick(e: MouseEvent) {
@@ -68,8 +64,7 @@ function onBackdropClick(e: MouseEvent) {
   <IssueDetailApp v-else-if="isIssueDetail" />
   <ClipboardManagerWindow v-else-if="isClipboardManager" />
   <JsonSwitcher v-else-if="isJsonSwitcher" />
-  <JsonViewerApp v-else-if="isJsonViewer" />
-  <MarkdownViewerApp v-else-if="isMarkdownViewer" />
+  <FileViewerApp v-else-if="isFileViewer" />
   <DockerWidgetApp v-else-if="isDockerWidget" />
   <div v-else class="backdrop" @mousedown="onBackdropClick">
     <CommandPalette />

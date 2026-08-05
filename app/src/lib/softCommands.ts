@@ -11,8 +11,7 @@
 import type { PaletteCommand } from "@/commands/types";
 import { copyText, runInTerminal, openInExplorer, openPathInEditor, resolvePath, openInNotepadpp, revealInExplorer, openWithDefault, readTextFile } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
-import { openNewJsonViewerWindow } from "@/lib/jsonViewerWindow";
-import { openNewMarkdownViewerWindow } from "@/lib/markdownViewerWindow";
+import { openNewFileViewerWindow } from "@/lib/fileViewerWindow";
 import { looksLikeMarkdown } from "@/lib/markdownDetect";
 import { evaluate, formatResult, usesTrig } from "@/lib/calc";
 import {
@@ -58,7 +57,7 @@ function markdownRows(content: string): PaletteCommand[] {
       name: "Open in Markdown Viewer",
       description: `${content.length} chars of Markdown`,
       icon: "📝",
-      action: () => openNewMarkdownViewerWindow(content),
+      action: () => openNewFileViewerWindow({ kind: "markdown", content }),
     }),
     row({
       id: "soft:markdown:copy",
@@ -264,7 +263,7 @@ function buildPathRows(rawPath: string): PaletteCommand[] {
     action: async () => {
       const r = await resolvePath(rawPath);
       const content = await readTextFile(r.windows);
-      await openNewMarkdownViewerWindow(content, r.windows);
+      await openNewFileViewerWindow({ kind: "markdown", content, filePath: r.windows });
     },
   });
 
@@ -276,7 +275,7 @@ function buildPathRows(rawPath: string): PaletteCommand[] {
     action: async () => {
       const r = await resolvePath(rawPath);
       const content = await readTextFile(r.windows);
-      await openNewJsonViewerWindow(content);
+      await openNewFileViewerWindow({ kind: "json", content });
     },
   });
 
@@ -434,7 +433,7 @@ export function buildSoftCommands(query: string): PaletteCommand[] {
         name: "Open in JSON Viewer",
         description: `${q.length} chars of JSON`,
         icon: "🔍",
-        action: () => openNewJsonViewerWindow(q),
+        action: () => openNewFileViewerWindow({ kind: "json", content: q }),
       }),
       row({
         id: "soft:json:copy",

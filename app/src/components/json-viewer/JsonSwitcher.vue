@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import { readRegistry as readJsonRegistry, removeEntry as removeJsonEntry } from "../../lib/jsonViewerRegistry";
-import { readRegistry as readMdRegistry, removeEntry as removeMdEntry } from "../../lib/markdownViewerRegistry";
-import { openNewJsonViewerWindow } from "../../lib/jsonViewerWindow";
-import { openNewMarkdownViewerWindow } from "../../lib/markdownViewerWindow";
+import { readRegistry, removeEntry } from "../../lib/fileViewerRegistry";
+import { openNewFileViewerWindow } from "../../lib/fileViewerWindow";
 
 interface SwitcherRow {
   label: string;
-  kind: "json" | "md";
+  kind: "json" | "markdown";
   preview: string;
   focusedAt: number;
 }
@@ -16,38 +14,36 @@ const rows = ref<SwitcherRow[]>([]);
 const selectedIdx = ref(0);
 let unlistenRefresh: (() => void) | null = null;
 
+// Window labels stay kind-prefixed (`json-viewer:*` / `markdown-viewer:*`) —
+// see fileViewerWindow.ts for why — so the live-window filter mirrors the
+// same two-prefix check the Win+Shift+J Rust handler uses.
+function isViewerLabel(label: string): boolean {
+  return label.startsWith("json-viewer:") || label.startsWith("markdown-viewer:");
+}
+
 async function refresh() {
   const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
   const allWindows = await WebviewWindow.getAll();
   const liveLabels = new Set(
-    allWindows
-      .map((w) => w.label)
-      .filter((l) => l.startsWith("json-viewer:") || l.startsWith("markdown-viewer:")),
+    allWindows.map((w) => w.label).filter(isViewerLabel),
   );
 
-  const jsonRegistry = readJsonRegistry();
-  const mdRegistry = readMdRegistry();
+  const registry = readRegistry();
 
   // Prune stale entries (windows that are no longer alive).
-  for (const label of Object.keys(jsonRegistry)) {
-    if (!liveLabels.has(label)) {
-      removeJsonEntry(label);
-    }
-  }
-  for (const label of Object.keys(mdRegistry)) {
-    if (!liveLabels.has(label)) {
-      removeMdEntry(label);
+  for (const label of Object.keys(registry)) {
+    if (isViewerLabel(label) && !liveLabels.has(label)) {
+      removeEntry(label);
     }
   }
 
   // Build rows: live windows joined with registry data, sorted by focusedAt desc.
   const built: SwitcherRow[] = [];
   for (const label of liveLabels) {
-    const isMd = label.startsWith("markdown-viewer:");
-    const entry = isMd ? mdRegistry[label] : jsonRegistry[label];
+    const entry = registry[label];
     built.push({
       label,
-      kind: isMd ? "md" : "json",
+      kind: entry?.kind ?? "json",
       preview: entry?.preview ?? "",
       focusedAt: entry?.focusedAt ?? 0,
     });
@@ -68,9 +64,9 @@ async function activateRow(idx: number) {
   if (idx >= rows.value.length) {
     // Two virtual rows: rows.length = New JSON, rows.length + 1 = New Markdown.
     if (idx === rows.value.length + 1) {
-      await openNewMarkdownViewerWindow();
+      await openNewFileViewerWindow({ kind: "markdown" });
     } else {
-      await openNewJsonViewerWindow();
+      await openNewFileViewerWindow({ kind: "json" });
     }
   } else {
     const row = rows.value[idx];
@@ -147,7 +143,7 @@ onUnmounted(() => {
           @click="activateRow(idx)"
           @mouseenter="selectedIdx = idx"
         >
-          <span class="row-icon">{{ row.kind === 'md' ? '📝' : '🔍' }}</span>
+          <span class="row-icon">{{ row.kind === 'markdown' ? '📝' : '🔍' }}</span>
           <span class="row-preview">{{ row.preview || "(empty)" }}</span>
           <span class="row-label">{{ row.label.replace(/^(json|markdown)-viewer:/, "#") }}</span>
         </div>

@@ -9,30 +9,35 @@ void initCommands();
 createApp(App).mount("#app");
 
 // Win+Shift+J zero-windows case: Rust emits "json-viewer-new" to the always-alive
-// main palette window when no json-viewer: windows exist and the switcher would be empty.
+// main palette window when no json-viewer:/markdown-viewer: windows exist and the
+// switcher would be empty. (Event name kept as-is — emitted by
+// src-tauri/src/lib.rs, which is out of scope for this change.)
 if (!window.location.hash) {
   import("@tauri-apps/api/event").then(({ listen }) => {
     void listen("json-viewer-new", () => {
-      void import("./lib/jsonViewerWindow").then((m) => m.openNewJsonViewerWindow());
+      void import("./lib/fileViewerWindow").then((m) => m.openNewFileViewerWindow({ kind: "json" }));
     });
   });
 
-  // Reopens any JSON Viewer windows killed by a recompile, app quit, or crash.
-  // Windows the user explicitly closed are not in the registry and stay closed.
-  void import("./lib/jsonViewerWindow").then((m) => m.restoreJsonViewerWindows());
+  // Reopens any File Viewer windows (JSON or Markdown) killed by a recompile,
+  // app quit, or crash. Windows the user explicitly closed are not in the
+  // registry and stay closed. This also runs the one-time legacy-registry
+  // migration sweep on its first call (see fileViewerWindow.ts) — the
+  // markdown-doc cleanup sweep below is chained to run only AFTER this
+  // resolves, so it never sees a not-yet-migrated legacy entry as "absent"
+  // and deletes an unsaved Markdown doc that's about to be migrated forward.
+  void import("./lib/fileViewerWindow").then(async (m) => {
+    await m.restoreFileViewerWindows();
 
-  // Reopens any Markdown Viewer windows killed by a recompile, app quit, or crash.
-  void import("./lib/markdownViewerWindow").then((m) => m.restoreMarkdownViewerWindows());
-
-  // Sweep markdown-doc files orphaned by a crash: keep only paths still in the registry.
-  void (async () => {
+    // Sweep markdown-doc files orphaned by a crash: keep only paths still in the registry.
     try {
-      const { readRegistry } = await import("./lib/markdownViewerRegistry");
+      const { readRegistry } = await import("./lib/fileViewerRegistry");
       const { cleanupMarkdownDocs } = await import("./lib/tauri");
       const keep = Object.values(readRegistry())
+        .filter((e: any) => e?.kind === "markdown")
         .map((e: any) => e?.state?.docPath)
         .filter((p): p is string => typeof p === "string" && p.length > 0);
       await cleanupMarkdownDocs(keep);
     } catch { /* best-effort */ }
-  })();
+  });
 }

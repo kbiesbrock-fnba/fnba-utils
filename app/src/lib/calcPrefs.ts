@@ -3,7 +3,7 @@
 //   - expression+result history, newest first, capped at 50
 //
 // Both use try/catch-wrapped localStorage, matching the pattern in
-// src/lib/jsonViewerRegistry.ts — failures are silently ignored so the
+// src/lib/fileViewerRegistry.ts — failures are silently ignored so the
 // calculator keeps working even in private-browsing or quota-exhausted states.
 
 import type { TrigUnit } from "@/lib/calc";

@@ -1,5 +1,5 @@
 import type { PaletteCommand } from "./types";
-import { openNewJsonViewerWindow } from "../lib/jsonViewerWindow";
+import { openNewFileViewerWindow } from "../lib/fileViewerWindow";
 
 export const jsonViewerCommand: PaletteCommand = {
   id: "json-viewer",
@@ -7,5 +7,5 @@ export const jsonViewerCommand: PaletteCommand = {
   description: "View, search, and transform JSON with tree view and multiple formats",
   icon: "🔍",
   keywords: ["json", "tree", "flatten", "schema", "diff", "format", "transform"],
-  action: () => openNewJsonViewerWindow(),
+  action: () => openNewFileViewerWindow({ kind: "json" }),
 };

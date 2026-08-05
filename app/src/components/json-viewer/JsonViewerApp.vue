@@ -2,8 +2,10 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useJsonViewer, type CopyFormat, type ViewMode, type FormatStyle } from "../../composables/useJsonViewer";
 import { copyText } from "../../lib/tauri";
-import { openNewJsonViewerWindow } from "../../lib/jsonViewerWindow";
-import { touchEntry, removeEntry, saveState, saveWin, readRegistry } from "../../lib/jsonViewerRegistry";
+import { openNewFileViewerWindow } from "../../lib/fileViewerWindow";
+import { removeEntry, saveState, touchEntry, readRegistry, type JsonViewerState } from "../../lib/fileViewerRegistry";
+import { useViewerWindowChrome } from "../../composables/useViewerWindowChrome";
+import ViewerTitleBar from "../file-viewer/ViewerTitleBar.vue";
 import JsonTreeNode from "./JsonTreeNode.vue";
 import JsonQueryResults from "./JsonQueryResults.vue";
 import SplitPane from "../common/SplitPane.vue";
@@ -116,23 +118,35 @@ async function closeWindow() {
   await w.close();
 }
 
+// --- Window title ---
+// Shows the first few root keys (object) or item count (array), else "JSON Viewer".
+const windowTitle = computed(() => {
+  const p = parsed.value;
+  if (p === null || p === undefined) return "JSON Viewer";
+  if (Array.isArray(p)) return `JSON · [${p.length} item${p.length === 1 ? "" : "s"}]`;
+  if (typeof p === "object") {
+    const keys = Object.keys(p as object);
+    if (keys.length === 0) return "JSON · {}";
+    const preview = keys.slice(0, 4).join(", ");
+    const truncated = preview.length > 36 ? preview.slice(0, 36) + "…" : preview;
+    return `JSON · {${truncated}}`;
+  }
+  return "JSON Viewer";
+});
+
 // --- Title bar controls ---
-const pinned = ref(false);
-const isMaximized = ref(false);
-let unlistenResize: (() => void) | null = null;
-let unlistenMove: (() => void) | null = null;
-let unlistenFocus: (() => void) | null = null;
-let unlistenCloseRequested: (() => void) | null = null;
+// Shared window chrome (pin/minimize/maximize, geometry persistence,
+// Escape/F11, title-watch, focus/close Tauri-event wiring). JSON passes no
+// overrides — today's unconditional close becomes the composable's default.
+const { pinned, isMaximized, togglePin, minimize, toggleMaximize } = useViewerWindowChrome({
+  title: windowTitle,
+  onEscapeClose: closeWindow,
+});
 
 // --- Persistence helpers ---
 
-// Debounce timer handles for state and geometry persistence.
+// Debounce timer handle for state persistence.
 let persistStateTimer: ReturnType<typeof setTimeout> | null = null;
-let persistGeoTimer: ReturnType<typeof setTimeout> | null = null;
-
-// Last known un-maximized geometry so that restoring after maximize lands
-// on the previous footprint rather than the default size.
-let lastUnmaximizedGeo: { x: number; y: number; width: number; height: number } | null = null;
 
 /** Debounced: persist viewer state (input, mode, search, etc.) to localStorage. */
 function schedulePersistState(label: string): void {
@@ -150,114 +164,9 @@ function schedulePersistState(label: string): void {
   }, 400);
 }
 
-/** Debounced: persist window geometry/pin/maximized state to localStorage. */
-function schedulePersistGeo(label: string, win: Awaited<ReturnType<typeof import("@tauri-apps/api/window")["getCurrentWindow"]>>): void {
-  if (persistGeoTimer) clearTimeout(persistGeoTimer);
-  persistGeoTimer = setTimeout(() => {
-    persistGeoTimer = null;
-    void (async () => {
-      try {
-        const maximized = await win.isMaximized();
-        if (!maximized) {
-          // Only update geometry when not maximized — preserve the last
-          // un-maximized footprint so restore-then-unmaximize lands correctly.
-          const sf = await win.scaleFactor();
-          const pos = (await win.outerPosition()).toLogical(sf);
-          const size = (await win.innerSize()).toLogical(sf);
-          lastUnmaximizedGeo = {
-            x: Math.round(pos.x),
-            y: Math.round(pos.y),
-            width: Math.round(size.width),
-            height: Math.round(size.height),
-          };
-        }
-        saveWin(label, {
-          x: lastUnmaximizedGeo?.x ?? 0,
-          y: lastUnmaximizedGeo?.y ?? 0,
-          width: lastUnmaximizedGeo?.width ?? 1000,
-          height: lastUnmaximizedGeo?.height ?? 700,
-          pinned: pinned.value,
-          maximized,
-        });
-      } catch {
-        // ignore — geometry persistence is best-effort
-      }
-    })();
-  }, 400);
-}
-
-async function togglePin() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  pinned.value = !pinned.value;
-  await w.setAlwaysOnTop(pinned.value);
-  // Persist pin state change immediately.
-  schedulePersistGeo(w.label, w);
-}
-
-async function minimize() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().minimize();
-}
-
-async function toggleMaximize() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().toggleMaximize();
-}
-
-// --- Window title ---
-// Shows the first few root keys (object) or item count (array), else "JSON Viewer".
-const windowTitle = computed(() => {
-  const p = parsed.value;
-  if (p === null || p === undefined) return "JSON Viewer";
-  if (Array.isArray(p)) return `JSON · [${p.length} item${p.length === 1 ? "" : "s"}]`;
-  if (typeof p === "object") {
-    const keys = Object.keys(p as object);
-    if (keys.length === 0) return "JSON · {}";
-    const preview = keys.slice(0, 4).join(", ");
-    const truncated = preview.length > 36 ? preview.slice(0, 36) + "…" : preview;
-    return `JSON · {${truncated}}`;
-  }
-  return "JSON Viewer";
-});
-
-watch(windowTitle, async (title) => {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setTitle(title);
-  } catch {
-    // non-critical
-  }
-});
-
-function onKeydown(e: KeyboardEvent) {
-  // Don't steal shortcuts while the user is mid-edit in a text field.
-  const target = e.target as HTMLElement | null;
-  const inEditable =
-    target &&
-    (target.tagName === "TEXTAREA" ||
-      target.tagName === "INPUT" ||
-      target.isContentEditable);
-  if (e.key === "Escape" && !inEditable) {
-    e.preventDefault();
-    void closeWindow();
-  }
-  if (e.key === "F11") {
-    e.preventDefault();
-    void (async () => {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const w = getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
-    })();
-  }
-}
-
 onMounted(async () => {
-  window.addEventListener("keydown", onKeydown);
-
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  const label = w.label;
+  const label = getCurrentWindow().label;
 
   // --- Hydrate from saved state BEFORE the pending-blob handoff ---
   // (A restored window reuses its old label, so the registry entry is present.)
@@ -265,7 +174,7 @@ onMounted(async () => {
     const registry = readRegistry();
     const entry = registry[label];
     if (entry?.state) {
-      const s = entry.state;
+      const s = entry.state as JsonViewerState;
       input.value = s.input;
       diffInput.value = s.diffInput;
       mode.value = s.mode as ViewMode;
@@ -275,19 +184,6 @@ onMounted(async () => {
       // Trigger parse so parsed/diffParsed are populated from restored input.
       parse();
       if (diffInput.value) parseDiffInput();
-    }
-    if (entry?.win?.pinned) {
-      pinned.value = true;
-      // alwaysOnTop was already set at window creation time, no need to re-apply.
-    }
-    if (entry?.win && !entry.win.maximized) {
-      // Seed last-known un-maximized geo so a toggleMaximize→restore cycle works.
-      lastUnmaximizedGeo = {
-        x: entry.win.x,
-        y: entry.win.y,
-        width: entry.win.width,
-        height: entry.win.height,
-      };
     }
   } catch {
     // ignore — hydration is best-effort
@@ -299,82 +195,30 @@ onMounted(async () => {
   // A restored window won't have a pending blob (they share a label, not the
   // pending key) so the two paths don't collide in practice.
   try {
-    const pending = localStorage.getItem("fnba-utils:json-viewer-pending");
+    const pending = localStorage.getItem("fnba-utils:file-viewer-pending");
     if (pending != null) {
-      localStorage.removeItem("fnba-utils:json-viewer-pending");
+      localStorage.removeItem("fnba-utils:file-viewer-pending");
       input.value = pending;
     }
   } catch {
     // ignore
   }
 
-  // Register in MRU registry on open.
-  touchEntry(label);
-
   // Persist initial state once so an immediate recompile can restore it.
   schedulePersistState(label);
-
-  // Sync maximized state and keep it in sync as the window resizes.
-  isMaximized.value = await w.isMaximized();
-  unlistenResize = await w.onResized(async () => {
-    isMaximized.value = await w.isMaximized();
-    schedulePersistGeo(label, w);
-  });
-
-  // Persist geometry on window move.
-  unlistenMove = await w.onMoved(() => {
-    schedulePersistGeo(label, w);
-  });
-
-  // OS-level focus (taskbar click, switcher, Alt-Tab) — the DOM "focus" event
-  // doesn't fire for window activation in WebView2, so use Tauri's event.
-  unlistenFocus = await w.onFocusChanged(({ payload: focused }) => {
-    if (focused) touchEntry(label);
-  });
-
-  // Intentional close via Alt+F4 or taskbar close — remove entry so the window
-  // is NOT restored on next launch. (closeWindow() also calls removeEntry for
-  // the Esc / ✕ button paths; double-remove is harmless.)
-  unlistenCloseRequested = await w.onCloseRequested(() => {
-    removeEntry(label);
-  });
-
-  // Seed geometry after mount so a first-launch window persists position before
-  // the user has moved or resized it.
-  schedulePersistGeo(label, w);
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown);
   if (persistStateTimer) {
     clearTimeout(persistStateTimer);
     persistStateTimer = null;
-  }
-  if (persistGeoTimer) {
-    clearTimeout(persistGeoTimer);
-    persistGeoTimer = null;
-  }
-  if (unlistenResize) {
-    unlistenResize();
-    unlistenResize = null;
-  }
-  if (unlistenMove) {
-    unlistenMove();
-    unlistenMove = null;
-  }
-  if (unlistenFocus) {
-    unlistenFocus();
-    unlistenFocus = null;
-  }
-  if (unlistenCloseRequested) {
-    unlistenCloseRequested();
-    unlistenCloseRequested = null;
   }
   // NOTE: removeEntry is intentionally NOT called here. onUnmounted fires on
   // every webview reload (Vite HMR / F5) while the window stays open — calling
   // removeEntry here would wipe persisted state for a window the user never
   // closed. Process death never runs onUnmounted at all. Intentional closes are
-  // handled by closeWindow() (Esc / ✕) and onCloseRequested (Alt+F4 / taskbar).
+  // handled by closeWindow() (Esc / ✕) and the composable's default
+  // onNativeCloseRequest (Alt+F4 / taskbar).
 });
 
 // Update registry preview as the user types (first 60 chars, single-line),
@@ -410,15 +254,15 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
 <template>
   <div class="json-viewer-app">
     <!-- Title bar -->
-    <div class="title-bar" data-tauri-drag-region>
-      <span class="tb-title" data-tauri-drag-region>{{ windowTitle }}</span>
-      <div class="tb-buttons">
-        <button class="tb-btn" :class="{ active: pinned }" @click="togglePin" title="Keep on top">📌</button>
-        <button class="tb-btn" @click="minimize" title="Minimize">—</button>
-        <button class="tb-btn" @click="toggleMaximize" :title="isMaximized ? 'Restore' : 'Maximize'">{{ isMaximized ? '🗗' : '🗖' }}</button>
-        <button class="tb-btn close" @click="closeWindow" title="Close (Esc)">✕</button>
-      </div>
-    </div>
+    <ViewerTitleBar
+      :title="windowTitle"
+      :pinned="pinned"
+      :is-maximized="isMaximized"
+      @pin="togglePin"
+      @minimize="minimize"
+      @maximize="toggleMaximize"
+      @close="closeWindow"
+    />
 
     <!-- Toolbar -->
     <div class="toolbar">
@@ -484,7 +328,7 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
         </button>
         <button
           class="util-btn"
-          @click="() => openNewJsonViewerWindow()"
+          @click="() => openNewFileViewerWindow({ kind: 'json' })"
           title="Open a new JSON Viewer window"
         >
           ＋ New
@@ -604,74 +448,6 @@ watch([diffInput, mode, formatStyle, sortKeys, search], () => {
   background: #1e1e1e;
   color: #e0e0e0;
   font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
-}
-
-/* --- Title bar --- */
-.title-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 32px;
-  padding: 0 8px 0 12px;
-  background: #252525;
-  border-bottom: 1px solid #404040;
-  flex-shrink: 0;
-  -webkit-app-region: drag;
-  user-select: none;
-}
-
-.tb-title {
-  font-size: 12px;
-  color: #aaa;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-  -webkit-app-region: drag;
-}
-
-.tb-buttons {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-
-.tb-btn {
-  width: 28px;
-  height: 24px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: #888;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-  -webkit-app-region: no-drag;
-}
-
-.tb-btn:hover {
-  background: #3a3a3a;
-  color: #ddd;
-}
-
-.tb-btn.active {
-  color: #4CAF50;
-}
-
-.tb-btn.active:hover {
-  background: #3a3a3a;
-  color: #66bb6a;
-}
-
-.tb-btn.close:hover {
-  background: #c0392b;
-  color: white;
 }
 
 /* --- Toolbar --- */

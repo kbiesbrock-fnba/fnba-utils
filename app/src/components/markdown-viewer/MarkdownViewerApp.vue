@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
+import type { CloseRequestedEvent } from "@tauri-apps/api/window";
 import { renderMarkdown } from "../../lib/markdown";
-import { touchEntry, removeEntry, saveState, saveWin, readRegistry } from "../../lib/markdownViewerRegistry";
+import { touchEntry, removeEntry, saveState, readRegistry, type MarkdownViewerState } from "../../lib/fileViewerRegistry";
 import { readMarkdownDoc, writeMarkdownDoc, deleteMarkdownDoc, openMarkdownFile, saveMarkdownAs, saveMarkdownFile, statMarkdownFile, readMarkdownFile } from "../../lib/tauri";
-import { openNewMarkdownViewerWindow } from "../../lib/markdownViewerWindow";
+import { openNewFileViewerWindow } from "../../lib/fileViewerWindow";
 import { openExternal } from "../../lib/external";
+import { useViewerWindowChrome } from "../../composables/useViewerWindowChrome";
+import ViewerTitleBar from "../file-viewer/ViewerTitleBar.vue";
 import SplitPane from "../common/SplitPane.vue";
 import StatusBar from "../StatusBar.vue";
 
@@ -18,7 +21,7 @@ let currentDocPath: string | null = null;
 const filePath = ref<string | null>(null);
 const dirty = ref(false);
 const showCloseModal = ref(false);
-let forceClose = false; // set right before a programmatic close so onCloseRequested allows it
+let forceClose = false; // set right before a programmatic close so onNativeCloseRequest allows it
 
 // --- External-change detection ---
 let diskBaseline: { mtimeMs: number; size: number } | null = null;
@@ -53,15 +56,6 @@ const windowTitle = computed(() => {
   const stripped = firstLine.replace(/^#+\s*/, "").trim();
   const title = stripped.slice(0, 40);
   return title || "Markdown Viewer";
-});
-
-watch(windowTitle, async (title) => {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setTitle(title);
-  } catch {
-    // non-critical
-  }
 });
 
 // --- Scroll sync helpers ---
@@ -489,7 +483,7 @@ async function openDiskCopy(): Promise<void> {
   if (!filePath.value) return;
   try {
     const f = await readMarkdownFile(filePath.value);
-    await openNewMarkdownViewerWindow(f.content);
+    await openNewFileViewerWindow({ kind: "markdown", content: f.content });
   } catch (e) { console.error(e); }
   await keepMine();
 }
@@ -541,7 +535,7 @@ async function save(): Promise<boolean> {
 
 async function openFile() {
   const f = await openMarkdownFile();
-  if (f) await openNewMarkdownViewerWindow(f.content, f.path);
+  if (f) await openNewFileViewerWindow({ kind: "markdown", content: f.content, filePath: f.path });
 }
 
 // --- Close ---
@@ -579,68 +573,34 @@ async function onModalSave() {
 function onModalDiscard() { showCloseModal.value = false; void doClose(); }
 function onModalCancel() { showCloseModal.value = false; }
 
+// --- OS-level close (Alt+F4 / taskbar ✕) ---
+// Copied verbatim from the pre-unification onCloseRequested body — this is the
+// one place JSON and Markdown genuinely differ (see useViewerWindowChrome.ts),
+// so it's supplied as an override rather than folded into shared chrome.
+// `label` is threaded in as a parameter (the composable owns the mount-time
+// closure that used to carry it) rather than changed in substance.
+async function onNativeCloseRequest(event: CloseRequestedEvent, label: string) {
+  if (forceClose) return; // our own doClose() — allow
+  if (needsSavePrompt()) {
+    event.preventDefault();
+    showCloseModal.value = true;
+  } else {
+    if (currentDocPath) void deleteMarkdownDoc(currentDocPath).catch(() => {});
+    removeEntry(label);
+  }
+}
+
 // --- Title bar controls ---
-const pinned = ref(false);
-const isMaximized = ref(false);
-let unlistenResize: (() => void) | null = null;
-let unlistenMove: (() => void) | null = null;
-let unlistenFocus: (() => void) | null = null;
-let unlistenCloseRequested: (() => void) | null = null;
-
-// --- Geometry persistence ---
-let persistGeoTimer: ReturnType<typeof setTimeout> | null = null;
-let lastUnmaximizedGeo: { x: number; y: number; width: number; height: number } | null = null;
-
-function schedulePersistGeo(label: string, win: Awaited<ReturnType<typeof import("@tauri-apps/api/window")["getCurrentWindow"]>>): void {
-  if (persistGeoTimer) clearTimeout(persistGeoTimer);
-  persistGeoTimer = setTimeout(() => {
-    persistGeoTimer = null;
-    void (async () => {
-      try {
-        const maximized = await win.isMaximized();
-        if (!maximized) {
-          const sf = await win.scaleFactor();
-          const pos = (await win.outerPosition()).toLogical(sf);
-          const size = (await win.innerSize()).toLogical(sf);
-          lastUnmaximizedGeo = {
-            x: Math.round(pos.x),
-            y: Math.round(pos.y),
-            width: Math.round(size.width),
-            height: Math.round(size.height),
-          };
-        }
-        saveWin(label, {
-          x: lastUnmaximizedGeo?.x ?? 0,
-          y: lastUnmaximizedGeo?.y ?? 0,
-          width: lastUnmaximizedGeo?.width ?? 1000,
-          height: lastUnmaximizedGeo?.height ?? 700,
-          pinned: pinned.value,
-          maximized,
-        });
-      } catch {
-        // ignore — geometry persistence is best-effort
-      }
-    })();
-  }, 400);
-}
-
-async function togglePin() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  pinned.value = !pinned.value;
-  await w.setAlwaysOnTop(pinned.value);
-  schedulePersistGeo(w.label, w);
-}
-
-async function minimize() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().minimize();
-}
-
-async function toggleMaximize() {
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().toggleMaximize();
-}
+// Shared window chrome (pin/minimize/maximize, geometry persistence,
+// Escape/F11, title-watch, focus/close Tauri-event wiring). Markdown overrides
+// the close request (dirty-check + modal) and adds an external-change recheck
+// on focus gain.
+const { pinned, isMaximized, togglePin, minimize, toggleMaximize } = useViewerWindowChrome({
+  title: windowTitle,
+  onEscapeClose: closeWindow,
+  onNativeCloseRequest,
+  onFocusGained: () => void checkExternalChange(),
+});
 
 function onKeydown(e: KeyboardEvent) {
   // Save / Save As / Open — handled globally regardless of focus.
@@ -654,63 +614,33 @@ function onKeydown(e: KeyboardEvent) {
     void openFile();
     return;
   }
-
-  const target = e.target as HTMLElement | null;
-  const inEditable =
-    target &&
-    (target.tagName === "TEXTAREA" ||
-      target.tagName === "INPUT" ||
-      target.isContentEditable);
-  if (e.key === "Escape" && !inEditable) {
-    e.preventDefault();
-    closeWindow();
-  }
-  if (e.key === "F11") {
-    e.preventDefault();
-    void (async () => {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      const w = getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
-    })();
-  }
 }
 
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
 
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  const w = getCurrentWindow();
-  const label = w.label;
+  const label = getCurrentWindow().label;
 
   // --- Hydrate from saved state ---
   // (A restored window reuses its old label, so the registry entry is present.
-  //  A brand-new window seeded via openNewMarkdownViewerWindow also has a
+  //  A brand-new window seeded via openNewFileViewerWindow also has a
   //  pre-seeded registry entry — no pending-localStorage handoff needed.)
   try {
     const registry = readRegistry();
     const entry = registry[label];
-    if (entry?.state?.docPath) {
-      currentDocPath = entry.state.docPath;
+    const state = entry?.state as MarkdownViewerState | undefined;
+    if (state?.docPath) {
+      currentDocPath = state.docPath;
       source.value = await readMarkdownDoc(currentDocPath);
-      mode.value = (entry.state.mode as "preview" | "edit" | "split") ?? "preview";
-      filePath.value = entry.state.filePath ?? null;
-      dirty.value = entry.state.dirty ?? false;
+      mode.value = (state.mode as "preview" | "edit" | "split") ?? "preview";
+      filePath.value = state.filePath ?? null;
+      dirty.value = state.dirty ?? false;
       // Hydrate disk baseline so external-change detection works across restarts.
-      const dm = entry.state.diskMtimeMs, ds = entry.state.diskSize;
+      const dm = state.diskMtimeMs, ds = state.diskSize;
       diskBaseline = (typeof dm === "number" && typeof ds === "number") ? { mtimeMs: dm, size: ds } : null;
       // If bound, check immediately for changes that happened while the app was closed.
       if (filePath.value) void checkExternalChange();
-    }
-    if (entry?.win?.pinned) {
-      pinned.value = true;
-    }
-    if (entry?.win && !entry.win.maximized) {
-      lastUnmaximizedGeo = {
-        x: entry.win.x,
-        y: entry.win.y,
-        width: entry.win.width,
-        height: entry.win.height,
-      };
     }
   } catch {
     // ignore — hydration is best-effort
@@ -725,42 +655,6 @@ onMounted(async () => {
   if (!source.value.trim()) {
     mode.value = "edit";
   }
-
-  // Register in MRU registry on open.
-  touchEntry(label);
-
-  // Sync maximized state and keep it in sync as the window resizes.
-  isMaximized.value = await w.isMaximized();
-  unlistenResize = await w.onResized(async () => {
-    isMaximized.value = await w.isMaximized();
-    schedulePersistGeo(label, w);
-  });
-
-  unlistenMove = await w.onMoved(() => {
-    schedulePersistGeo(label, w);
-  });
-
-  unlistenFocus = await w.onFocusChanged(({ payload: focused }) => {
-    if (focused) {
-      touchEntry(label);
-      void checkExternalChange();
-    }
-  });
-
-  // Alt+F4 / taskbar close: check for unsaved changes first.
-  unlistenCloseRequested = await w.onCloseRequested((event) => {
-    if (forceClose) return; // our own doClose() — allow
-    if (needsSavePrompt()) {
-      event.preventDefault();
-      showCloseModal.value = true;
-    } else {
-      if (currentDocPath) void deleteMarkdownDoc(currentDocPath).catch(() => {});
-      removeEntry(label);
-    }
-  });
-
-  // Seed geometry after mount.
-  schedulePersistGeo(label, w);
 });
 
 onUnmounted(() => {
@@ -769,35 +663,27 @@ onUnmounted(() => {
     clearTimeout(persistDocTimer);
     persistDocTimer = null;
   }
-  if (persistGeoTimer) {
-    clearTimeout(persistGeoTimer);
-    persistGeoTimer = null;
-  }
-  if (unlistenResize) { unlistenResize(); unlistenResize = null; }
-  if (unlistenMove) { unlistenMove(); unlistenMove = null; }
-  if (unlistenFocus) { unlistenFocus(); unlistenFocus = null; }
-  if (unlistenCloseRequested) { unlistenCloseRequested(); unlistenCloseRequested = null; }
   if (mirrorEl) { mirrorEl.remove(); mirrorEl = null; cachedTops = null; }
   // NOTE: deleteMarkdownDoc / removeEntry are intentionally NOT called here.
   // onUnmounted fires on every Vite HMR reload while the window stays open —
   // calling them here would destroy the doc for a window the user never closed.
   // Process death never runs onUnmounted at all. Intentional closes are handled
-  // by closeWindow() (Esc / ✕) and onCloseRequested (Alt+F4 / taskbar).
+  // by closeWindow() (Esc / ✕) and onNativeCloseRequest (Alt+F4 / taskbar).
 });
 </script>
 
 <template>
   <div class="md-viewer-app">
     <!-- Title bar -->
-    <div class="title-bar" data-tauri-drag-region>
-      <span class="tb-title" data-tauri-drag-region>{{ windowTitle }}</span>
-      <div class="tb-buttons">
-        <button class="tb-btn" :class="{ active: pinned }" @click="togglePin" title="Keep on top">📌</button>
-        <button class="tb-btn" @click="minimize" title="Minimize">—</button>
-        <button class="tb-btn" @click="toggleMaximize" :title="isMaximized ? 'Restore' : 'Maximize'">{{ isMaximized ? '🗗' : '🗖' }}</button>
-        <button class="tb-btn close" @click="closeWindow" title="Close (Esc)">✕</button>
-      </div>
-    </div>
+    <ViewerTitleBar
+      :title="windowTitle"
+      :pinned="pinned"
+      :is-maximized="isMaximized"
+      @pin="togglePin"
+      @minimize="minimize"
+      @maximize="toggleMaximize"
+      @close="closeWindow"
+    />
 
     <!-- Toolbar -->
     <div class="toolbar">
@@ -855,7 +741,7 @@ onUnmounted(() => {
         </button>
         <button
           class="util-btn"
-          @click="() => openNewMarkdownViewerWindow()"
+          @click="() => openNewFileViewerWindow({ kind: 'markdown' })"
           title="Open a new Markdown Viewer window"
         >
           ＋ New
@@ -949,74 +835,6 @@ onUnmounted(() => {
   background: #1e1e1e;
   color: #e0e0e0;
   font-family: "Segoe UI", "Inter", sans-serif;
-}
-
-/* --- Title bar --- */
-.title-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 32px;
-  padding: 0 8px 0 12px;
-  background: #252525;
-  border-bottom: 1px solid #404040;
-  flex-shrink: 0;
-  -webkit-app-region: drag;
-  user-select: none;
-}
-
-.tb-title {
-  font-size: 12px;
-  color: #aaa;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-  -webkit-app-region: drag;
-}
-
-.tb-buttons {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-
-.tb-btn {
-  width: 28px;
-  height: 24px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: #888;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-  -webkit-app-region: no-drag;
-}
-
-.tb-btn:hover {
-  background: #3a3a3a;
-  color: #ddd;
-}
-
-.tb-btn.active {
-  color: #4CAF50;
-}
-
-.tb-btn.active:hover {
-  background: #3a3a3a;
-  color: #66bb6a;
-}
-
-.tb-btn.close:hover {
-  background: #c0392b;
-  color: white;
 }
 
 /* --- Toolbar --- */
