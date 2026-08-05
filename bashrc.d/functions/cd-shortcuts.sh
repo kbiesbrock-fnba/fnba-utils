@@ -1,12 +1,14 @@
-# cdd, cdf, cdk with tab completion
+# cdd, cdf, cdk, cdt with tab completion
 cdd() { cd "$HOME/dev/$1" || return; }
 cdf() { cd "$HOME/dev/FNBA-Software/$1" || return; }
 cdk() { cd "$HOME/dev/kbiesbrock-fnba/$1" || return; }
+cdt() { cd "$HOME/dev/tmp/$1" || return; }
 
 declare -A _cd_dirs=(
   [cdd]="$HOME/dev"
   [cdf]="$HOME/dev/FNBA-Software"
   [cdk]="$HOME/dev/kbiesbrock-fnba"
+  [cdt]="$HOME/dev/tmp"
 )
 
 _cd_complete() {
@@ -16,4 +18,4 @@ _cd_complete() {
   COMPREPLY=("${dirs[@]/%//}")
 }
 
-complete -o nospace -F _cd_complete cdd cdf cdk
+complete -o nospace -F _cd_complete cdd cdf cdk cdt
