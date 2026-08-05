@@ -182,7 +182,7 @@ onBeforeUnmount(() => {
 .palette {
   position: relative;
   width: 100%;
-  max-width: 632px;
+  max-width: 820px;
   background: var(--bg-primary);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-lg);

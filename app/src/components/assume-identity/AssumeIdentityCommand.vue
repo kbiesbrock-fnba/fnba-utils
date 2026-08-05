@@ -160,7 +160,7 @@ defineExpose({ step });
           <span class="multi-result-server">{{ run.connection.server }}</span>
           <span class="multi-result-label">{{ run.connection.label }}</span>
         </div>
-        <AssumeIdentityResult v-if="run.result" :result="run.result" />
+        <AssumeIdentityResult v-if="run.result" :result="run.result" compact />
         <ErrorView v-else-if="run.error" :error="run.error" />
       </div>
     </div>
@@ -285,7 +285,7 @@ defineExpose({ step });
 
 .multi-result {
   overflow-y: auto;
-  max-height: 420px;
+  max-height: 480px;
 }
 
 .multi-result-section + .multi-result-section {
