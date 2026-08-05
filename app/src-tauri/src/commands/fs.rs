@@ -147,6 +147,84 @@ fn notepadpp_exe() -> std::path::PathBuf {
     PathBuf::from("notepad++.exe")
 }
 
+/// Open a path with its OS-registered handler — the same thing a double-click in
+/// Explorer does (PDF → your PDF reader, .xlsx → Excel, folder → Explorer).
+/// Accepts WSL or Windows paths.
+///
+/// `ShellExecuteW` rather than `cmd /C start "" <path>`: `cmd` re-parses its own
+/// command line, so a path containing `&`, `^`, or `%VAR%` is a quoting hazard
+/// that Rust's `Command` arg escaping does NOT cover (it escapes for
+/// `CommandLineToArgvW`, not for the shell). ShellExecuteW takes the path as a
+/// single wide string with no parsing in between.
+///
+/// COM is initialized on the worker thread because some shell handlers need an
+/// apartment; `ShellExecuteW` succeeds without it for common file types but not
+/// universally. `RPC_E_CHANGED_MODE` (already initialized as MTA) is not fatal —
+/// we just skip the matching `CoUninitialize`.
+#[tauri::command]
+pub async fn open_with_default(path: String) -> Result<(), String> {
+    let windows = wsl_path_to_windows(&windows_path_to_wsl(&path));
+
+    // ShellExecuteW blocks while the handler starts; keep it off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || shell_open(&windows))
+        .await
+        .map_err(|e| format!("Failed to open: {e}"))?
+}
+
+#[cfg(windows)]
+fn shell_open(windows_path: &str) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide: Vec<u16> = std::ffi::OsStr::new(windows_path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let owns_com = hr.is_ok();
+
+        // Null verb = the file type's default verb ("open" for most, "openfolder"
+        // for a directory). Null HWND — no owner window for handler error dialogs.
+        let rc = ShellExecuteW(
+            HWND(std::ptr::null_mut()),
+            PCWSTR::null(),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+
+        if owns_com {
+            CoUninitialize();
+        }
+
+        // Legacy API: the HINSTANCE is an error code when <= 32.
+        let code = rc.0 as isize;
+        if code > 32 {
+            Ok(())
+        } else {
+            Err(match code {
+                2 | 3 => format!("Not found: {windows_path}"),
+                31 => format!("No app is associated with this file type: {windows_path}"),
+                _ => format!("Failed to open {windows_path} (ShellExecute code {code})"),
+            })
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn shell_open(_windows_path: &str) -> Result<(), String> {
+    Err("open_with_default is Windows-only".to_string())
+}
+
 /// Reveal a file in Windows Explorer with the file selected/highlighted.
 /// Accepts WSL or Windows paths. Uses `explorer.exe /select,<file>` so the
 /// containing folder opens with the target highlighted (unlike a bare path arg,
@@ -159,4 +237,16 @@ pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Failed to reveal in explorer: {e}"))
+}
+
+/// Read a file's full text content. Accepts WSL or Windows paths. Backs the
+/// palette's "Open in Markdown/JSON Viewer" soft commands for a pasted path —
+/// those viewers only take a content string, not a path.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, String> {
+    let windows = wsl_path_to_windows(&windows_path_to_wsl(&path));
+    tauri::async_runtime::spawn_blocking(move || std::fs::read_to_string(&windows))
+        .await
+        .map_err(|e| format!("Failed to read {path}: {e}"))?
+        .map_err(|e| format!("Failed to read {path}: {e}"))
 }

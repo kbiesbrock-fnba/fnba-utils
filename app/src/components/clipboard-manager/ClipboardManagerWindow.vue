@@ -121,6 +121,17 @@ function focusSearch() {
   el.select();
 }
 
+/**
+ * `focus()` right after the window is (re)shown can land before WebView2 has
+ * actually taken OS-level input focus for the frameless/always-on-top window —
+ * it sets `document.activeElement` but keystrokes still miss it. A second,
+ * slightly delayed attempt is a cheap hedge against that race.
+ */
+function focusSearchSoon() {
+  void nextTick(focusSearch);
+  setTimeout(focusSearch, 60);
+}
+
 function onKey(e: KeyboardEvent) {
   // While editing or renaming, only Escape (handled below) is global — every
   // other key belongs to the input/textarea.
@@ -172,16 +183,27 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault();
     // Modifier matrix for Enter:
     //   Enter                 -> paste obfuscated (or original if non-sensitive), simulate
+    //   Shift+Enter           -> paste ORIGINAL (reveal-token gated), simulate
     //   Ctrl+Enter            -> copy obfuscated to OS clipboard only (no paste)
-    //   Ctrl+Shift+Enter      -> paste ORIGINAL (reveal-token gated), simulate
+    //   Ctrl+Shift+Enter      -> paste ORIGINAL (reveal-token gated), simulate — kept as an
+    //                            alias of plain Shift+Enter for existing muscle memory
     //   Ctrl+Alt+Enter        -> copy ORIGINAL to OS clipboard only
-    // Plain Shift+Enter is reserved for future use.
     const ctrl = e.ctrlKey || e.metaKey;
-    const original = ctrl && (e.shiftKey || e.altKey);
+    const original = e.shiftKey || (ctrl && e.altKey);
     const simulate = !ctrl || (ctrl && e.shiftKey && !e.altKey);
-    // ^ Shift+Ctrl => paste original (simulate); Alt+Ctrl => copy original only.
+    // ^ Shift alone or Shift+Ctrl => paste original (simulate); Alt+Ctrl => copy original only.
     // For non-original branches, Ctrl alone is copy-only.
     void paste({ simulate, original });
+    return;
+  }
+  if (e.key.toLowerCase() === "l" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+    // Ctrl+L / Ctrl+Shift+L — not gated behind the search-box check below:
+    // like the Enter matrix above, this is a modifier chord, so it should
+    // fire even while the search input has focus (where it normally lives).
+    e.preventDefault();
+    const entry = selected.value;
+    if (!entry?.label) return;
+    void paste({ simulate: true, original: e.shiftKey && entry.sensitive, withLabel: true });
     return;
   }
 
@@ -210,13 +232,13 @@ let unsubShown: (() => void) | null = null;
 
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
-  void nextTick(focusSearch);
+  focusSearchSoon();
   // Re-focus the search every time the window is re-shown via the global
   // hotkey, even if the component itself is already mounted. The composable
   // also subscribes to this event (to clear filters); both subscriptions
   // fire independently.
   unsubShown = await onClipboardWindowShown(() => {
-    void nextTick(focusSearch);
+    focusSearchSoon();
   });
 });
 
@@ -326,6 +348,8 @@ function formatBytes(n: number): string {
           @delete="remove(entry.id)"
           @open="paste({ simulate: true, original: false })"
           @pasteOriginal="paste({ simulate: true, original: true })"
+          @pasteWithLabel="paste({ simulate: true, original: false, withLabel: true })"
+          @pasteWithLabelOriginal="paste({ simulate: true, original: true, withLabel: true })"
           @copyObfuscated="paste({ simulate: false, original: false })"
           @copyOriginal="paste({ simulate: false, original: true })"
         />

@@ -9,7 +9,7 @@
 // land in Stage 2, which needs new path-aware Rust commands.
 
 import type { PaletteCommand } from "@/commands/types";
-import { copyText, runInTerminal, openInExplorer, openPathInEditor, resolvePath, openInNotepadpp, revealInExplorer } from "@/lib/tauri";
+import { copyText, runInTerminal, openInExplorer, openPathInEditor, resolvePath, openInNotepadpp, revealInExplorer, openWithDefault, readTextFile } from "@/lib/tauri";
 import { openExternal } from "@/lib/external";
 import { openNewJsonViewerWindow } from "@/lib/jsonViewerWindow";
 import { openNewMarkdownViewerWindow } from "@/lib/markdownViewerWindow";
@@ -24,7 +24,7 @@ import {
 } from "@/lib/calcPrefs";
 import type { TrigUnit } from "@/lib/calc";
 import { buildTimeRows } from "@/lib/timeSoft";
-import { URL_RE, JIRA_KEY_RE, JIRA_IN_URL_RE, isJsonText, isPath } from "@/lib/patterns";
+import { URL_RE, JIRA_KEY_RE, JIRA_IN_URL_RE, isJsonText, isPath, stripPathQuotes } from "@/lib/patterns";
 
 /** Surface a Jira issue in the in-app Issue panel (mirrors the standup flow). */
 async function openIssuePanel(key: string): Promise<void> {
@@ -148,71 +148,177 @@ function buildCalcRows(expr: string): PaletteCommand[] {
 
 // ─── Path soft commands ───────────────────────────────────────────────────────
 
-// Detect synchronously whether the raw string looks like a Windows drive path
-// or a /mnt/<drive>/ path — used to decide if the secondary native-drive row
-// should be included before resolve_path comes back async.
+// Extensions Notepad++ opens as text. Anything file-shaped that isn't here is
+// treated as "opaque" (PDF, xlsx, image, archive, exe) — Notepad++ would just
+// render mojibake, so it sinks to the bottom of the list.
+const TEXT_EXTS = new Set([
+  "txt", "log", "rst", "adoc",
+  "sql", "xml", "xsd", "xsl", "yaml", "yml", "toml",
+  "ini", "conf", "config", "cfg", "env", "properties", "csv", "tsv",
+  "cs", "vb", "fs", "java", "kt", "kts", "scala", "groovy", "gradle",
+  "rb", "php", "pl", "pm", "lua", "r", "go", "rs", "swift", "dart",
+  "c", "h", "cpp", "cxx", "cc", "hpp", "hh", "m", "mm",
+  "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "vue", "svelte",
+  "html", "htm", "cshtml", "razor", "css", "scss", "sass", "less",
+  "sh", "bash", "zsh", "ps1", "psm1", "psd1", "bat", "cmd",
+  "diff", "patch", "resx", "sln", "csproj", "vbproj", "props", "targets",
+  "tf", "tfvars", "http", "graphql", "proto", "sqlproj", "dtsx", "lock",
+]);
+
+// Text files that carry no extension — otherwise indistinguishable from a
+// folder by string shape alone.
+const TEXT_STEMS = new Set([
+  "makefile", "dockerfile", "jenkinsfile", "vagrantfile", "gemfile",
+  "rakefile", "procfile", "brewfile", "license", "licence", "readme",
+  "changelog", "notice", "authors", "contributing", "codeowners", "todo",
+]);
+
+const MARKDOWN_EXTS = new Set(["md", "markdown"]);
+const JSON_EXTS = new Set(["json", "jsonc"]);
+
+type PathKind = "dir" | "markdown" | "json" | "text" | "opaque";
+
+/**
+ * Classify a pasted path from its string shape alone. `buildSoftCommands` is
+ * synchronous (it feeds a computed), so we can't await `resolve_path` here —
+ * and this only decides row *order*, so a wrong guess costs an arrow key, not
+ * a broken action.
+ */
+function classifyPath(rawPath: string): PathKind {
+  const p = rawPath.replace(/[/\\]+$/, "");
+  if (p !== rawPath) return "dir"; // trailing separator: explicitly a folder
+  const seg = p.split(/[/\\]/).pop() ?? "";
+  if (!seg) return "dir";
+
+  // Dotfile with no further extension (.bashrc, .gitignore, .env) — text.
+  if (seg.startsWith(".") && !seg.slice(1).includes(".")) return "text";
+  if (TEXT_STEMS.has(seg.toLowerCase())) return "text";
+
+  const dot = seg.lastIndexOf(".");
+  if (dot <= 0) return "dir"; // no extension: assume folder
+  const ext = seg.slice(dot + 1).toLowerCase();
+  if (MARKDOWN_EXTS.has(ext)) return "markdown";
+  if (JSON_EXTS.has(ext)) return "json";
+  return TEXT_EXTS.has(ext) ? "text" : "opaque";
+}
+
 function buildPathRows(rawPath: string): PaletteCommand[] {
-  return [
-    row({
-      id: "soft:path:explorer",
-      name: "Show in Explorer",
-      description: rawPath,
-      icon: "📂",
-      action: async () => {
-        const r = await resolvePath(rawPath);
-        // File: reveal it highlighted in its folder. Dir/unknown: open directly.
-        if (r.exists && r.isFile) {
-          await revealInExplorer(r.windows);
-        } else {
-          await openInExplorer(r.windows);
-        }
-      },
-    }),
-    row({
-      id: "soft:path:editor",
-      name: "Open in editor",
-      description: "IntelliJ → Explorer fallback",
-      icon: "✏️",
-      action: async () => {
-        const r = await resolvePath(rawPath);
-        await openPathInEditor(r.windows);
-      },
-    }),
-    row({
-      id: "soft:path:terminal",
-      name: "Open terminal here",
-      description: rawPath,
-      icon: "💻",
-      action: async () => {
-        const r = await resolvePath(rawPath);
-        // cd to posix dir; strip filename segment if it's a file.
-        const dir = r.exists && r.isFile
-          ? r.posix.replace(/\/[^/]+$/, "") || r.posix
-          : r.posix;
-        await runInTerminal(`cd ${JSON.stringify(dir)}`);
-      },
-    }),
-    row({
-      id: "soft:path:notepadpp",
-      name: "Open in Notepad++",
-      description: rawPath,
-      icon: "📝",
-      action: async () => {
-        const r = await resolvePath(rawPath);
-        await openInNotepadpp(r.windows);
-      },
-    }),
-    row({
-      id: "soft:path:copy",
-      name: "Copy path",
-      description: rawPath,
-      icon: "📋",
-      action: async () => {
-        const r = await resolvePath(rawPath);
-        await copyText(r.windows);
-      },
-    }),
-  ];
+  const explorer = row({
+    id: "soft:path:explorer",
+    name: "Show in Explorer",
+    description: rawPath,
+    icon: "📂",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      // File: reveal it highlighted in its folder. Dir/unknown: open directly.
+      if (r.exists && r.isFile) {
+        await revealInExplorer(r.windows);
+      } else {
+        await openInExplorer(r.windows);
+      }
+    },
+  });
+
+  const editor = row({
+    id: "soft:path:editor",
+    name: "Open in editor",
+    description: "IntelliJ → Explorer fallback",
+    icon: "✏️",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      await openPathInEditor(r.windows);
+    },
+  });
+
+  const terminal = row({
+    id: "soft:path:terminal",
+    name: "Open terminal here",
+    description: rawPath,
+    icon: "💻",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      // cd to posix dir; strip filename segment if it's a file.
+      const dir = r.exists && r.isFile
+        ? r.posix.replace(/\/[^/]+$/, "") || r.posix
+        : r.posix;
+      await runInTerminal(`cd ${JSON.stringify(dir)}`);
+    },
+  });
+
+  const defaultApp = row({
+    id: "soft:path:default",
+    name: "Open",
+    description: "Default app for this file type",
+    icon: "🚀",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      await openWithDefault(r.windows);
+    },
+  });
+
+  const markdownViewer = row({
+    id: "soft:path:markdown-viewer",
+    name: "Open in Markdown Viewer",
+    description: rawPath,
+    icon: "📝",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      const content = await readTextFile(r.windows);
+      await openNewMarkdownViewerWindow(content, r.windows);
+    },
+  });
+
+  const jsonViewer = row({
+    id: "soft:path:json-viewer",
+    name: "Open in JSON Viewer",
+    description: rawPath,
+    icon: "🔍",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      const content = await readTextFile(r.windows);
+      await openNewJsonViewerWindow(content);
+    },
+  });
+
+  const notepadpp = row({
+    id: "soft:path:notepadpp",
+    name: "Open in Notepad++",
+    description: rawPath,
+    icon: "📝",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      await openInNotepadpp(r.windows);
+    },
+  });
+
+  const copy = row({
+    id: "soft:path:copy",
+    name: "Copy path",
+    description: rawPath,
+    icon: "📋",
+    action: async () => {
+      const r = await resolvePath(rawPath);
+      await copyText(r.windows);
+    },
+  });
+
+  // First row = Enter with no arrow keys, so it has to be the obvious verb for
+  // what was pasted: read a text file, browse a folder, and for anything else
+  // (PDF/xlsx/image) hand it to the app that owns that file type.
+  switch (classifyPath(rawPath)) {
+    case "markdown":
+      return [markdownViewer, notepadpp, editor, defaultApp, explorer, terminal, copy];
+    case "json":
+      return [jsonViewer, notepadpp, editor, defaultApp, explorer, terminal, copy];
+    case "text":
+      return [notepadpp, editor, defaultApp, explorer, terminal, copy];
+    case "dir":
+      // No Notepad++ (can't open a folder) and no "Open" — for a directory the
+      // default handler IS Explorer, so it would duplicate the first row.
+      return [explorer, terminal, editor, copy];
+    case "opaque":
+      return [defaultApp, explorer, copy, terminal, editor, notepadpp];
+  }
 }
 
 /**
@@ -257,9 +363,9 @@ export function buildSoftCommands(query: string): PaletteCommand[] {
     return markdownRows(body);
   }
 
-  // --- Filesystem path (C:\…, /mnt/c/…, /path/…) ---
+  // --- Filesystem path (C:\…, /mnt/c/…, /path/…, "C:\quoted\path") ---
   if (isPath(q)) {
-    return buildPathRows(q);
+    return buildPathRows(stripPathQuotes(q));
   }
 
   // --- URL ---

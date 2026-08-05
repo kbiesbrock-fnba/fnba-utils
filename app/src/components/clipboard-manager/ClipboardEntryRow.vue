@@ -14,6 +14,8 @@ const emit = defineEmits<{
   (e: "delete"): void;
   (e: "open"): void;
   (e: "pasteOriginal"): void;
+  (e: "pasteWithLabel"): void;
+  (e: "pasteWithLabelOriginal"): void;
   (e: "copyObfuscated"): void;
   (e: "copyOriginal"): void;
 }>();
@@ -58,12 +60,14 @@ function onMenuKey(e: KeyboardEvent) {
 
 onBeforeUnmount(closeMenu);
 
-function runAction(action: "open" | "pasteOriginal" | "copyObfuscated" | "copyOriginal" | "togglePin" | "delete") {
+function runAction(action: "open" | "pasteOriginal" | "pasteWithLabel" | "pasteWithLabelOriginal" | "copyObfuscated" | "copyOriginal" | "togglePin" | "delete") {
   closeMenu();
   // Switch explicitly so Vue's emit overloads narrow to a literal event name.
   switch (action) {
     case "open": emit("open"); break;
     case "pasteOriginal": emit("pasteOriginal"); break;
+    case "pasteWithLabel": emit("pasteWithLabel"); break;
+    case "pasteWithLabelOriginal": emit("pasteWithLabelOriginal"); break;
     case "copyObfuscated": emit("copyObfuscated"); break;
     case "copyOriginal": emit("copyOriginal"); break;
     case "togglePin": emit("togglePin"); break;
@@ -159,7 +163,15 @@ function humanAgo(epoch: number): string {
       </li>
       <li v-if="entry.sensitive" @click="runAction('pasteOriginal')" class="danger">
         Paste original
-        <kbd>Ctrl+Shift+Enter</kbd>
+        <kbd>Shift+Enter</kbd>
+      </li>
+      <li v-if="entry.label" @click="runAction('pasteWithLabel')">
+        Paste with label
+        <kbd>Ctrl+L</kbd>
+      </li>
+      <li v-if="entry.label && entry.sensitive" @click="runAction('pasteWithLabelOriginal')" class="danger">
+        Paste with label (original)
+        <kbd>Ctrl+Shift+L</kbd>
       </li>
       <li @click="runAction('copyObfuscated')">
         {{ entry.sensitive ? "Copy obfuscated" : "Copy" }}

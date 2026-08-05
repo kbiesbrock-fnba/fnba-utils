@@ -133,7 +133,7 @@ export function useClipboardManager() {
     }
   }
 
-  async function paste(opts: { simulate: boolean; original: boolean }) {
+  async function paste(opts: { simulate: boolean; original: boolean; withLabel?: boolean }) {
     const entry = selected.value;
     if (!entry) return;
     try {
@@ -149,6 +149,7 @@ export function useClipboardManager() {
         simulatePaste: opts.simulate,
         pasteOriginal: opts.original,
         revealToken,
+        includeLabel: opts.withLabel,
       });
       await hideClipboardWindow();
     } catch (e) {

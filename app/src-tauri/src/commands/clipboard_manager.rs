@@ -72,6 +72,10 @@ pub struct PasteOptions {
     pub paste_original: bool,
     #[serde(default)]
     pub reveal_token: Option<String>,
+    /// Prefix the pasted text with `"<label>: "`. Ignored when the entry has
+    /// no label, or is an image (nothing to prefix).
+    #[serde(default)]
+    pub include_label: bool,
 }
 
 #[tauri::command]
@@ -143,9 +147,39 @@ pub async fn paste_clipboard_entry(
         }
     }
 
+    // "Paste with label" always writes plain text, even for an HTML-kind
+    // entry — there's no sensible way to prepend a plain label onto rendered
+    // HTML and keep the formatting, so labeling trades formatting for
+    // context. Images have no text to prefix and just ignore the flag.
+    let labeled_text = if options.include_label && entry.kind != "image" {
+        entry
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|label| {
+                let body = if use_obfuscated {
+                    entry.obfuscated_text.as_deref().unwrap_or("")
+                } else {
+                    entry.text_content.as_deref().unwrap_or("")
+                };
+                format!("{label}: {body}")
+            })
+    } else {
+        None
+    };
+
     #[cfg(windows)]
     {
-        if use_obfuscated {
+        if let Some(text) = labeled_text.as_deref() {
+            // Same self-write marking as the obfuscated path below — this is
+            // synthesized text that never came through the OS clipboard.
+            state.mark_self_write(&crate::clipboard::listener::compute_text_hash(text));
+            let mut cb = arboard::Clipboard::new()
+                .map_err(|e| format!("clipboard open: {e}"))?;
+            cb.set_text(text)
+                .map_err(|e| format!("set labeled text: {e}"))?;
+        } else if use_obfuscated {
             // SAFETY: use_obfuscated only true when obfuscated_text is Some.
             let obfuscated = entry.obfuscated_text.as_deref().unwrap_or("");
             // Mark our own write so the daemon's listener doesn't re-capture
@@ -170,7 +204,9 @@ pub async fn paste_clipboard_entry(
     {
         let _ = foreground.take();
         let mut cb = arboard::Clipboard::new().map_err(|e| format!("clipboard open: {e}"))?;
-        if use_obfuscated {
+        if let Some(text) = labeled_text.as_deref() {
+            cb.set_text(text).map_err(|e| format!("set labeled text: {e}"))?;
+        } else if use_obfuscated {
             let obfuscated = entry.obfuscated_text.as_deref().unwrap_or("");
             cb.set_text(obfuscated).map_err(|e| format!("set obfuscated text: {e}"))?;
         } else if let Some(t) = entry.text_content.as_deref() {

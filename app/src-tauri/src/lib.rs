@@ -675,6 +675,8 @@ pub fn run() {
             commands::fs::resolve_path,
             commands::fs::open_in_notepadpp,
             commands::fs::reveal_in_explorer,
+            commands::fs::open_with_default,
+            commands::fs::read_text_file,
             commands::docker::get_docker_status,
             commands::docker::docker_start,
             commands::docker::docker_stop,

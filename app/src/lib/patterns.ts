@@ -37,8 +37,20 @@ export function isJiraKey(q: string): boolean {
   return JIRA_KEY_RE.test(q);
 }
 
+/**
+ * Drop the wrapping quotes Windows Explorer's "Copy as path" (Ctrl+Shift+C)
+ * adds — `"C:\dev\x.sql"`. Without this a pasted path fails PATH_RE outright.
+ */
+export function stripPathQuotes(q: string): string {
+  const t = q.trim();
+  const quoted =
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"));
+  return quoted && t.length >= 2 ? t.slice(1, -1) : t;
+}
+
 export function isPath(q: string): boolean {
-  return PATH_RE.test(q);
+  return PATH_RE.test(stripPathQuotes(q));
 }
 
 export function isSql(q: string): boolean {

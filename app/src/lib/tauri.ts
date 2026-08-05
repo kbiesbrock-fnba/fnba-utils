@@ -499,6 +499,8 @@ export interface ClipboardPasteOptions {
    *  non-sensitive entries. */
   pasteOriginal?: boolean;
   revealToken?: string;
+  /** Prefix the pasted text with `"<label>: "`. No-op if the entry has no label. */
+  includeLabel?: boolean;
 }
 
 // --- Test Users (PII substitution pool) ---
@@ -970,6 +972,16 @@ export async function onPaletteShown(handler: () => void): Promise<() => void> {
 
 export function revealInExplorer(path: string): Promise<void> {
   return invoke<void>("reveal_in_explorer", { path });
+}
+
+/** Open a path with its OS-registered handler — Explorer double-click equivalent. */
+export function openWithDefault(path: string): Promise<void> {
+  return invoke<void>("open_with_default", { path });
+}
+
+/** Read a file's full text content. Backs the palette's viewer soft commands. */
+export function readTextFile(path: string): Promise<string> {
+  return invoke<string>("read_text_file", { path });
 }
 
 export function getAppConfig(): Promise<AppConfigView> {
